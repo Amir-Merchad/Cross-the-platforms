@@ -7,6 +7,7 @@
 //! Back to Windows: Ctrl+Alt+Q, Esc ×3 within 1 s, pushing back through the edge, host disconnect.
 
 mod capture;
+mod keys;
 mod peripheral;
 
 use std::{sync::{atomic::Ordering, mpsc}, thread, time::{Duration, Instant}};
@@ -86,10 +87,11 @@ fn edge(p: &HidPeripheral, args: &[String]) {
     let mut held = HeldInput::default();
     let mut last_check = Instant::now();
     let release = |held: &mut HeldInput| {
+        // Windows input first: the BLE sends below can block on a dying link.
+        capture::SUPPRESS.store(false, Ordering::SeqCst);
         let (k, m) = held.release_all();
         p.send_keyboard(&host, k);
         p.send_mouse(&host, m);
-        capture::SUPPRESS.store(false, Ordering::SeqCst);
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::*;
             let w = GetSystemMetrics(SM_CXSCREEN);
@@ -120,6 +122,8 @@ fn edge(p: &HidPeripheral, args: &[String]) {
                             send_move(p, &host, 0, tracker.pin_delta(), 0);
                             eprintln!("on device");
                         }
+                        // after an escape, queued remote events are stale: drop them
+                        Input::Button { .. } | Input::Key { .. } | Input::Wheel(_) if !capture::SUPPRESS.load(Ordering::SeqCst) => {}
                         Input::Button { mask, down } => { p.send_mouse(&host, MouseReport { buttons: held.button(mask, down), ..Default::default() }); }
                         Input::Wheel(w) => { p.send_mouse(&host, MouseReport { wheel: w, ..Default::default() }); }
                         Input::Key { vk, down } => { p.send_keyboard(&host, if down { held.key_down(vk) } else { held.key_up(vk) }); }

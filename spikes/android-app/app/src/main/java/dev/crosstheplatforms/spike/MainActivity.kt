@@ -29,7 +29,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import uniffi.bridge_core.sendFileFfi
 
 class MainActivity : ComponentActivity() {
@@ -50,7 +52,7 @@ class MainActivity : ComponentActivity() {
             scope.launch {
                 Shared.log.value = "sending…"
                 try {
-                    val file = Shared.copyToCache(this@MainActivity, uri)
+                    val file = withContext(Dispatchers.IO) { Shared.copyToCache(this@MainActivity, uri) }
                     val t0 = System.nanoTime()
                     val n = sendFileFfi(ticket, file.path)
                     val s = (System.nanoTime() - t0) / 1e9

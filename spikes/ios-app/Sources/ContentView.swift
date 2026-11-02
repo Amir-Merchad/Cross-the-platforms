@@ -51,12 +51,16 @@ struct ContentView: View {
         Task {
             log = "sending…"
             do {
-                // Copy into tmp so Rust gets a plain path that outlives the security scope.
-                let scoped = url.startAccessingSecurityScopedResource()
-                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                try? FileManager.default.removeItem(at: tmp)
-                try FileManager.default.copyItem(at: url, to: tmp)
-                if scoped { url.stopAccessingSecurityScopedResource() }
+                // Copy into tmp (off the main actor, files can be 1 GB) so Rust gets a plain path
+                // that outlives the security scope.
+                let tmp = try await Task.detached {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: tmp)
+                    try FileManager.default.copyItem(at: url, to: tmp)
+                    return tmp
+                }.value
                 let t0 = Date()
                 let n = try await sendFileFfi(ticket: sendTicket.trimmingCharacters(in: .whitespacesAndNewlines), path: tmp.path)
                 let s = Date().timeIntervalSince(t0)

@@ -55,9 +55,12 @@ async fn main() {
         if text.is_empty() { continue }
         let changed = { let l = last.lock().unwrap(); l.as_deref() != Some(&text) };
         if !changed { continue }
+        // Mark synced before sending: the iPad's echo push can arrive before set_text returns,
+        // and writing it back would replace Windows' rich formats (HTML/RTF) with plain text.
+        let prev = last.lock().unwrap().replace(text.clone());
         match setter.set_text(&text, GENERAL_PASTEBOARD).await {
-            Ok(()) => { eprintln!("Windows -> iPad: {} bytes", text.len()); *last.lock().unwrap() = Some(text) }
-            Err(e) => eprintln!("iPad set failed: {e:?}"),
+            Ok(()) => eprintln!("Windows -> iPad: {} bytes", text.len()),
+            Err(e) => { eprintln!("iPad set failed: {e:?}"); *last.lock().unwrap() = prev }
         }
     }
 }

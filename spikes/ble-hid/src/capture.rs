@@ -2,7 +2,7 @@
 //! Hooks never block: everything goes to the sender thread over a channel.
 
 use std::{
-    sync::{atomic::{AtomicBool, AtomicIsize, Ordering}, mpsc::Sender, OnceLock},
+    sync::{atomic::{AtomicBool, AtomicIsize, Ordering}, mpsc::Sender, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -20,6 +20,8 @@ use windows::{
     },
     core::w,
 };
+
+use crate::keys::{KeyGate, Verdict};
 
 pub enum Input {
     /// Pointer pushed through the configured Windows edge for the hold time.
@@ -131,30 +133,39 @@ unsafe fn check_edge(dx: i32) {
 }
 
 static mut ESC_TIMES: [Option<Instant>; 3] = [None; 3];
+static KB_GATE: Mutex<KeyGate> = Mutex::new(KeyGate::new());
+static MS_GATE: Mutex<KeyGate> = Mutex::new(KeyGate::new());
+
+/// Give input back to Windows first, then tell the sender (which may be stuck in a BLE notify).
+fn escape() -> LRESULT {
+    SUPPRESS.store(false, Ordering::SeqCst);
+    send(Input::Escape);
+    LRESULT(1)
+}
 
 #[allow(static_mut_refs)]
 unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
-        if code == HC_ACTION as i32 && SUPPRESS.load(Ordering::SeqCst) {
+        if code == HC_ACTION as i32 {
             let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
             let down = matches!(wp.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             let vk = k.vkCode as u16;
-            if down {
-                let ctrl = GetAsyncKeyState(0x11) < 0;
-                let alt = GetAsyncKeyState(0x12) < 0;
-                if ctrl && alt && vk == 0x51 { send(Input::Escape); return LRESULT(1); }
-                if vk == VK_ESCAPE.0 {
-                    ESC_TIMES.rotate_left(1);
-                    ESC_TIMES[2] = Some(Instant::now());
-                    if ESC_TIMES[0].is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
-                        ESC_TIMES = [None; 3];
-                        send(Input::Escape);
-                        return LRESULT(1);
+            match KB_GATE.lock().unwrap().on_key(vk, down, SUPPRESS.load(Ordering::SeqCst)) {
+                Verdict::PassToWindows => {}
+                Verdict::Escape => return escape(),
+                Verdict::Remote => {
+                    if down && vk == VK_ESCAPE.0 {
+                        ESC_TIMES.rotate_left(1);
+                        ESC_TIMES[2] = Some(Instant::now());
+                        if ESC_TIMES[0].is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+                            ESC_TIMES = [None; 3];
+                            return escape();
+                        }
                     }
+                    send(Input::Key { vk, down });
+                    return LRESULT(1);
                 }
             }
-            send(Input::Key { vk, down });
-            return LRESULT(1);
         }
         CallNextHookEx(None, code, wp, lp)
     }
@@ -162,9 +173,22 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
 
 unsafe extern "system" fn ms_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
-        if code == HC_ACTION as i32 && SUPPRESS.load(Ordering::SeqCst) { return LRESULT(1); }
+        if code == HC_ACTION as i32 {
+            let suppress = SUPPRESS.load(Ordering::SeqCst);
+            let button = match wp.0 as u32 {
+                WM_LBUTTONDOWN => Some((1, true)), WM_LBUTTONUP => Some((1, false)),
+                WM_RBUTTONDOWN => Some((2, true)), WM_RBUTTONUP => Some((2, false)),
+                WM_MBUTTONDOWN => Some((4, true)), WM_MBUTTONUP => Some((4, false)),
+                _ => None,
+            };
+            // Buttons pressed on Windows before crossing must be released on Windows.
+            let swallow = match button {
+                Some((vk, down)) => MS_GATE.lock().unwrap().on_key(vk, down, suppress) != Verdict::PassToWindows,
+                None => suppress,
+            };
+            if swallow { return LRESULT(1) }
+        }
         CallNextHookEx(None, code, wp, lp)
     }
 }
 
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
