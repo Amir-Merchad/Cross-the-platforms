@@ -28,3 +28,23 @@ If it can't see the iPad: `set USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015`.
 | Over Wi-Fi | `pair`, then `--host <ip> --pairing-file <file>` (file stays out of git) | PENDING (owner) |
 
 Verdict: PENDING
+
+## Spikes 2–4 — BLE HID from Windows, two hosts, edge switching (Task 4)
+
+Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only one app can publish the HID service).
+
+| Check | How | Result |
+|---|---|---|
+| Rust publishes HID service + advertises | `ble-hid hosts` | **PASS** 2026-11-03: service 0x1812 created, advertising, no errors |
+| iPad pairs, square + `hello` | iPad Settings → Bluetooth → this PC; `ble-hid demo` | PENDING (owner) |
+| Click, scroll | `ble-hid demo --clicks` | PENDING (owner) |
+| S24+ pairs too; only target moves | `ble-hid hosts`, then `demo --target <id>` per id | PENDING (owner) |
+| Both connected 10 min | leave `hosts` running | PENDING (owner) |
+| Edge: 20 crossings each way | `ble-hid edge --target <id> --remote-at right --width 1180` | PENDING (owner) |
+| No stuck keys across switch | hold Ctrl/Shift while switching | PENDING (owner) |
+| Disconnect while Shift held | turn off iPad Bluetooth mid-press | PENDING (owner) |
+| Tuned values | `--gain` / `--threshold` that felt right | PENDING (owner) |
+
+Escape hatches always active in `edge`: Ctrl+Alt+Q, Esc ×3 in 1 s.
+
+Verdict: PENDING

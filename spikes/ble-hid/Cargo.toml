@@ -1,0 +1,22 @@
+[package]
+name = "ble-hid"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bridge-core = { path = "../../core" }
+windows = { version = "0.62", features = [
+  "Devices_Bluetooth",
+  "Devices_Bluetooth_GenericAttributeProfile",
+  "Storage_Streams",
+  "Security_Cryptography",
+  "Foundation",
+  "Foundation_Collections",
+  "Win32_Foundation",
+  "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_LibraryLoader",
+  "Win32_Graphics_Gdi",
+] }
