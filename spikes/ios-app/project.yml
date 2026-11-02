@@ -14,6 +14,7 @@ targets:
         embed: false
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
+      - sdk: Network.framework
     info:
       path: Generated/Info.plist
       properties:

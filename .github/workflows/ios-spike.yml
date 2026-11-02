@@ -12,6 +12,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: aarch64-apple-ios }
       - name: Build Rust core (device + host for bindgen)
+        env: { IPHONEOS_DEPLOYMENT_TARGET: "17.0" }
         run: |
           cargo build -p bridge-core --release --target aarch64-apple-ios
           cargo build -p bridge-core --release
