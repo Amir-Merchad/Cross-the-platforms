@@ -48,3 +48,14 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 Escape hatches always active in `edge`: Ctrl+Alt+Q, Esc ×3 in 1 s.
 
 Verdict: PENDING
+
+## Spike 5 — file transfer over iroh (Tasks 5–7)
+
+Binaries: `bridge-recv <dir>` (prints ticket), `bridge-send <ticket> <file>`.
+
+| Check | Result |
+|---|---|
+| Unit/integration tests (round trip, hostile name, cut-off leaves no file) | **PASS** 2026-11-03 |
+| Windows → Windows loopback, 1 GiB, release build | **PASS**: 64.3 MB/s, bytes identical (protocol ceiling on this laptop, not Wi-Fi) |
+| Windows ↔ S24+ (5 MB PDF, 1 GB video) vs LocalSend | PENDING (owner, Task 6) |
+| Windows ↔ iPad (same files) vs LocalSend | PENDING (owner, Task 7) |
