@@ -79,3 +79,17 @@ Install: plug in the S24+ with USB debugging on, `adb install -r <apk>` (adb is 
 | Same files with LocalSend, same Wi-Fi | time it | PENDING (owner) |
 | Clipboard tile (emoji text) | add "Send clipboard" tile, copy text, tap tile → `clip.txt` on PC matches | PENDING (owner) |
 | Tile flow acceptable? | owner's call | PENDING (owner) |
+
+### iPad spike app (Task 7)
+
+Built by `.github/workflows/ios-spike.yml` on a GitHub macOS runner (unsigned). Get it:
+`gh run download --name Spike-ipa` (artifact kept 3 days; re-run the workflow for a new one).
+
+| Check | How | Result |
+|---|---|---|
+| CI builds unsigned `Spike.ipa` | push to `core/**` or `spikes/ios-app/**` | see below |
+| Sideload | SideStore or AltStore on Windows, free Apple account, install `Spike.ipa` | PENDING (owner) |
+| iPad receives PDF/video | app → Start receiving → Copy my ticket → `bridge-send` | PENDING (owner) |
+| PDF opens from Files → On My iPad → CTP Spike | | PENDING (owner) |
+| iPad sends both | `bridge-recv` + paste ticket | PENDING (owner) |
+| Same files with LocalSend | time it | PENDING (owner) |
