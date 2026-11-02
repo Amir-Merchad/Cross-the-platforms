@@ -1,0 +1,11 @@
+name: core
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - run: cargo test -p bridge-core
+      - run: cargo clippy -p bridge-core -- -D warnings

@@ -1,0 +1,8 @@
+target/
+.superpowers/
+*.plist
+pairing*
+local.properties
+build/
+.gradle/
+*.ipa

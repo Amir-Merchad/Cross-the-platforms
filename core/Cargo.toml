@@ -1,0 +1,9 @@
+[package]
+name = "bridge-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+name = "bridge_core"
+crate-type = ["lib", "cdylib", "staticlib"]
