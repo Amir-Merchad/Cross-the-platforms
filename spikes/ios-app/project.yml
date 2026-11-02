@@ -1,0 +1,28 @@
+name: Spike
+options:
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Spike:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      - Generated/bridge_core.swift
+    dependencies:
+      - framework: BridgeCore.xcframework
+        embed: false
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: CTP Spike
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: Receive and send files from your other devices.
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.crosstheplatforms.spike
+      CODE_SIGNING_ALLOWED: "NO"
+      OTHER_LDFLAGS: -lc++
