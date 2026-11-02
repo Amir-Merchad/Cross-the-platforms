@@ -1,3 +1,3 @@
 [workspace]
 resolver = "3"
-members = ["core", "spikes/ipad-clip", "spikes/ble-hid", "spikes/transfer-cli"]
+members = ["core", "spikes/ipad-clip", "spikes/ble-hid", "spikes/transfer-cli", "tools/uniffi-bindgen"]

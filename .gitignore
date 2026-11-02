@@ -6,3 +6,5 @@ local.properties
 build/
 .gradle/
 *.ipa
+spikes/android-app/app/src/main/jniLibs/
+spikes/android-app/app/src/main/java/uniffi/

@@ -59,3 +59,23 @@ Binaries: `bridge-recv <dir>` (prints ticket), `bridge-send <ticket> <file>`.
 | Windows → Windows loopback, 1 GiB, release build | **PASS**: 64.3 MB/s, bytes identical (protocol ceiling on this laptop, not Wi-Fi) |
 | Windows ↔ S24+ (5 MB PDF, 1 GB video) vs LocalSend | PENDING (owner, Task 6) |
 | Windows ↔ iPad (same files) vs LocalSend | PENDING (owner, Task 7) |
+
+### Android spike app (Task 6)
+
+Build (from repo root, PowerShell):
+```
+powershell -File spikes/android-app/build-rust.ps1
+cd spikes/android-app
+$env:JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"; $env:TMP="C:\dev\_ref\tmp"; $env:TEMP=$env:TMP   # short TMP: JDK socket path limit
+.\gradlew :app:assembleDebug
+```
+APK: `spikes/android-app/app/build/outputs/apk/debug/app-debug.apk` — **builds 2026-11-03**.
+Install: plug in the S24+ with USB debugging on, `adb install -r <apk>` (adb is in `%LOCALAPPDATA%\Android\Sdk\platform-tools`).
+
+| Check | How | Result |
+|---|---|---|
+| Phone receives 5 MB PDF / 1 GB video | app → Start receiving → Copy my ticket (arrives on PC via Phone Link) → `bridge-send "<ticket>" file` | PENDING (owner) |
+| Phone sends both | `bridge-recv C:\tmp\in` → paste ticket in app → Pick file and send | PENDING (owner) |
+| Same files with LocalSend, same Wi-Fi | time it | PENDING (owner) |
+| Clipboard tile (emoji text) | add "Send clipboard" tile, copy text, tap tile → `clip.txt` on PC matches | PENDING (owner) |
+| Tile flow acceptable? | owner's call | PENDING (owner) |
