@@ -15,7 +15,7 @@ Fill in **Result** (PASS / FAIL + note). Speeds in MB/s as shown in the Transfer
 | 8 | Explorer Send to | right-click a file → Send to → `Bridge – <phone>` | lands on the phone, notification | PASS |
 | 9 | Cut-off | phone Wi-Fi off mid-transfer (step 5) | no complete-looking file on either side; error on both | |
 | 10 | Firewall denied | deny the Windows Firewall prompt (or block `ctp-app.exe` inbound), send PC ← phone | still arrives (iroh fallback), slower | |
-| 11 | Phone clipboard → PC | copy text on phone, tap "Send clipboard to PC" tile, Ctrl+V on PC | text arrives | FAIL: tile toast "timeout"; PC never received it (no inbound clip in engine.log) — diagnosing |
+| 11 | Phone clipboard → PC | copy text on phone, tap "Send clipboard to PC" tile, Ctrl+V on PC | text arrives | PASS (52 ms). Earlier "timeout" was the old spike app's "Send clipboard" tile, not Bridge's |
 | 12 | PC clipboard → phone | Ctrl+C text on PC, paste on phone | text arrives | PASS |
 | 13 | After phone reboot | reboot, don't open Bridge, send from PC | received; service notification present | |
-| 14 | Logs clean | read `%APPDATA%\CrossThePlatforms\engine.log` | sizes/counts only — no file names, no clipboard text | |
+| 14 | Logs clean | read `%APPDATA%\CrossThePlatforms\engine.log` | sizes/counts only — no file names, no clipboard text | PASS (engine.log: 0 file-name hits, clips logged as kind + bytes; phone log: char count + ms) |
