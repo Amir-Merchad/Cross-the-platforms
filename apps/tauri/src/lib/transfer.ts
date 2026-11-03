@@ -11,7 +11,8 @@ export type TransferEvent =
   | { type: "Incoming"; from: string; files: FileMeta[] }
   | { type: "Progress"; id: number; done: number; total: number }
   | { type: "Received"; from: string; path: string; size: number }
-  | { type: "Failed"; id: number; reason: string };
+  | { type: "Failed"; id: number; reason: string }
+  | { type: "Queued"; peer: string; files: number };
 
 export const pairInvite = () => invoke<{ qr: string; expires_in_s: number }>("pair_invite");
 export const pairedPeers = () => invoke<Peer[]>("paired_peers");
@@ -21,6 +22,10 @@ export const receiveDir = () => invoke<string>("receive_dir");
 export const setReceiveDir = (path: string) => invoke<void>("set_receive_dir", { path });
 export const openReceiveDir = () => invoke<void>("open_receive_dir");
 export const onTransfer = (cb: (e: TransferEvent) => void): Promise<UnlistenFn> => listen<TransferEvent>("transfer", (e) => cb(e.payload));
+
+export function queuedLine(name: string, files: number): string {
+  return files === 1 ? `1 file waiting — it goes when Bridge opens on ${name}` : `${files} files waiting — they go when Bridge opens on ${name}`;
+}
 
 /** 0–100, and 0 when there's nothing to send. */
 export function progressPercent(done: number, total: number): number {

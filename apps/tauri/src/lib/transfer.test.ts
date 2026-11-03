@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatRate, progressPercent } from "./transfer";
+import { formatBytes, formatRate, progressPercent, queuedLine } from "./transfer";
 
 describe("progressPercent", () => {
   it("nothing to send is 0, not NaN", () => expect(progressPercent(0, 0)).toBe(0));
@@ -18,4 +18,9 @@ describe("formatBytes", () => {
   it("bytes", () => expect(formatBytes(512)).toBe("512 B"));
   it("MB", () => expect(formatBytes(3_500_000)).toBe("3.5 MB"));
   it("GB", () => expect(formatBytes(2_000_000_000)).toBe("2.00 GB"));
+});
+
+describe("queuedLine", () => {
+  it("one file", () => expect(queuedLine("iPad", 1)).toBe("1 file waiting — it goes when Bridge opens on iPad"));
+  it("several", () => expect(queuedLine("iPad", 3)).toBe("3 files waiting — they go when Bridge opens on iPad"));
 });

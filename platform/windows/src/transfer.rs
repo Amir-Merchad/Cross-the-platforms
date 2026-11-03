@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use bridge_core::{
     identity::{Peer, PeerKind},
-    node::{Event, Node, NodeConfig},
+    node::{Event, Node, NodeConfig, SendOutcome},
     pairing::PairInvite,
 };
 
@@ -50,8 +50,9 @@ impl TransferHandle {
         let node = self.node.clone();
         self.rt.spawn(async move {
             let n = paths.len();
-            match node.send_files(&peer_id, paths).await {
-                Ok(bytes) => diag::log(format_args!("sent {n} file(s), {bytes} bytes")),
+            match node.send_or_queue(&peer_id, paths).await {
+                Ok(SendOutcome::Sent(bytes)) => diag::log(format_args!("sent {n} file(s), {bytes} bytes")),
+                Ok(SendOutcome::Queued) => diag::log(format_args!("queued {n} file(s) for later")),
                 Err(e) => diag::log(format_args!("send failed: {e}")),
             }
         });

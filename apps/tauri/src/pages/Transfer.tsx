@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  forgetPeer, formatBytes, formatRate, onTransfer, openReceiveDir, pairInvite, pairedPeers, progressPercent, receiveDir,
+  forgetPeer, formatBytes, formatRate, onTransfer, openReceiveDir, pairInvite, pairedPeers, progressPercent, queuedLine, receiveDir,
   sendFiles, setReceiveDir, type Peer,
 } from "@/lib/transfer";
 
@@ -22,6 +22,7 @@ export default function Transfer() {
   const [now, setNow] = useState(() => Date.now());
   const [live, setLive] = useState<Record<number, Live>>({});
   const [got, setGot] = useState<Got[]>([]);
+  const [waiting, setWaiting] = useState<Record<string, number>>({});
   const [dir, setDir] = useState("");
   const [over, setOver] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +36,10 @@ export default function Transfer() {
     const off = onTransfer((e) => {
       if (e.type === "Paired") { setQr(null); refresh(); }
       if (e.type === "Progress") setLive((l) => ({ ...l, [e.id]: { done: e.done, total: e.total, started: l[e.id]?.started ?? Date.now(), now: Date.now() } }));
+      if (e.type === "Queued") setWaiting((w) => ({ ...w, [e.peer]: (w[e.peer] ?? 0) + e.files }));
+      // Failed carries no peer, so it clears every notice.
+      if (e.type === "Failed") setWaiting({});
+      if (e.type === "Received") setWaiting(({ [e.from]: _, ...rest }) => rest);
       if (e.type === "Failed") setLive((l) => ({ ...l, [e.id]: { ...(l[e.id] ?? { done: 0, total: 0, started: Date.now(), now: Date.now() }), failed: e.reason } }));
       if (e.type === "Received") setGot((g) => [{ name: fileName(e.path), size: e.size }, ...g].slice(0, 20));
     });
@@ -89,6 +94,7 @@ export default function Transfer() {
                 <span className="font-medium">{p.name}</span>
                 <Badge variant="secondary">{p.kind === "Ipad" ? "iPad" : p.kind}</Badge>
               </div>
+              {waiting[p.id] > 0 && <span className="text-sm text-muted-foreground">{queuedLine(p.name, waiting[p.id])}</span>}
               <div className="flex gap-2">
                 <Button size="sm" onClick={() => pick(p.id)}>Send files…</Button>
                 <Button size="sm" variant="ghost" onClick={() => forgetPeer(p.id).then(refresh, fail)}>Forget</Button>
