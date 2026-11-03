@@ -24,6 +24,7 @@ pub fn load_or_create_key(path: &Path) -> Result<iroh::SecretKey> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(uniffi::Enum)]
 pub enum PeerKind { Windows, Android, Ipad }
 
 /// A paired device. `id` is its iroh endpoint id (public key) as a string.
