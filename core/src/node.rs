@@ -207,15 +207,22 @@ impl Node {
     async fn connect(&self, peer_id: &str, alpn: &[u8]) -> Result<Connection, String> {
         if !self.inner.peers.lock().unwrap().contains(peer_id) { return Err("not paired with that device".into()) }
         let addr = self.inner.addr_for(peer_id)?;
-        match timeout(CONNECT_TIMEOUT, self.inner.ep.connect(addr, alpn)).await {
-            Ok(Ok(c)) => Ok(c),
-            // The saved address may be stale (new network, new IP): let n0 discovery find it.
-            _ => {
-                let id_only = PublicKey::from_str(peer_id).map(EndpointAddr::from).map_err(|e| format!("bad device id: {e}"))?;
-                timeout(CONNECT_TIMEOUT, self.inner.ep.connect(id_only, alpn)).await
-                    .map_err(|_| "device not reachable".to_string())?.map_err(|e| format!("device not reachable: {e}"))
-            }
-        }
+        let saved = addr.addrs.len();
+        let t0 = Instant::now();
+        let first = match timeout(CONNECT_TIMEOUT, self.inner.ep.connect(addr, alpn)).await {
+            Ok(Ok(c)) => return Ok(c),
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => "no answer in 10 s".into(),
+        };
+        let first_ms = t0.elapsed().as_millis();
+        // The saved address may be stale (new network, new IP): let n0 discovery find it.
+        let id_only = PublicKey::from_str(peer_id).map(EndpointAddr::from).map_err(|e| format!("bad device id: {e}"))?;
+        let second = match timeout(CONNECT_TIMEOUT, self.inner.ep.connect(id_only, alpn)).await {
+            Ok(Ok(c)) => return Ok(c),
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => "no answer in 10 s".into(),
+        };
+        Err(format!("device not reachable — saved address ({saved} paths, {first_ms} ms): {first}; lookup by id: {second}"))
     }
 
     /// One control exchange: our `Hello`, then `msgs`; returns the peer's reply lines.

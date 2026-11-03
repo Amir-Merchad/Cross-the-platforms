@@ -118,6 +118,7 @@ class App : Application(), NodeEvents {
             val s = (System.nanoTime() - t0) / 1e9
             toast("Sent ${formatBytes(bytes)} to ${peer.name} (%.0f MB/s)".format(bytes / 1e6 / s))
         } catch (e: Exception) {
+            android.util.Log.w(TAG, "send files failed: ${e.message}")
             toast("Send failed: ${e.message}")
         }
     }
@@ -125,6 +126,7 @@ class App : Application(), NodeEvents {
     fun toast(s: String) = scope.launch(Dispatchers.Main) { Toast.makeText(this@App, s, Toast.LENGTH_SHORT).show() }
 
     companion object {
+        const val TAG = "Bridge"
         const val CH_SERVICE = "service"
         const val CH_FILES = "files"
         const val NOTE_SERVICE = 1
