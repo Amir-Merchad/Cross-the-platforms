@@ -1,0 +1,25 @@
+[package]
+name = "ctp-windows"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+bridge-core = { path = "../../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows = { version = "0.62", features = [
+  "Devices_Bluetooth",
+  "Devices_Bluetooth_GenericAttributeProfile",
+  "Storage_Streams",
+  "Security_Cryptography",
+  "Foundation",
+  "Foundation_Collections",
+  "Win32_Foundation",
+  "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_LibraryLoader",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Threading",
+] }
