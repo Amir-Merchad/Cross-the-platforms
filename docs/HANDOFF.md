@@ -1,63 +1,83 @@
-# Handoff — where the work stands (2026-11-04)
+# Handoff — where the work stands (2026-11-03, evening)
 
 Read this first, then `docs/specs/2026-11-02-device-bridge-design.md`, `docs/spikes/results.md`,
-`docs/superpowers/plans/2026-11-04-v1-windows-hub-input.md`, `docs/v1/checklist-input.md`.
+`docs/superpowers/plans/2026-11-03-v1-clipboard.md`, `docs/v1/checklist-clipboard.md`.
 
 ## Project
 Own open-source app suite: Windows 11 laptop (hub) + Galaxy S24+ + iPad Air 13" M2 work as one setup.
-v1 = keyboard/mouse sharing over BLE HID (done, debugging), clipboard, file transfer, then Kotlin/Swift/Tauri-mobile apps. v2 = internet.
+v1 = keyboard/mouse sharing over BLE HID (done), clipboard (in device testing), file transfer, then Kotlin/Swift/Tauri-mobile apps. v2 = internet.
 Owner is in Germany (German keyboard layout, AltGr matters), uses Rust/Tauri/shadcn, no Mac, free Apple ID.
 
-## Branch / PR state
-- `main` has the foundation + all spikes (PR #1 merged by the owner).
-- Current branch: **`v1/windows-hub-input`** (pushed). Plan 1 Tasks 1–8 implemented, review fix pass done, then:
-  - `a22f2fe` keyboard queue (core::keyqueue) — **did NOT fix the real bug** (see below); keep or revert after root cause.
-  - **Uncommitted at handoff → committed as WIP "diag"**: `platform/windows/src/diag.rs` + logging in capture/engine/peripheral (writes `%APPDATA%\CrossThePlatforms\engine.log`; ids/timings/verdicts only, never key codes).
-- No PR open for this branch yet.
+## Where the code is (IMPORTANT — two checkouts)
+- **`v1/clipboard`** (current work, **local only, not pushed**, no PR) lives in the worktree
+  `C:\dev\Cross-the-platforms\.claude\worktrees\ctp-windows-hub-input-bug-b2c51e`. Branched from `v1/windows-hub-input` @ `04c6a13`.
+  Latest commits: `a6e26b6` diag (BLE interval at connect, iPad connect-failure reason) · `2877c0b` final-review fix pass · plan Tasks 1–8 before that.
+  Build: `cargo build -p ctp-app --features tauri/custom-protocol` (UI dist copied in) or `cd apps/tauri && pnpm tauri build --debug` (node_modules installed there).
+  Exe under test: `<worktree>\target\debug\ctp-app.exe`.
+- **`v1/windows-hub-input`** (keyboard/mouse, pushed up to `9cd8c1e`; local has `59066d6`, `04c6a13` on top, not pushed) is checked out in the main
+  checkout `C:\dev\Cross-the-platforms`. Its exe `C:\dev\Cross-the-platforms\target\debug\ctp-app.exe` has **no clipboard** (handy for A/B).
+- Owner said: no merge / no PR yet. `main` = foundation + spikes (PR #1).
+- Autostart (`HKCU\...\Run\Cross the Platforms`) points to whichever exe was started last.
 
-## THE OPEN BUG (top priority — safety rule violated)
-In `ctp-app.exe` (Tauri tray app), while the iPad is in control: **keyboard never reaches the device, Ctrl+Alt+1/Q and Esc×3 go to Windows** — owner had to turn iPad Bluetooth off to get back. Mouse still moves the iPad.
-- Evidence (engine.log of that run): iPad active 41 s → 86 s with **zero keyboard sends**; keyboard + mouse subscribed together at 2.3 s (so the "late keyboard subscription" hypothesis behind `a22f2fe` was wrong).
-- The headless `ctp-engine.exe` (release) earlier passed all engine checks incl. hotkeys/Esc×3 (checklist rows marked PASS, pre-review build).
-- **Leading hypothesis:** the `WH_KEYBOARD_LL` hook is gone. Candidates: (a) process-wide panic hook in `capture::start` calls `unhook()` on a panic on ANY thread (Tauri/UI) — reviewer flagged this; (b) Windows silently removes LL hooks whose callback exceeds LowLevelHooksTimeout (debug build, hook thread also handles WM_INPUT). Mouse still "works" because Raw Input `Move` is forwarded regardless of hooks.
-- The diagnostic build now logs: `hooks installed`, `hooks removed`, `PANIC on thread …`, and every `kb hook: down suppress=… -> Verdict`. **Next step:** have the owner run `target\debug\ctp-app.exe`, wait for iPad connected, Ctrl+Alt+1, type, move mouse, Ctrl+Alt+Q (or BT off), quit from tray; then read `%APPDATA%\CrossThePlatforms\engine.log`.
-  - No `kb hook:` lines at all → hook never/no longer installed → look for `hooks removed`/`PANIC`.
-  - `kb hook` lines with `suppress=false` while active → SUPPRESS cleared (unhook) → find who called it.
-- **Status 2026-11-03: marked WORKING by the owner — closed.** Do not keep investigating; the owner reports it if it ever recurs.
-  Notes below stay only as a head start for that case.
-- **Update 2026-11-03 (4 device runs): intermittent, not root-caused.**
-  - 3 of 4 runs clean (hotkey and edge entry, typing, Esc×3, Ctrl+Alt+Q all fine). Run 2 failed: iPad entered by edge 5 s after launch,
-    and `kb_hook` was **never called** from launch until ~79 s (no `kb hook` lines at all, incl. two iPad sessions), then worked normally.
-    No `hooks removed`, no `PANIC` → (a) panic-unhook and (b) Windows removing the hook are both **ruled out**; Windows skipped the hook.
-    Mouse kept working (Raw Input), so the capture thread was pumping — not a hung thread.
-  - Not UIPI in the clean runs (fg never elevated). Touchpad, not a high-rate mouse. Hook lag 0 ms, callback < 3 ms in all logged seconds.
-  - Only remaining difference spotted: in run 2 Notepad really had focus; clean runs had `claude.exe` focused. Untested.
-  - Uncommitted diag in worktree `ctp-windows-hub-input-bug-b2c51e`: per-second hook stats + foreground exe/elevation, and a raw-keyboard
-    witness that logs `HOOK SKIPPED` when Windows delivers keys our hook never saw (swallowed keys never reach raw input, so raw keys = skip).
-  - Proposed safety net (not built): raw key-**down** while SUPPRESS → return to Windows + reinstall hooks, so the first key press frees you.
-- Follow superpowers:systematic-debugging (one hypothesis at a time; this is fix attempt #2 after `a22f2fe`).
-- Likely fixes once confirmed: only unhook in the panic hook for panics on the capture/engine threads (name them); detect a dead hook (no hook callbacks while WM_INPUT arrives) and reinstall; move work out of the hook thread; test in a **release** build of the app.
+## Clipboard (plan 2) — device session in progress
+Implemented: core `Hub` (hash echo guard + 4-deep pending-echo ring per endpoint, last writer wins, pause, 64 MiB limit) and RGBA codec;
+Windows clipboard watcher (skips password-manager copies marked `ExcludeClipboardContentFromMonitorProcessing`); iPad link over
+RemotePairing Wi-Fi with USB fallback, TCP keepalive, 30 s connect timeout, auto DDI mount, change-count baseline; `clipsync` service
+thread; tray "Clipboard sync" check + Clipboard tab (status, Pair iPad (USB), counters). iPad files in `%APPDATA%\CrossThePlatforms\ipad\`
+(`rp-pairing.plist`, `ddi\*`, copied from `C:\dev\_ref`). Tests: core 85, platform 31 (+5 device-only, `--include-ignored`), UI vitest 10.
+
+**Device results so far (over USB, 2026-11-03):** a Windows text → iPad ✅ · b iPad text → Windows ✅ · c Windows screenshot → iPad ✅ ·
+**d iPad image → Windows Paint ❌** · e same copy twice ✅ · f Explorer file copy ignored ✅ · g/h toggle off/on, no replay ✅.
+Unplugging USB → switched to **Wi-Fi by itself in 3 s** ✅ (log `iPad clipboard connected (wifi=true)`).
+
+**Open items, in order:**
+1. **d fails** although the log says `clip image -> Windows (22380544 bytes)` (2732×2048 RGBA written via arboard). So the write "succeeds"
+   but Paint can't paste it. Next: owner copies an image on the iPad, then inspect clipboard *format names only* (e.g. PowerShell
+   `Add-Type -A System.Windows.Forms; [Windows.Forms.Clipboard]::GetDataObject().GetFormats()`); suspect arboard's CF_DIBV5/PNG output
+   for large top-down RGBA, or alpha. Fix in `platform/windows/src/clipboard.rs::write`.
+2. **At startup the badge said "Not paired"** although `rp-pairing.plist` exists (later Wi-Fi worked). Cause unknown — the new build
+   (`a6e26b6`) logs `iPad clipboard not connected: <reason>` once per new reason; read it on the next run.
+3. Pending checklist rows: lock/unlock, iPad off Wi-Fi → back, iPad reboot (DDI remount over Wi-Fi or needs USB?), laptop reboot,
+   input still fine while syncing, log has no clipboard text. Record in `docs/v1/checklist-clipboard.md`.
+4. Deferred minors (final review): connect loop runs while sync is off; tray check can disagree if save fails; watcher failure not in
+   status; wrong DDI remounts forever; parallel Pair clicks / notice never clears; size check after decode; tab switch freezes if service dies.
+
+**The run the owner was about to do** (iPad unplugged, Wi-Fi from the start): start the worktree exe → Clipboard tab badge after ~15 s →
+Diagnostics tab while controlling the iPad (Report interval, Send avg/max) → copy an image on the iPad, don't paste → inspect formats.
+
+## iPad pointer stutter (new, not clipboard)
+Owner sees the iPad pointer update in jerks (~every 200 ms). Same with the old no-clipboard build → **not caused by clipboard sync**.
+No "mouse send slow" in the log. Next: Diagnostics tab numbers (interval should be 15 ms; 30 ms seen once before), new log line
+`connected; interval N ms`. Spike notes: remaining feel = iPad 60 Hz + 15 ms slot + iPad pointer animations (owner may turn those off).
+
+## Keyboard hook bug (owner closed it as "working" — but new evidence)
+Original: in `ctp-app.exe` while the iPad is in control, keys/hotkeys/Esc×3 went to Windows; only BT-off got control back.
+Findings (diag build, `HOOK SKIPPED` = raw keyboard input arrived but `WH_KEYBOARD_LL` was never called):
+- Hook is never removed, no panic; Windows simply **skips** it (capture thread keeps pumping; mouse fine).
+- **2026-11-03 clipboard session: `HOOK SKIPPED` while our own settings window (`ctp-app.exe`) had focus**, and once with `claude.exe`
+  focused. Strong lead: the hook is skipped when the app's own (WebView2) window is foreground — matches the original failure if the
+  settings window was open. Workaround told to owner: close the settings window before controlling the iPad.
+- Owner was asked whether to investigate after the clipboard session (answer pending). Proposed safety net: raw key-down while
+  SUPPRESS → back to Windows + reinstall hooks. Use superpowers:systematic-debugging; one hypothesis at a time.
 
 ## Owner device facts (see docs/spikes/results.md)
-- iPad id `BluetoothLE#BluetoothLE14:d4:24:54:53:bc-5b:95:30:4d:1c:f5`, S24+ id `…-4e:5d:31:c1:13:6e`. Monitor `\\.\DISPLAY5` 1920×1080 (scaled coords). Settings file at `%APPDATA%\CrossThePlatforms\settings.json` (iPad Right, S24+ Left).
+- iPad id `BluetoothLE#BluetoothLE14:d4:24:54:53:bc-5b:95:30:4d:1c:f5`, S24+ id `…-4e:5d:31:c1:13:6e`. Monitor `\\.\DISPLAY5` 1920×1080 (scaled coords). Settings `%APPDATA%\CrossThePlatforms\settings.json` (iPad Right, S24+ Left).
 - iPad BLE interval 15 ms (minimum). LocalSend 90 MB/s vs our iroh ~40–44 (phone), 79 (PC→iPad), 16 (iPad→PC) → v1 transfer plan: LAN bulk over TLS-TCP.
-- iPad clipboard: idevice over RemotePairing works on Wi-Fi; Developer Mode on; DDI must be re-mounted after each iPad reboot.
+- Logs: `%APPDATA%\CrossThePlatforms\engine.log` (older runs kept as `engine.run*.log`). Never contains keys or clipboard contents.
 
 ## Machine gotchas (do not relearn these)
-- **Never force-kill a BLE publisher** (ble-hid/ctp-engine/ctp-app): the MediaTek MT7921 BT function wedged once and needed Shift+Shutdown + 20 s power-button drain. Stop ctp-engine with **Enter**; quit the app from **tray → Quit**.
+- **Never force-kill a BLE publisher** (ble-hid/ctp-engine/ctp-app): the MT7921 BT function wedged once (Shift+Shutdown + 20 s power-button drain). Quit the app from **tray → Quit**; stop ctp-engine with **Enter**.
 - Windows locks running exes: ask the owner to quit before rebuilding.
-- Gradle needs `TMP=C:\dev\_ref\tmp` (JDK socket path limit); JAVA_HOME = Android Studio jbr.
-- `pnpm dlx` is broken here → use `npx`. TypeScript 7 (no `baseUrl`). shadcn CLI writes `from "cn"` imports → fix to `@/lib/utils`.
-- adb: `$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe`; use `MSYS_NO_PATHCONV=1` for device paths, but then pass Windows paths to Windows exes.
-- Local-only files (not in git): `C:\dev\_ref\` (Universal Bridge + idevice clones, DDI files in `ddi\`, pairing records in `pairing\`), `idevice-tools` installed via cargo.
-- Many tool calls need `dangerouslyDisableSandbox` (gh push, Bluetooth, gradle loopback).
-- Node 26.3.0 here has CVE-2026-111497; owner advised to upgrade.
+- The worktree guard blocks Edit-tool writes into the main checkout from this worktree session; work on the worktree branch, fast-forward the other branch with git.
+- Reading `%APPDATA%\CrossThePlatforms\ipad\rp-pairing.plist` contents is (rightly) blocked as a secret — check existence only.
+- Gradle needs `TMP=C:\dev\_ref\tmp`; JAVA_HOME = Android Studio jbr. `pnpm dlx` broken → `npx`. TypeScript 7 (no `baseUrl`). shadcn CLI writes `from "cn"` → fix to `@/lib/utils`.
+- adb: `$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe`; `MSYS_NO_PATHCONV=1` for device paths.
+- Local-only (not in git): `C:\dev\_ref\` (Universal Bridge + idevice clones, DDI in `ddi\`, pairing records in `pairing\`).
+- Many tool calls need `dangerouslyDisableSandbox` (gh push, Bluetooth, gradle loopback, pnpm install).
+- `[profile.dev.package."*"] opt-level = 2` is set: first dev build after a clean takes ~10 min.
+- Node 26.3.0 here has CVE-2026-111497; owner advised to upgrade to 26.12.1+.
 
-## Remaining after the bug
-0. **Plan 2 (clipboard, Windows ↔ iPad) IMPLEMENTED on `v1/clipboard`** (branched from `v1/windows-hub-input`, not pushed, no PR). Plan `docs/superpowers/plans/2026-11-03-v1-clipboard.md`; final review fixes in `2877c0b`.
-   - **Next:** owner device session with `docs/v1/checklist-clipboard.md` (all PENDING) using the worktree build `target\debug\ctp-app.exe`. Never verified on the iPad yet: live link (first attempt: iPad not found on Wi-Fi — asleep or firewall prompt), DDI mount over Wi-Fi after an iPad reboot, stale-replay baseline, keepalive on sleep/Wi-Fi-off.
-   - iPad files copied to `%APPDATA%\CrossThePlatforms\ipad\` (rp-pairing.plist + ddi\*) from `C:\dev\_ref`.
-   - Deferred minors from the final review: connect loop runs while sync off; tray check can disagree if save fails; watcher failure not in status; wrong DDI remounts forever; parallel Pair clicks; size check after decode; tab switch freezes if service dies.
-1. Finish v1 plan 1 acceptance — **owner deferred 2026-11-03** ("base app is working; fix bugs as they show up") (`docs/v1/checklist-input.md` App rows: tray, single instance, layout/calibration/diagnostics, BT off/on, sleep/resume, reboot, AltGr), then open the PR for `v1/windows-hub-input`.
-2. Deferred minors from the final review are listed at the end of the plan-1 conversation (hold reset on monitor poll, notices raw ids, stale Ctrl/Alt after secure desktop, RunEvent::Exit, settings range checks, connected() polling cost, gain label rounding, shadcn in deps).
-3. v1 plans 2–4: clipboard (all three devices), file transfer (TLS-TCP bulk), then Kotlin + Swift apps, then Tauri mobile.
+## After clipboard
+1. v1 plan 1 acceptance (`docs/v1/checklist-input.md` App rows) — owner deferred; then PRs for `v1/windows-hub-input` and `v1/clipboard`.
+2. Phone ↔ Windows clipboard comes with the Android app (needs pairing/transport from the file-transfer plan).
+3. Next plans: file transfer (TLS-TCP bulk), then Kotlin + Swift apps, then Tauri mobile.
