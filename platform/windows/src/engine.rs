@@ -9,6 +9,7 @@ use std::{
 };
 
 use bridge_core::{
+    keyqueue::KeyQueue,
     router::{Action, Input, Router},
     settings::Settings,
 };
@@ -103,6 +104,8 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut fast: HashMap<String, BluetoothLEPreferredConnectionParametersRequest> = HashMap::new();
     let (mut last_conn, mut last_mon, mut last_status) = (Instant::now() - CONNECTION_POLL, Instant::now(), Instant::now());
     let mut reported = Status::default();
+    // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
+    let mut keys = KeyQueue::default();
 
     'outer: loop {
         let wait = router.next_tick_ms().map(|t| Duration::from_millis(t.saturating_sub(now_ms()))).unwrap_or(COMMAND_LATENCY).min(COMMAND_LATENCY);
@@ -149,6 +152,12 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                 if up { connected.insert(id.clone()); } else { connected.remove(id); fast.remove(id); }
             }
             actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
+            for id in &ids {
+                if keys.pending(id) > 0 && peripheral.keyboard_ready(id) {
+                    for r in keys.drain(id, now_ms()) { peripheral.send_keyboard(id, r); }
+                    status.notice = None;
+                }
+            }
             status.hosts = ids.iter().filter(|id| connected.contains(*id) || settings.attachments.iter().any(|a| &a.device_id == *id))
                 .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
                 .collect();
@@ -165,7 +174,13 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             match a {
                 Action::Suppress(on) => capture::SUPPRESS.store(on, Ordering::SeqCst),
                 Action::Mouse { host, report } => { peripheral.send_mouse(&host, report); }
-                Action::Keyboard { host, report } => { peripheral.send_keyboard(&host, report); }
+                Action::Keyboard { host, report } => {
+                    // Keep order: once something is queued for this host, queue behind it.
+                    if keys.pending(&host) > 0 || !peripheral.send_keyboard(&host, report) {
+                        keys.push(&host, report, now_ms());
+                        status.notice = Some(format!("Keyboard on {} is still connecting…", names.get(&host).cloned().flatten().unwrap_or_else(|| host.clone())));
+                    }
+                }
                 Action::PlaceCursor(x, y) => unsafe { let _ = SetCursorPos(x, y); },
                 Action::Active(a) => { status.active = a; status.notice = None; }
                 Action::Notice(n) => status.notice = Some(n),

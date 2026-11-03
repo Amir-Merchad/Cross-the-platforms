@@ -122,6 +122,14 @@ impl HidPeripheral {
         }
     }
 
+    /// True once this host has subscribed to keyboard reports (it may do so seconds after the mouse).
+    pub fn keyboard_ready(&self, host: &str) -> bool {
+        let target = HSTRING::from(host);
+        self.keyboard.SubscribedClients().is_ok_and(|v| v.into_iter().any(|c| {
+            c.Session().and_then(|s| s.DeviceId()).and_then(|d| d.Id()).is_ok_and(|id| id == target)
+        }))
+    }
+
     /// Device ids of hosts subscribed to both keyboard and mouse reports.
     pub fn hosts(&self) -> Vec<String> {
         let ids = |c: &GattLocalCharacteristic| -> Vec<String> {
