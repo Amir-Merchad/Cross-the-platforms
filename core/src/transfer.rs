@@ -25,7 +25,7 @@ pub struct Receiver { ep: Endpoint, dir: PathBuf }
 impl Receiver {
     pub async fn start(dir: PathBuf) -> Result<Receiver> {
         fs::create_dir_all(&dir).await?;
-        let ep = Endpoint::builder(presets::N0).alpns(vec![ALPN.to_vec()]).bind().await?;
+        let ep = Endpoint::builder(presets::N0).transport_config(fast_transport()).alpns(vec![ALPN.to_vec()]).bind().await?;
         Ok(Receiver { ep, dir })
     }
 
@@ -38,7 +38,7 @@ impl Receiver {
         let (mut send, mut recv) = conn.accept_bi().await?;
 
         let mut head = Vec::new();
-        let mut buf = vec![0u8; 64 * 1024];
+        let mut buf = vec![0u8; 1024 * 1024];
         let rest = loop {
             let n = recv.read(&mut buf).await?.context("stream ended before header")?;
             head.extend_from_slice(&buf[..n]);
@@ -85,7 +85,7 @@ pub async fn send_file(ticket: &str, path: &Path) -> Result<u64> {
     let addr: EndpointAddr = serde_json::from_str(ticket).context("bad ticket")?;
     let size = fs::metadata(path).await?.len();
     let name = path.file_name().context("no file name")?.to_string_lossy().into_owned();
-    let ep = Endpoint::bind(presets::N0).await?;
+    let ep = Endpoint::builder(presets::N0).transport_config(fast_transport()).bind().await?;
     let conn = ep.connect(addr, ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(serde_json::to_string(&Header { v: 1, name, size })?.as_bytes()).await?;
@@ -93,7 +93,7 @@ pub async fn send_file(ticket: &str, path: &Path) -> Result<u64> {
 
     let mut f = fs::File::open(path).await?;
     let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 256 * 1024];
+    let mut buf = vec![0u8; 1024 * 1024];
     loop {
         let n = f.read(&mut buf).await?;
         if n == 0 { break }
@@ -107,6 +107,19 @@ pub async fn send_file(ticket: &str, path: &Path) -> Result<u64> {
     conn.close(0u32.into(), b"done");
     ep.close().await;
     Ok(size)
+}
+
+/// Larger flow-control windows than Quinn's defaults (~1.25 MB per stream), so one bulk stream
+/// isn't throttled by window updates on Wi-Fi. Values from env for tuning: CTP_STREAM_WIN_MB / CTP_SEND_WIN_MB.
+fn fast_transport() -> iroh::endpoint::QuicTransportConfig {
+    let mb = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default) * 1024 * 1024;
+    let stream = mb("CTP_STREAM_WIN_MB", 16);
+    let send = mb("CTP_SEND_WIN_MB", 64);
+    iroh::endpoint::QuicTransportConfig::builder()
+        .stream_receive_window(iroh::endpoint::VarInt::from_u64(stream).expect("window fits"))
+        .receive_window(iroh::endpoint::VarInt::from_u64(send).expect("window fits"))
+        .send_window(send)
+        .build()
 }
 
 fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
