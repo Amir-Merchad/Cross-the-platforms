@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 const RESERVED: &[&str] = &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
     "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];
 
+/// `<path>.part`: where a file is written until its size and hash check out.
+pub fn part_path(p: &Path) -> PathBuf { p.with_file_name(format!("{}.part", p.file_name().unwrap_or_default().to_string_lossy())) }
+
 /// Base name only, invalid chars → `_`, reserved names prefixed, never overwrites an existing file.
 pub fn safe_name(dir: &Path, wanted: &str) -> PathBuf {
     let base = wanted.rsplit(['/', '\\']).next().unwrap_or("");
@@ -15,10 +18,12 @@ pub fn safe_name(dir: &Path, wanted: &str) -> PathBuf {
     let stem_lower = name.split('.').next().unwrap_or("").to_ascii_lowercase();
     if RESERVED.contains(&stem_lower.as_str()) { name.insert(0, '_'); }
 
+    // A name is taken while another transfer is still writing it (`<name>.part`).
+    let free = |p: &PathBuf| !p.exists() && !part_path(p).exists();
     let candidate = dir.join(&name);
-    if !candidate.exists() { return candidate; }
+    if free(&candidate) { return candidate; }
     let (stem, ext) = match name.rfind('.') { Some(i) if i > 0 => (&name[..i], &name[i..]), _ => (name.as_str(), "") };
-    (1..).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(|p| !p.exists()).unwrap()
+    (1..).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(free).unwrap()
 }
 
 #[cfg(test)]

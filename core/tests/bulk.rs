@@ -105,3 +105,25 @@ async fn wrong_token_is_refused() { // a LAN stranger who knows the port can't i
     assert!(rx.await.unwrap().is_err());
     assert!(files_in(dst.path()).is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_transfers_with_the_same_name_never_share_a_file() { // final review I2
+    let (src, dst) = (tempdir().unwrap(), tempdir().unwrap());
+    let (f1, f2) = (src.path().join("1.bin"), src.path().join("2.bin"));
+    std::fs::write(&f1, data(8 << 20, 11)).unwrap();
+    std::fs::write(&f2, data(8 << 20, 22)).unwrap();
+    let (l1, l2) = (BulkListener::bind().await.unwrap(), BulkListener::bind().await.unwrap());
+    let (a1, c1, t1) = (l1.addrs(), l1.cert_sha256(), l1.token());
+    let (a2, c2, t2) = (l2.addrs(), l2.cert_sha256(), l2.token());
+    let (d1, d2) = (dst.path().to_path_buf(), dst.path().to_path_buf());
+    let r1 = tokio::spawn(async move { l1.receive(&[meta("IMG_0001.jpg", 8 << 20)], &d1, |_, _| {}).await });
+    let r2 = tokio::spawn(async move { l2.receive(&[meta("IMG_0001.jpg", 8 << 20)], &d2, |_, _| {}).await });
+    let (v1, v2) = ([f1.clone()], [f2.clone()]);
+    let (s1, s2) = tokio::join!(send(&a1, &c1, &t1, &v1, |_, _| {}), send(&a2, &c2, &t2, &v2, |_, _| {}));
+    s1.unwrap(); s2.unwrap();
+    let (p1, p2) = (r1.await.unwrap().unwrap().remove(0), r2.await.unwrap().unwrap().remove(0));
+    assert_ne!(p1, p2);
+    assert_eq!(files_in(dst.path()), vec!["IMG_0001 (1).jpg".to_string(), "IMG_0001.jpg".to_string()]);
+    assert_eq!(std::fs::read(&p1).unwrap(), std::fs::read(&f1).unwrap(), "first transfer intact");
+    assert_eq!(std::fs::read(&p2).unwrap(), std::fs::read(&f2).unwrap(), "second transfer intact");
+}

@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::names::safe_name;
+use crate::names::{part_path, safe_name};
 use crate::node::FileMeta;
 
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -87,9 +87,8 @@ pub(crate) async fn receive_on<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, tok
     let mut done = 0u64;
     let mut out = Vec::with_capacity(files.len());
     for f in files {
-        let path = safe_name(dir, &f.name);
-        let part = path.with_file_name(format!("{}.part", path.file_name().unwrap().to_string_lossy()));
-        match recv_one(s, f.size, &part, &mut done, total, &mut progress).await {
+        let (path, part, file) = claim(dir, &f.name).await?;
+        match recv_one(s, f.size, file, &mut done, total, &mut progress).await {
             Ok(()) => { tokio::fs::rename(&part, &path).await?; out.push(path); }
             Err(e) => { let _ = tokio::fs::remove_file(&part).await; return Err(e) }
         }
@@ -102,11 +101,26 @@ async fn idle<T>(f: impl Future<Output = std::io::Result<T>>) -> Result<T> {
     Ok(tokio::time::timeout(IDLE_TIMEOUT, f).await.context("connection stalled")??)
 }
 
-async fn recv_one<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, size: u64, part: &Path, done: &mut u64, total: u64, progress: &mut impl FnMut(u64, u64)) -> Result<()> {
+/// A free name plus its `.part`, created atomically: two transfers of `IMG_0001.jpg` arriving at
+/// once must never write the same file.
+async fn claim(dir: &Path, name: &str) -> Result<(PathBuf, PathBuf, tokio::fs::File)> {
+    for _ in 0..1000 {
+        let path = safe_name(dir, name);
+        let part = part_path(&path);
+        match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&part).await {
+            Ok(f) => return Ok((path, part, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    bail!("no free file name")
+}
+
+async fn recv_one<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, size: u64, file: tokio::fs::File, done: &mut u64, total: u64, progress: &mut impl FnMut(u64, u64)) -> Result<()> {
     let mut sz = [0u8; 8];
     idle(s.read_exact(&mut sz)).await?;
     if u64::from_le_bytes(sz) != size { bail!("size differs from the offer") }
-    let mut file = tokio::io::BufWriter::with_capacity(BUF, tokio::fs::File::create(part).await?);
+    let mut file = tokio::io::BufWriter::with_capacity(BUF, file);
     let mut h = Sha256::new();
     let mut buf = vec![0u8; BUF];
     let mut left = size;

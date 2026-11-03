@@ -28,11 +28,16 @@ class ShareActivity : ComponentActivity() {
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
         if (uris.isEmpty() && text.isNullOrEmpty()) { app.toast("Nothing to send"); finish(); return }
         val send = { pc: FfiPeer ->
-            if (uris.isNotEmpty()) app.sendInBackground(pc, uris)
-            else app.scope.launch {
-                try { app.node.value?.sendClip(pc.id, text!!); app.toast("Text sent to ${pc.name}") } catch (e: Exception) { app.toast("Send failed: ${e.message}") }
+            if (uris.isNotEmpty()) {
+                // Stay open until the files are copied: the share grant ends when this activity does.
+                setContent { MaterialTheme { Text("Preparing ${uris.size} file(s)…", Modifier.padding(24.dp)) } }
+                app.sendInBackground(pc, uris) { finish() }
+            } else {
+                app.scope.launch {
+                    try { app.node.value?.sendClip(pc.id, text!!); app.toast("Text sent to ${pc.name}") } catch (e: Exception) { app.toast("Send failed: ${e.message}") }
+                }
+                finish()
             }
-            finish()
         }
         app.scope.launch {
             app.awaitNode(this@ShareActivity)

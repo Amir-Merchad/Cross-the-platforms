@@ -160,14 +160,22 @@ impl Node {
 
     /// Offers `paths` to a paired device and streams them once it accepts: LAN TLS first, iroh if
     /// that can't connect within a few seconds. Returns the bytes sent.
+    /// Every failure, from "not paired" to a cut-off stream, also arrives as `Event::Failed`, so
+    /// the sender's window can show it.
     pub async fn send_files(&self, peer_id: &str, paths: Vec<PathBuf>) -> Result<u64, String> {
+        let id = random_id();
+        self.send_files_as(id, peer_id, paths).await.inspect_err(|reason| {
+            let _ = self.inner.events.try_send(Event::Failed { id, reason: reason.clone() });
+        })
+    }
+
+    async fn send_files_as(&self, id: u64, peer_id: &str, paths: Vec<PathBuf>) -> Result<u64, String> {
         let mut files = Vec::with_capacity(paths.len());
         for p in &paths {
             let m = tokio::fs::metadata(p).await.map_err(|e| format!("can't read a file: {e}"))?;
             if !m.is_file() { return Err("only files can be sent".into()) }
             files.push(FileMeta { name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), size: m.len() });
         }
-        let id = random_id();
         let replies = self.send_ctl(peer_id, &[Ctl::Offer { id, files }]).await?;
         let (tcp, cert, token) = match replies.into_iter().find_map(|c| match c {
             Ctl::Accept { id: i, tcp, cert_sha256, token } if i == id => Some(Ok((tcp, cert_sha256, token))),
@@ -183,11 +191,7 @@ impl Node {
             Ok(mut s) => bulk::send_on(&mut s, &token, &paths, progress).await,
             Err(_) => self.send_over_iroh(peer_id, id, &token, &paths, progress).await,
         };
-        result.map_err(|e| {
-            let reason = e.to_string();
-            let _ = self.inner.events.try_send(Event::Failed { id, reason: reason.clone() });
-            reason
-        })
+        result.map_err(|e| e.to_string())
     }
 
     async fn send_over_iroh(&self, peer_id: &str, id: u64, token: &str, paths: &[PathBuf], progress: impl FnMut(u64, u64)) -> Result<u64> {
@@ -310,11 +314,14 @@ async fn accept_loop(ep: Endpoint, inner: Weak<Inner>) {
 }
 
 async fn handle_pair(conn: Connection, inner: &Inner) {
-    // Only while an invite is open; the code is taken out for the exchange and put back after.
-    let Some(mut pending) = inner.pending.lock().unwrap().take() else { conn.close(1u32.into(), b"no invite open"); return };
+    if inner.pending.lock().unwrap().is_none() { conn.close(1u32.into(), b"no invite open"); return }
     let me = inner.me.clone();
-    let result = pairing::answer(&conn, &mut pending, &me, Instant::now()).await;
-    *inner.pending.lock().unwrap() = Some(pending);
+    // The code stays in place while we wait for the phone: a silent stranger can't take it, and a
+    // newer invite shown meanwhile is the one that's checked.
+    let result = pairing::answer_with(&conn, &me, |code| match inner.pending.lock().unwrap().as_mut() {
+        Some(p) => p.check(code, Instant::now()),
+        None => Err(pairing::PairError::Used),
+    }).await;
     if let Ok(peer) = result {
         inner.add_peer(peer.clone());
         let _ = inner.events.send(Event::Paired(peer)).await;

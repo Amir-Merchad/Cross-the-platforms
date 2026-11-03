@@ -42,6 +42,9 @@ class App : Application(), NodeEvents {
 
     override fun onCreate() {
         super.onCreate()
+        // Copies left by a send the process didn't live to finish.
+        // Synchronous so it can't race a share that starts in this fresh process (deletes are quick).
+        File(cacheDir, OUTGOING).deleteRecursively()
         getSystemService(NotificationManager::class.java).apply {
             createNotificationChannel(NotificationChannel(CH_SERVICE, "Running", NotificationManager.IMPORTANCE_MIN))
             createNotificationChannel(NotificationChannel(CH_FILES, "Files", NotificationManager.IMPORTANCE_DEFAULT))
@@ -94,9 +97,8 @@ class App : Application(), NodeEvents {
         getSystemService(NotificationManager::class.java).notify(NOTE_FILES, n)
     }
 
-    /** Copies shared/picked documents into one fresh cache folder under their display names, off the main thread. */
-    suspend fun copyToCache(uris: List<Uri>): List<File> = withContext(Dispatchers.IO) {
-        val root = File(cacheDir, "outgoing").apply { deleteRecursively() }
+    /** Copies shared/picked documents into `root` under their display names, off the main thread. */
+    suspend fun copyToCache(root: File, uris: List<Uri>): List<File> = withContext(Dispatchers.IO) {
         uris.mapIndexed { i, uri ->
             val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(0) else null
@@ -108,11 +110,16 @@ class App : Application(), NodeEvents {
         }
     }
 
-    /** Sends in the app scope (survives the activity finishing) and toasts the outcome. */
-    fun sendInBackground(peer: FfiPeer, uris: List<Uri>) = scope.launch {
+    /**
+     * Sends in the app scope (survives the activity finishing) and toasts the outcome. `onCopied`
+     * runs once the files are read: share-sheet URI grants end with the activity, so it finishes only then.
+     * Each send has its own cache folder, removed when the send ends.
+     */
+    fun sendInBackground(peer: FfiPeer, uris: List<Uri>, onCopied: () -> Unit = {}) = scope.launch {
+        val root = File(File(cacheDir, OUTGOING), "${System.nanoTime()}")
         try {
+            val files = try { copyToCache(root, uris) } finally { launch(Dispatchers.Main) { onCopied() } }
             val n = node.filterNotNull().first()
-            val files = copyToCache(uris)
             val t0 = System.nanoTime()
             val bytes = n.sendFiles(peer.id, files.map { it.path }).toLong()
             val s = (System.nanoTime() - t0) / 1e9
@@ -120,6 +127,8 @@ class App : Application(), NodeEvents {
         } catch (e: Exception) {
             android.util.Log.w(TAG, "send files failed: ${e.message}")
             toast("Send failed: ${e.message}")
+        } finally {
+            withContext(Dispatchers.IO) { root.deleteRecursively() }
         }
     }
 
@@ -127,6 +136,7 @@ class App : Application(), NodeEvents {
 
     companion object {
         const val TAG = "Bridge"
+        const val OUTGOING = "outgoing"
         const val CH_SERVICE = "service"
         const val CH_FILES = "files"
         const val NOTE_SERVICE = 1

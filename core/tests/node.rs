@@ -108,3 +108,33 @@ async fn send_to_unpaired_peer_fails_cleanly() {
     let p = write(src.path(), "x.bin", 10, 4);
     assert!(c.send_files(&a.id(), vec![p]).await.is_err());
 }
+
+#[tokio::test]
+async fn silent_pairing_connection_does_not_block_the_real_phone() { // final review I1
+    let (mut a, _arx, _da) = node("Laptop", PeerKind::Windows).await;
+    let (b, _brx, _db) = node("S24+", PeerKind::Android).await;
+    let invite = a.invite();
+    // Someone who saw an old QR: opens a pairing stream and never sends a line.
+    let stranger = iroh::Endpoint::bind(iroh::endpoint::presets::N0).await.unwrap();
+    let conn = stranger.connect(a.addr(), bridge_core::pairing::PAIR_ALPN).await.unwrap();
+    let (mut s, _r) = conn.open_bi().await.unwrap();
+    s.write_all(b"{").await.unwrap(); // makes the stream visible to the hub, never finishes the line
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let peer = timeout(Duration::from_secs(8), b.join(&invite)).await.expect("join hung").expect("real phone must still pair");
+    assert_eq!(peer.id, a.id());
+    let _ = &mut a;
+    drop(conn);
+}
+
+#[tokio::test]
+async fn failed_send_is_reported_to_the_sender_window() { // final review I3
+    let (a, _arx, _da) = node("Laptop", PeerKind::Windows).await;
+    let (c, mut crx, _dc) = node("Stranger", PeerKind::Android).await;
+    let src = tempfile::tempdir().unwrap();
+    let p = write(src.path(), "x.bin", 10, 5);
+    assert!(c.send_files(&a.id(), vec![p]).await.is_err());
+    let e = wait_for(&mut crx, |e| matches!(e, Event::Failed { .. })).await;
+    assert!(matches!(e, Event::Failed { reason, .. } if reason.contains("not paired")));
+    assert!(c.send_files(&a.id(), vec![src.path().join("missing.pdf")]).await.is_err());
+    wait_for(&mut crx, |e| matches!(e, Event::Failed { .. })).await;
+}
