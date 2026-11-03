@@ -95,7 +95,7 @@ Owner skipped the open device checks, so these stay **untested**: rows 2, 3, 4, 
 Older deferred minors (clipboard plan): connect loop runs while sync is off; tray check can disagree if save fails; watcher
 failure not in status; wrong DDI remounts forever; parallel Pair clicks / notice never clears; size check after decode.
 
-### 7.3 Plan 4 — iPad Swift app (next big step; write the plan first with superpowers:writing-plans)
+### 7.3 Plan 4 — iPad Swift app: plan written, `docs/superpowers/plans/2026-11-04-v1-ipad-app.md` (awaiting owner review; branch `v1/ios`)
 From the spec + spikes: Swift app using the same UniFFI core (`start_node(..., kind: PeerKind::Ipad, ...)`, already exposed in
 `core/src/ffi.rs`); pair by scanning the PC's QR; receive into Files while the app is open (iOS gives no always-on background);
 share extension "Send to PC"; LocalSend-protocol fallback was suggested for when the app isn't open; **no Mac**: build on GitHub
