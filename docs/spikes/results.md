@@ -7,7 +7,7 @@
 | 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | code ready, PENDING (owner) | clipboard via iPad app only |
 | 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | **PASS** pairing, move, click, scroll, typing | Universal Bridge as helper |
 | 3 iPad + S24+ on one BLE link | one link, per-device input | **PASS**: one Windows peripheral serves both, per-device targeting works | phone input over LAN |
-| 4 Return-edge feel | seamless switch back | **PASS** with deliberate-push guard; stuck-key checks PENDING | hotkey-only return |
+| 4 Return-edge feel | seamless switch back | **PASS**: deliberate-push guard, no stuck keys, instant return on disconnect | hotkey-only return |
 | 5 iroh transfer vs LocalSend | fast files on all three | 1 GiB loopback ✔ 64 MB/s; Wi-Fi PENDING (owner) | tune QUIC buffers |
 | 6 Shared core in Kotlin + Swift | three-app structure, no-Mac iOS | APK builds ✔, IPA builds on CI ✔; on-device PENDING (owner) | — |
 | 7 Phone → PC clipboard tile | Android clipboard workaround | PENDING (owner) | share-sheet / Phone Link |
@@ -57,7 +57,7 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 | Latency | notify avg 3 ms, max ~29 ms; iPad interval 15 ms (fast request accepted, iPad keeps 15 ms) | **PASS**: "smoother and more responsive" after pacing; remaining feel = iPad 60 Hz + 15 ms slot + iPad pointer animations |
 | No accidental returns | deliberate-push guard (1 s grace, 300 ms dwell, 96 counts) | **PASS** 2026-11-03 |
 | No stuck keys across switch | hold Shift while crossing either way | **PASS** 2026-11-03 (5a, 5b) |
-| Disconnect while Shift held | turn off iPad Bluetooth mid-press | **FAIL** 2026-11-03: no auto-return (Esc ×3 worked) → fixed to watch connection status; retest PENDING |
+| Disconnect while Shift held | turn off iPad Bluetooth mid-press | **PASS** 2026-11-03 after fix (watch connection status): instant return, no stuck Shift |
 | Tuned values | defaults `--gain 1.0 --min-push 96 --dwell 300` felt right | **PASS** |
 
 Escape hatches always active in `edge`: Ctrl+Alt+Q, Esc ×3 in 1 s.
