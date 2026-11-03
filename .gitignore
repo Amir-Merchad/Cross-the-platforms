@@ -12,3 +12,6 @@ spikes/ios-app/Generated/
 spikes/ios-app/BridgeCore.xcframework/
 spikes/ios-app/Spike.xcodeproj/
 spikes/ios-app/headers/
+node_modules/
+dist/
+src-tauri/gen/
