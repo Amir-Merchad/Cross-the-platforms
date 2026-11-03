@@ -11,3 +11,4 @@ pub mod router;
 pub mod keyqueue;
 pub mod clipboard;
 pub mod identity;
+pub mod pairing;

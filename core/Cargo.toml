@@ -15,6 +15,7 @@ sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+getrandom = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 uniffi = { version = "0.32", features = ["tokio"] }
 
