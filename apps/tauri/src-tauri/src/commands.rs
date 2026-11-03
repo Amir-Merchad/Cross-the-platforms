@@ -1,6 +1,8 @@
 //! Commands the settings window calls (see `src/lib/api.ts`).
 
-use bridge_core::{layout::Monitor, settings::Settings};
+use std::path::PathBuf;
+
+use bridge_core::{identity::Peer, layout::Monitor, settings::Settings};
 use ctp_windows::{
     clipsync::{ClipCommand, ClipStatus},
     engine::{Command, Status, settings_path},
@@ -45,6 +47,54 @@ pub fn set_clipboard_sync(app: AppHandle, on: bool) -> Result<(), String> { set_
 #[tauri::command]
 pub fn pair_ipad(state: State<AppState>) {
     if let Some(c) = state.clip.lock().unwrap().as_ref() { c.send(ClipCommand::PairIpad); }
+}
+
+#[derive(serde::Serialize)]
+pub struct Invite { qr: String, expires_in_s: u64 }
+
+fn transfer(app: &AppHandle) -> Result<std::sync::Arc<ctp_windows::transfer::TransferHandle>, String> {
+    crate::transfer(app).ok_or_else(|| "file transfer isn't running (see Diagnostics)".into())
+}
+
+/// A fresh one-time pairing code (valid 5 minutes) as QR text.
+#[tauri::command]
+pub fn pair_invite(app: AppHandle) -> Result<Invite, String> { Ok(Invite { qr: transfer(&app)?.invite().to_qr_text(), expires_in_s: 300 }) }
+
+#[tauri::command]
+pub fn paired_peers(app: AppHandle) -> Result<Vec<Peer>, String> { Ok(transfer(&app)?.peers()) }
+
+#[tauri::command]
+pub fn forget_peer(app: AppHandle, id: String) -> Result<(), String> {
+    transfer(&app)?.forget(&id);
+    crate::peers_changed(&app);
+    Ok(())
+}
+
+/// Starts in the background; progress and the outcome arrive as `transfer` events.
+#[tauri::command]
+pub fn send_files(app: AppHandle, peer_id: String, paths: Vec<String>) -> Result<(), String> {
+    transfer(&app)?.send_files(peer_id, paths.into_iter().map(PathBuf::from).collect());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn receive_dir(state: State<AppState>) -> String { crate::receive_dir(&state.settings.lock().unwrap()).to_string_lossy().into_owned() }
+
+#[tauri::command]
+pub fn set_receive_dir(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
+    let mut settings = state.settings.lock().unwrap().clone();
+    settings.receive_dir = Some(path.clone());
+    settings.save(&settings_path())?;
+    *state.settings.lock().unwrap() = settings;
+    transfer(&app)?.set_receive_dir(PathBuf::from(path));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_receive_dir(state: State<AppState>) -> Result<(), String> {
+    let dir = crate::receive_dir(&state.settings.lock().unwrap());
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer.exe").arg(&dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Saves the toggle, tells the clipboard service and refreshes the tray check mark.

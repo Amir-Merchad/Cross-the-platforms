@@ -9,3 +9,5 @@ pub mod ipad;
 pub mod keys;
 pub mod monitors;
 pub mod peripheral;
+pub mod sendto;
+pub mod transfer;

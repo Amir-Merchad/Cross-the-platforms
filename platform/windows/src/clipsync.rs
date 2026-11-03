@@ -9,7 +9,18 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::{clipboard, diag, ipad::{self, IpadLink, IpadStatus, IpadWriter}};
 
-pub enum ClipCommand { SetEnabled(bool), PairIpad, Stop }
+pub enum ClipCommand {
+    SetEnabled(bool),
+    PairIpad,
+    /// The paired phones that get Windows/iPad text (ids), replacing the previous list.
+    Phones(Vec<String>),
+    /// Text a phone sent (its clipboard tile).
+    FromPhone { id: String, text: String },
+    Stop,
+}
+
+/// Delivers text to a phone (the transfer service's `send_clip`). Text only: phones get no images.
+pub type ToPhone = Box<dyn Fn(String, String) + Send>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ClipStatus {
@@ -40,12 +51,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 5 s plus 1 s per MiB: big screenshots need encoding and a slow link, small text must fail fast.
 fn write_timeout(size: usize) -> Duration { Duration::from_secs(5 + (size / (1024 * 1024)) as u64) }
 
-pub fn start(enabled: bool, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
+pub fn start(enabled: bool, to_phone: ToPhone, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
     let (tx, rx) = unbounded_channel();
     let thread = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         // Single-threaded on purpose: idevice futures don't prove Send, and nothing here needs more threads.
-        tokio::task::LocalSet::new().block_on(&rt, run(enabled, rx, on_status));
+        tokio::task::LocalSet::new().block_on(&rt, run(enabled, rx, to_phone, on_status));
         // Don't let a pending mDNS lookup (up to 10 s, blocking pool) hold up Quit.
         rt.shutdown_background();
     });
@@ -59,7 +70,7 @@ enum Event {
     Paired(Result<(), String>),
 }
 
-async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_status: impl Fn(ClipStatus)) {
+async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, to_phone: ToPhone, on_status: impl Fn(ClipStatus)) {
     let mut hub = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
     hub.set_paused(!enabled);
     let mut status = ClipStatus { enabled, ipad: Some(IpadStatus::Connecting), ..Default::default() };
@@ -103,6 +114,8 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
                     let tx = ev_tx.clone();
                     tokio::task::spawn_local(async move { let _ = tx.send(Event::Paired(ipad::pair_usb(&ipad::ipad_dir()).await)); });
                 }
+                Some(ClipCommand::Phones(ids)) => hub.set_endpoints([Endpoint::Windows, Endpoint::Ipad].into_iter().chain(ids.into_iter().map(Endpoint::Peer)).collect()),
+                Some(ClipCommand::FromPhone { id, text }) => writes = route(&mut hub, Endpoint::Peer(id), Content::Text(text)),
             },
             Some(c) = from_windows.recv() => writes = route(&mut hub, Endpoint::Windows, c),
             Some(ev) = events.recv() => match ev {
@@ -157,7 +170,10 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
                         Err(_) => Err("iPad write timed out".into()),
                     },
                 },
-                Endpoint::Peer(_) => Err("no peers yet".into()),
+                Endpoint::Peer(ref id) => match &c {
+                    Content::Text(t) => { to_phone(id.clone(), t.clone()); Ok(()) }
+                    Content::Image(_) => continue, // phones get text only
+                },
             };
             match ok {
                 Ok(()) => { status.synced += 1; diag::log(format_args!("clip {} -> {to:?} ({} bytes)", c.kind(), c.size())); }

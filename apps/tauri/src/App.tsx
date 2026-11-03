@@ -9,6 +9,7 @@ import Layout from "@/pages/Layout";
 import Calibration from "@/pages/Calibration";
 import Diagnostics from "@/pages/Diagnostics";
 import Clipboard from "@/pages/Clipboard";
+import Transfer from "@/pages/Transfer";
 
 export default function App() {
   const [saved, setSaved] = useState<Settings | null>(null);
@@ -50,12 +51,14 @@ export default function App() {
       <Tabs defaultValue="devices" className="flex-1">
         <TabsList>
           <TabsTrigger value="devices">Devices</TabsTrigger>
+          <TabsTrigger value="transfer">Transfer</TabsTrigger>
           <TabsTrigger value="clipboard">Clipboard</TabsTrigger>
           <TabsTrigger value="layout">Layout</TabsTrigger>
           <TabsTrigger value="calibration">Calibration</TabsTrigger>
           <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
         </TabsList>
         <TabsContent value="devices"><Devices status={status} settings={draft} /></TabsContent>
+        <TabsContent value="transfer"><Transfer /></TabsContent>
         <TabsContent value="clipboard"><Clipboard clip={clip} /></TabsContent>
         <TabsContent value="layout"><Layout status={status} settings={draft} monitors={monitors} onChange={setDraft} /></TabsContent>
         <TabsContent value="calibration"><Calibration status={status} settings={draft} onChange={setDraft} /></TabsContent>

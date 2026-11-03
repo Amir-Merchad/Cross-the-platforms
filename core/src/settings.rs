@@ -26,11 +26,13 @@ pub struct Settings {
     pub remote_width: BTreeMap<String, f64>,
     /// Clipboard sync on/off (tray toggle and Clipboard tab).
     pub clipboard_sync: bool,
+    /// Where received files go; `None` = `Downloads\Bridge`.
+    pub receive_dir: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None }
     }
 }
 

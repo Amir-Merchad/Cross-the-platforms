@@ -57,6 +57,12 @@ pub struct Hub {
 impl Hub {
     pub fn new(endpoints: Vec<Endpoint>) -> Self { Self { endpoints, last: None, pending: HashMap::new(), next_id: 1, paused: false, skipped: 0 } }
 
+    /// Paired phones come and go; the fixed endpoints stay.
+    pub fn set_endpoints(&mut self, endpoints: Vec<Endpoint>) {
+        self.pending.retain(|e, _| endpoints.contains(e));
+        self.endpoints = endpoints;
+    }
+
     pub fn set_paused(&mut self, p: bool) { self.paused = p; }
 
     pub fn skipped_too_large(&self) -> u64 { self.skipped }
@@ -182,5 +188,14 @@ mod tests {
         let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad, Endpoint::Peer("s24".into())]);
         let to: Vec<_> = h.observe(Endpoint::Ipad, t("x")).into_iter().map(|(e, _)| e).collect();
         assert_eq!(to, vec![Endpoint::Windows, Endpoint::Peer("s24".into())]);
+    }
+    #[test] fn phones_can_join_later() {
+        let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
+        h.set_endpoints(vec![Endpoint::Windows, Endpoint::Ipad, Endpoint::Peer("s24".into())]);
+        let to: Vec<_> = h.observe(Endpoint::Windows, t("y")).into_iter().map(|(e, _)| e).collect();
+        assert_eq!(to, vec![Endpoint::Ipad, Endpoint::Peer("s24".into())]);
+        h.set_endpoints(vec![Endpoint::Windows, Endpoint::Ipad]);
+        let to: Vec<_> = h.observe(Endpoint::Windows, t("z")).into_iter().map(|(e, _)| e).collect();
+        assert_eq!(to, vec![Endpoint::Ipad]);
     }
 }

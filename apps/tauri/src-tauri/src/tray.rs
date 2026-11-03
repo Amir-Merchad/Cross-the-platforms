@@ -75,6 +75,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             // Engine drop returns input to Windows and stops advertising before the process exits.
             drop(state.engine.lock().unwrap().take());
             drop(state.clip.lock().unwrap().take());
+            drop(state.transfer.lock().unwrap().take()); // closes the endpoint so peers see us leave
             app.exit(0);
         }
         other => if let Some(host) = other.strip_prefix("switch:")

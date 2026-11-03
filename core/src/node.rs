@@ -47,7 +47,8 @@ pub enum Ctl {
     Clip { text: String },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type")]
 pub enum Event {
     Paired(Peer),
     Incoming { from: String, files: Vec<FileMeta> },
@@ -65,7 +66,7 @@ pub struct Node { inner: Arc<Inner> }
 pub(crate) struct Inner {
     pub(crate) ep: Endpoint,
     me: Peer,
-    pub(crate) receive_dir: PathBuf,
+    receive_dir: Mutex<PathBuf>,
     peers: Mutex<PairedPeers>,
     peers_path: PathBuf,
     addrs: Mutex<HashMap<String, EndpointAddr>>,
@@ -96,7 +97,7 @@ impl Node {
         let addrs = std::fs::read_to_string(&addrs_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let (tx, rx) = mpsc::channel(1024);
         let inner = Arc::new(Inner {
-            ep: ep.clone(), me: cfg.me, receive_dir: cfg.receive_dir,
+            ep: ep.clone(), me: cfg.me, receive_dir: Mutex::new(cfg.receive_dir),
             peers: Mutex::new(PairedPeers::load(&peers_path)), peers_path,
             addrs: Mutex::new(addrs), addrs_path,
             pending: Mutex::new(None), events: tx, tasks: Mutex::new(Vec::new()),
@@ -124,6 +125,8 @@ impl Node {
 
     pub fn id(&self) -> String { self.inner.ep.id().to_string() }
     pub fn addr(&self) -> EndpointAddr { self.inner.ep.addr() }
+    /// Where the next accepted transfer lands.
+    pub fn set_receive_dir(&self, dir: PathBuf) { *self.inner.receive_dir.lock().unwrap() = dir; }
     pub fn peers(&self) -> Vec<Peer> { self.inner.peers.lock().unwrap().list().to_vec() }
 
     pub fn forget(&self, id: &str) {
@@ -355,7 +358,7 @@ impl Node {
     }
 
     async fn receive_files(self, from: String, id: u64, files: Vec<FileMeta>, l: BulkListener, token: String, mut iroh: oneshot::Receiver<IrohStream>) {
-        let dir = self.inner.receive_dir.clone();
+        let dir = self.inner.receive_dir.lock().unwrap().clone();
         let events = self.inner.events.clone();
         let over_iroh = |(conn, s, r): IrohStream| {
             let (files, dir, token, events) = (files.clone(), dir.clone(), token.clone(), events.clone());
