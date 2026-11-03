@@ -1,0 +1,126 @@
+//! Clipboard sync rules, shared by every app: which endpoints an item goes to, and when it doesn't.
+//! Items are compared by content hash, so an endpoint reporting back what we just wrote to it is
+//! dropped (no bouncing), and the newest copy anywhere wins. Contents are never logged.
+
+use sha2::{Digest, Sha256};
+
+/// Items bigger than this (text bytes, or width × height × 4 for images) are not synced.
+pub const MAX_ITEM_BYTES: usize = 64 * 1024 * 1024;
+
+/// Canonical image: RGBA8, row-major, so the same picture hashes the same whatever it was encoded as.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Image { pub width: u32, pub height: u32, pub rgba: Vec<u8> }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Content { Text(String), Image(Image) }
+
+impl Content {
+    pub fn size(&self) -> usize {
+        match self { Content::Text(t) => t.len(), Content::Image(i) => i.rgba.len() }
+    }
+    pub fn kind(&self) -> &'static str {
+        match self { Content::Text(_) => "text", Content::Image(_) => "image" }
+    }
+    fn hash(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        match self {
+            Content::Text(t) => { h.update([0]); h.update(t.as_bytes()); }
+            Content::Image(i) => { h.update([1]); h.update(i.width.to_le_bytes()); h.update(i.height.to_le_bytes()); h.update(&i.rgba); }
+        }
+        h.finalize().into()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Endpoint { Windows, Ipad, Peer(String) }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Item { pub id: u64, pub origin: Endpoint, pub content: Content }
+
+pub struct Hub {
+    endpoints: Vec<Endpoint>,
+    last: Option<[u8; 32]>,
+    next_id: u64,
+    paused: bool,
+    skipped: u64,
+}
+
+impl Hub {
+    pub fn new(endpoints: Vec<Endpoint>) -> Self { Self { endpoints, last: None, next_id: 1, paused: false, skipped: 0 } }
+
+    pub fn set_paused(&mut self, p: bool) { self.paused = p; }
+
+    pub fn skipped_too_large(&self) -> u64 { self.skipped }
+
+    /// `from` reported a clipboard change; returns what to write where.
+    pub fn observe(&mut self, from: Endpoint, content: Content) -> Vec<(Endpoint, Item)> {
+        if matches!(&content, Content::Text(t) if t.is_empty()) { return Vec::new() }
+        let hash = content.hash();
+        if self.last == Some(hash) { return Vec::new() }
+        // Seen even while paused, so resuming never replays it.
+        self.last = Some(hash);
+        if self.paused { return Vec::new() }
+        if content.size() > MAX_ITEM_BYTES { self.skipped += 1; return Vec::new() }
+        let item = Item { id: self.next_id, origin: from.clone(), content };
+        self.next_id += 1;
+        self.endpoints.iter().filter(|e| **e != from).map(|e| (e.clone(), item.clone())).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hub() -> Hub { Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]) }
+    fn t(s: &str) -> Content { Content::Text(s.into()) }
+
+    #[test] fn windows_copy_goes_to_ipad_only() {
+        let out = hub().observe(Endpoint::Windows, t("hi"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, Endpoint::Ipad);
+        assert_eq!(out[0].1.origin, Endpoint::Windows);
+        assert_eq!(out[0].1.content, t("hi"));
+    }
+    #[test] fn echo_from_target_is_dropped() { // Review Focus 1
+        let mut h = hub();
+        h.observe(Endpoint::Windows, t("hi"));
+        assert!(h.observe(Endpoint::Ipad, t("hi")).is_empty());
+    }
+    #[test] fn same_content_twice_is_sent_once() {
+        let mut h = hub();
+        h.observe(Endpoint::Windows, t("a"));
+        assert!(h.observe(Endpoint::Windows, t("a")).is_empty());
+    }
+    #[test] fn last_writer_wins_and_a_can_come_back() {
+        let mut h = hub();
+        h.observe(Endpoint::Windows, t("a"));
+        assert_eq!(h.observe(Endpoint::Ipad, t("b"))[0].0, Endpoint::Windows);
+        assert_eq!(h.observe(Endpoint::Windows, t("a"))[0].0, Endpoint::Ipad, "a is new again after b");
+    }
+    #[test] fn ids_increase() {
+        let mut h = hub();
+        let a = h.observe(Endpoint::Windows, t("a"))[0].1.id;
+        let b = h.observe(Endpoint::Windows, t("b"))[0].1.id;
+        assert!(b > a);
+    }
+    #[test] fn empty_text_is_ignored() { assert!(hub().observe(Endpoint::Windows, t("")).is_empty()); }
+    #[test] fn too_large_is_skipped_and_counted() { // Review Focus 3
+        let mut h = hub();
+        let big = Content::Image(Image { width: 4097, height: 4097, rgba: vec![0; 4097 * 4097 * 4] });
+        assert!(h.observe(Endpoint::Windows, big).is_empty());
+        assert_eq!(h.skipped_too_large(), 1);
+    }
+    #[test] fn paused_syncs_nothing_and_resume_replays_nothing() { // Review Focus 5
+        let mut h = hub();
+        h.set_paused(true);
+        assert!(h.observe(Endpoint::Windows, t("secret")).is_empty());
+        h.set_paused(false);
+        assert!(h.observe(Endpoint::Ipad, t("secret")).is_empty(), "copied while paused counts as seen");
+        assert_eq!(h.observe(Endpoint::Windows, t("next")).len(), 1);
+    }
+    #[test] fn three_endpoints_fan_out_to_both_others() {
+        let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad, Endpoint::Peer("s24".into())]);
+        let to: Vec<_> = h.observe(Endpoint::Ipad, t("x")).into_iter().map(|(e, _)| e).collect();
+        assert_eq!(to, vec![Endpoint::Windows, Endpoint::Peer("s24".into())]);
+    }
+}

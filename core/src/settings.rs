@@ -24,11 +24,13 @@ pub struct Settings {
     pub start_with_windows: bool,
     /// Remote screen width in pointer units (iPad Air 13" ≈ 1366 points).
     pub remote_width: BTreeMap<String, f64>,
+    /// Clipboard sync on/off (tray toggle and Clipboard tab).
+    pub clipboard_sync: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new() }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true }
     }
 }
 
@@ -104,7 +106,9 @@ mod tests {
         std::fs::write(&p, r#"{"version":1,"entry_hold_ms":500}"#).unwrap();
         let s = Settings::load(&p);
         assert_eq!(s.entry_hold_ms, 500); assert!(s.start_with_windows);
+        assert!(s.clipboard_sync);
     }
+    #[test] fn clipboard_sync_defaults_on() { assert!(Settings::default().clipboard_sync); }
     #[test] fn invalid_layout_is_not_saved() {
         let d = tempdir().unwrap(); let p = d.path().join("s.json");
         let mut s = Settings::default();
