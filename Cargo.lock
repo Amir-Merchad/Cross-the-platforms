@@ -1215,6 +1215,7 @@ dependencies = [
 name = "ctp-windows"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "bridge-core",
  "serde",
  "serde_json",
