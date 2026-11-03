@@ -6,3 +6,4 @@ pub mod ffi;
 
 uniffi::setup_scaffolding!();
 pub mod layout;
+pub mod settings;
