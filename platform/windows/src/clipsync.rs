@@ -125,7 +125,10 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
                 Event::Connected(Err(e)) => {
                     connecting = false;
                     retry = tokio::time::Instant::now() + RECONNECT;
-                    status.ipad = Some(ipad::classify(&e));
+                    let s = ipad::classify(&e);
+                    // Once per new reason, not every 2 s. Error texts never carry clipboard contents.
+                    if status.ipad.as_ref() != Some(&s) { diag::log(format_args!("iPad clipboard not connected: {e}")); }
+                    status.ipad = Some(s);
                 }
                 Event::FromIpad { session: s, .. } if s != session => {}
                 Event::FromIpad { change: Ok(c), .. } => writes = route(&mut hub, Endpoint::Ipad, c),

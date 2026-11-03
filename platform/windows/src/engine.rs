@@ -143,8 +143,8 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             for id in &ids {
                 let up = peripheral.connected(id);
                 if up && !connected.contains(id) {
-                    crate::diag::log(format_args!("{id} connected; keyboard subscribed: {}", peripheral.keyboard_ready(id)));
                     let ms = peripheral.report_interval_ms(id);
+                    crate::diag::log(format_args!("{id} connected; interval {ms} ms; keyboard subscribed: {}", peripheral.keyboard_ready(id)));
                     intervals.insert(id.clone(), ms);
                     router.set_interval(id, ms);
                     if let Some(req) = peripheral.request_fast(id) { fast.insert(id.clone(), req); }
