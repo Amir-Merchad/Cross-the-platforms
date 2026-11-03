@@ -72,7 +72,7 @@ platform/     — per-OS pieces that can't be shared:
 - **Build order (Claude's call):** Windows Tauri app first (it's the hub), then native Kotlin and Swift (background services and share extensions are native anyway), then Tauri mobile flavours as a thin UI over the same core and plugins.
 
 ### No-Mac iPad builds
-- Both iPad flavours (Swift and Tauri) build on a **GitHub-hosted macOS runner**, producing an unsigned `.ipa`; install from Windows with SideStore/AltStore and a free Apple account (7-day re-signing, 3 sideloaded apps max — the two iPad flavours use 2 of the 3).
+- Both iPad flavours (Swift and Tauri) build on a **GitHub-hosted macOS runner**, producing an unsigned `.ipa`; install from Windows with **iloader → SideStore 0.7.0+** (older SideStore sign-in is broken since Apple's 2026 change) and a free Apple account (7-day re-signing, 3 sideloaded apps max: SideStore + the two iPad flavours). Plain SideStore, not LiveContainer, so share extensions and Files integration work. AltStore PAL (EU) doesn't apply: it needs Apple-notarized apps. *(Updated 2026-11-04 from spikes.)*
 - Swift UI work can't be previewed on Windows; each UI check is a CI build + sideload. Keep iOS UI simple and push logic into `core/`, which is testable on Windows.
 - **Make the repo public:** standard GitHub runners are free for public repos; private repos burn included minutes and macOS minutes count at a high multiplier.
 
@@ -82,8 +82,8 @@ platform/     — per-OS pieces that can't be shared:
 - **Transport: BLE HID from Windows** (GattServiceProvider via the `windows` crate). Proven on this laptop + iPad by Universal Bridge (MIT, C#); port its HID descriptor, keymap and GATT setup to Rust.
 - **Capture:** Raw Input for mouse deltas (no Windows acceleration), low-level hooks to suppress local input while a remote device is active.
 - **Switching:** layout editor (which device sits on which edge of which monitor); edge crossing with hold time; hotkeys per device + "back to Windows"; emergency escape (e.g. Esc ×3).
-- **Return edge** (iPad/Android pointer is relative-only and unreadable): on entry, push the pointer hard against the Windows-side edge to pin it; dead-reckon from sent deltas, clamped at that edge; return when the estimate is at the edge and extra push passes a threshold. Calibration settings exposed.
-- **S24+:** try the same BLE link, sending reports only to the active host. If one Windows peripheral can't serve both reliably, the phone app receives input over LAN and injects it (Shizuku; Input Leaf as reference).
+- **Return edge** (iPad/Android pointer is relative-only and unreadable): on entry, push the pointer hard against the Windows-side edge to pin it; dead-reckon from sent deltas, clamped at that edge. Reaching the estimated edge is only a *candidate*: return needs a deliberate push (1 s entry grace, ≥300 ms dwell, ≥96 counts, ≤180 ms gaps, first flick ignored — Universal Bridge's guard). Motion is paced at the BLE connection interval (iPad: 15 ms minimum). Disconnect is detected from the device's connection status, not its GATT subscription. Calibration settings exposed. *(Updated 2026-11-04 from spikes.)*
+- **S24+:** the same BLE link serves the iPad and the S24+ at once, sending reports only to the active host (**verified 2026-11-03**); the LAN-injection fallback is not needed.
 - **Safety:** on switch, disconnect, crash or sleep, release all held keys/buttons and return control to Windows.
 - **Keyboard layout:** HID sends key positions; iPad/phone hardware-keyboard layout must match; optional Ctrl↔Cmd remap.
 
@@ -112,14 +112,14 @@ Seamless edge crossing *starting* on the iPad isn't possible: no app can see the
 Receivers: all three apps can show a stream full-screen; the Windows receiver is a window you can click into (clicks become input on the source).
 
 ## 7. Clipboard (v1)
-- **Windows ↔ iPad, no app needed:** CoreDevice pasteboard service via `idevice` (MIT): read, write, change notifications. Needs Developer Mode, developer disk image, tunnel (USB first, then Wi-Fi). Highest-risk piece; validate first.
+- **Windows ↔ iPad, no app needed (verified 2026-11-03):** CoreDevice pasteboard service via `idevice` (MIT): read, write, change notifications, text instant, images resolvable. Needs Developer Mode and the developer disk image (personalized via Apple TSS; **re-mount automatically after every iPad reboot**). Wi-Fi works through **RemotePairing**: one-time pairing over USB, then mDNS `_remotepairing._tcp` → pair-verify → TLS-PSK tunnel → RSD. Reconnect automatically when the link drops.
 - **iPad fallback:** clipboard action in the iPad app (both flavours).
 - **Windows ↔ phone:** via the phone app. Android 10+ blocks background clipboard reads: Windows→phone is easy; phone→Windows uses a quick-settings tile / notification action / share target, or Shizuku. Phone Link stays as owner fallback.
 - **Engine rules (core/):** origin device + ID on every item (no bouncing), last writer wins, pause toggle, image size limit, nothing logged.
 - Formats: text and images first; rich text later; files on the clipboard become a file transfer.
 
 ## 8. File transfer (v1)
-- **Main path:** own protocol on **iroh** (QUIC, key-addressed, encrypted). Direct on LAN in v1; same keys and pairing enable internet use in v2. No LAN-only assumptions in auth.
+- **Main path:** own protocol on **iroh** (QUIC, key-addressed, encrypted) for discovery, pairing, control and (v2) internet. **On the same LAN, bulk file data moves to a direct TLS-over-TCP stream** negotiated over the iroh connection: spikes measured iroh at ~40–44 MB/s phone↔PC and 16 MB/s iPad→PC vs LocalSend's 90 MB/s, limited by per-packet QUIC/UDP cost on Windows, not flow control. No LAN-only assumptions in auth. *(Updated 2026-11-04 from spikes.)*
 - **Pairing:** once per device, QR code on Windows scanned by the mobile app; device keys stored.
 - **Fast path:** drag-drop onto a device tile, Explorer "Send to", mobile share sheet; optional auto-send of new screenshots to the active device. Files land in a predictable folder (iPad Files → Bridge, phone Downloads/Bridge, configurable on Windows).
 - **Fallbacks:** LocalSend protocol (iPad/phone without our app); Quick Share via an rquickshare port (later, laptop appears in the phone's native share sheet); AirDrop phone ↔ iPad (Samsung interop, nothing to build).
@@ -131,6 +131,8 @@ Receivers: all three apps can show a stream full-screen; the Windows receiver is
 - **Two iPad flavours** use 2 of the 3 free sideload slots and both need weekly re-signing.
 
 ## 10. Validation order (throwaway spikes before product work)
+
+**Done 2026-11-04 — results and verdicts in `docs/spikes/results.md`.**
 Record iPadOS and One UI versions first.
 1. iPad clipboard via `idevice` (USB, then Wi-Fi; text + image; survives sleep/reboot). *Fail →* clipboard via iPad app only.
 2. Rust BLE HID → iPad (move, click, scroll, type). *Fail →* reuse Universal Bridge as external helper.
