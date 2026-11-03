@@ -23,7 +23,9 @@ In `ctp-app.exe` (Tauri tray app), while the iPad is in control: **keyboard neve
 - The diagnostic build now logs: `hooks installed`, `hooks removed`, `PANIC on thread …`, and every `kb hook: down suppress=… -> Verdict`. **Next step:** have the owner run `target\debug\ctp-app.exe`, wait for iPad connected, Ctrl+Alt+1, type, move mouse, Ctrl+Alt+Q (or BT off), quit from tray; then read `%APPDATA%\CrossThePlatforms\engine.log`.
   - No `kb hook:` lines at all → hook never/no longer installed → look for `hooks removed`/`PANIC`.
   - `kb hook` lines with `suppress=false` while active → SUPPRESS cleared (unhook) → find who called it.
-- **Update 2026-11-03 (4 device runs): PARKED by the owner, intermittent, not root-caused.**
+- **Status 2026-11-03: marked WORKING by the owner — closed.** Do not keep investigating; the owner reports it if it ever recurs.
+  Notes below stay only as a head start for that case.
+- **Update 2026-11-03 (4 device runs): intermittent, not root-caused.**
   - 3 of 4 runs clean (hotkey and edge entry, typing, Esc×3, Ctrl+Alt+Q all fine). Run 2 failed: iPad entered by edge 5 s after launch,
     and `kb_hook` was **never called** from launch until ~79 s (no `kb hook` lines at all, incl. two iPad sessions), then worked normally.
     No `hooks removed`, no `PANIC` → (a) panic-unhook and (b) Windows removing the hook are both **ruled out**; Windows skipped the hook.
@@ -52,6 +54,7 @@ In `ctp-app.exe` (Tauri tray app), while the iPad is in control: **keyboard neve
 - Node 26.3.0 here has CVE-2026-111497; owner advised to upgrade.
 
 ## Remaining after the bug
-1. Finish v1 plan 1 acceptance (`docs/v1/checklist-input.md` App rows: tray, single instance, layout/calibration/diagnostics, BT off/on, sleep/resume, reboot, AltGr), then open the PR for `v1/windows-hub-input`.
+0. **Plan 2 (clipboard, Windows ↔ iPad) written:** `docs/superpowers/plans/2026-11-03-v1-clipboard.md` — awaiting owner review + execution choice; implement on `v1/clipboard` from `v1/windows-hub-input`.
+1. Finish v1 plan 1 acceptance — **owner deferred 2026-11-03** ("base app is working; fix bugs as they show up") (`docs/v1/checklist-input.md` App rows: tray, single instance, layout/calibration/diagnostics, BT off/on, sleep/resume, reboot, AltGr), then open the PR for `v1/windows-hub-input`.
 2. Deferred minors from the final review are listed at the end of the plan-1 conversation (hold reset on monitor poll, notices raw ids, stale Ctrl/Alt after secure desktop, RunEvent::Exit, settings range checks, connected() polling cost, gain label rounding, shadcn in deps).
 3. v1 plans 2–4: clipboard (all three devices), file transfer (TLS-TCP bulk), then Kotlin + Swift apps, then Tauri mobile.
