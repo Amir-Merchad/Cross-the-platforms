@@ -14,4 +14,4 @@ spikes/ios-app/Spike.xcodeproj/
 spikes/ios-app/headers/
 node_modules/
 dist/
-src-tauri/gen/
+apps/tauri/src-tauri/gen/

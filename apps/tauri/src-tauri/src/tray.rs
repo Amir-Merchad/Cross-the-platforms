@@ -70,8 +70,10 @@ fn on_menu(app: &AppHandle, id: &str) {
             drop(state.engine.lock().unwrap().take());
             app.exit(0);
         }
-        other => if let Some(host) = other.strip_prefix("switch:") {
-            if let Some(e) = state.engine.lock().unwrap().as_ref() { e.send(Command::SwitchTo(Some(host.to_string()))); }
+        other => if let Some(host) = other.strip_prefix("switch:")
+            && let Some(e) = state.engine.lock().unwrap().as_ref()
+        {
+            e.send(Command::SwitchTo(Some(host.to_string())));
         },
     }
 }
