@@ -89,7 +89,7 @@ Install: plug in the S24+ with USB debugging on, `adb install -r <apk>` (adb is 
 
 | Check | How | Result |
 |---|---|---|
-| Phone receives | app → Start receiving | **PASS** (accidental phone→phone run): files landed in public `Download/Bridge`; PC→phone timing PENDING |
+| Phone receives | app → Start receiving | **PASS** 2026-11-04: PC→phone 200 MB in 4.72 s = **44.4 MB/s**, hash verified; files land in public `Download/Bridge` |
 | Phone sends to PC | `bridge-recv`, ticket injected via `adb run-as` into the app prefs | **PASS** 2026-11-03: 198 MB video in 5.0 s = **39.7 MB/s** over Wi-Fi, bytes intact |
 | Same files with LocalSend, same Wi-Fi | time it | PENDING (owner) |
 | Clipboard tile (emoji text) | add "Send clipboard" tile, copy text, tap tile → `clip.txt` on PC matches | PENDING (owner) |

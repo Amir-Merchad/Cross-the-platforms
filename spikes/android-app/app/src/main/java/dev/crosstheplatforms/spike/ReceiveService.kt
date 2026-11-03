@@ -35,6 +35,8 @@ class ReceiveService : Service() {
             try {
                 val rx = startReceiver(dir.path)
                 Shared.receiveTicket.value = rx.ticket()
+                // Also readable over USB for testing: adb shell run-as <pkg> cat files/ticket.txt
+                File(filesDir, "ticket.txt").writeText(rx.ticket())
                 while (isActive) {
                     val t0 = System.nanoTime()
                     try {
