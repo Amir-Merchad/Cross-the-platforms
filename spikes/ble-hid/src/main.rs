@@ -121,7 +121,7 @@ fn edge(p: &HidPeripheral, args: &[String]) {
     let (mut mx, mut my) = (0, 0);
     let mut next_motion = Instant::now();
     loop {
-        let wait = if mx != 0 || my != 0 { next_motion.saturating_duration_since(Instant::now()) } else { Duration::from_millis(500) };
+        let wait = if mx != 0 || my != 0 { next_motion.saturating_duration_since(Instant::now()) } else { Duration::from_millis(200) };
         match rx.recv_timeout(wait) {
             Ok(Input::Move(dx, dy)) => { mx += dx; my += dy; }
             Ok(other) => {
@@ -149,9 +149,12 @@ fn edge(p: &HidPeripheral, args: &[String]) {
             flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, now_ms(), &release);
             next_motion = Instant::now() + interval;
         }
-        if last_check.elapsed() > Duration::from_millis(500) {
+        if last_check.elapsed() > Duration::from_millis(200) {
             last_check = Instant::now();
-            if capture::SUPPRESS.load(Ordering::SeqCst) && !p.hosts().contains(&host) { release(&mut held); }
+            if capture::SUPPRESS.load(Ordering::SeqCst) && !p.connected(&host) {
+                eprintln!("host disconnected");
+                release(&mut held);
+            }
         }
     }
 }

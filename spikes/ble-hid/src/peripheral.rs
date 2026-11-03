@@ -31,6 +31,7 @@ pub struct HidPeripheral {
     stats_n: AtomicU64,
     stats_us: AtomicU64,
     stats_max_us: AtomicU64,
+    devices: Mutex<Vec<(String, BluetoothLEDevice)>>,
 }
 
 impl HidPeripheral {
@@ -105,7 +106,7 @@ impl HidPeripheral {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         eprintln!("advertising: Started");
-        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds], stats_n: AtomicU64::new(0), stats_us: AtomicU64::new(0), stats_max_us: AtomicU64::new(0) })
+        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds], stats_n: AtomicU64::new(0), stats_us: AtomicU64::new(0), stats_max_us: AtomicU64::new(0), devices: Mutex::new(Vec::new()) })
     }
 
     /// Device ids of hosts subscribed to both keyboard and mouse reports.
@@ -126,6 +127,20 @@ impl HidPeripheral {
             .and_then(|d| d.GetConnectionParameters())
             .and_then(|c| c.ConnectionInterval());
         match interval { Ok(units) => ((units as f64 * 1.25).ceil() as u64).clamp(8, 100), Err(_) => 8 }
+    }
+
+    /// True while the host's link is up. Unlike `hosts()` (subscriptions linger after the host
+    /// turns Bluetooth off), the connection status flips as soon as the link drops.
+    pub fn connected(&self, host: &str) -> bool {
+        let mut cache = self.devices.lock().unwrap();
+        if !cache.iter().any(|(id, _)| id == host)
+            && let Ok(d) = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host)).and_then(|op| op.join())
+        {
+            cache.push((host.to_string(), d));
+        }
+        cache.iter().find(|(id, _)| id == host).is_some_and(|(_, d)| {
+            d.ConnectionStatus().is_ok_and(|s| s == windows::Devices::Bluetooth::BluetoothConnectionStatus::Connected)
+        })
     }
 
     /// Requests the throughput-optimised (shortest) connection interval; the host may refuse.

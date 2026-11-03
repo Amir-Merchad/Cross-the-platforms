@@ -56,8 +56,8 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 | Edge crossings + both escapes | `ble-hid edge --target <id> --remote-at right --width 1366 --fast` | **PASS** 2026-11-03: entry, push-return, Ctrl+Alt+Q, Esc ×3 |
 | Latency | notify avg 3 ms, max ~29 ms; iPad interval 15 ms (fast request accepted, iPad keeps 15 ms) | **PASS**: "smoother and more responsive" after pacing; remaining feel = iPad 60 Hz + 15 ms slot + iPad pointer animations |
 | No accidental returns | deliberate-push guard (1 s grace, 300 ms dwell, 96 counts) | **PASS** 2026-11-03 |
-| No stuck keys across switch | hold Ctrl/Shift while switching | PENDING (owner) |
-| Disconnect while Shift held | turn off iPad Bluetooth mid-press | PENDING (owner) |
+| No stuck keys across switch | hold Shift while crossing either way | **PASS** 2026-11-03 (5a, 5b) |
+| Disconnect while Shift held | turn off iPad Bluetooth mid-press | **FAIL** 2026-11-03: no auto-return (Esc ×3 worked) → fixed to watch connection status; retest PENDING |
 | Tuned values | defaults `--gain 1.0 --min-push 96 --dwell 300` felt right | **PASS** |
 
 Escape hatches always active in `edge`: Ctrl+Alt+Q, Esc ×3 in 1 s.
