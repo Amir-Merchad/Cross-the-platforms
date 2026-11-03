@@ -7,7 +7,7 @@
 | 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | code ready, PENDING (owner) | clipboard via iPad app only |
 | 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | **PASS** pairing, move, click, scroll, typing | Universal Bridge as helper |
 | 3 iPad + S24+ on one BLE link | one link, per-device input | **PASS**: one Windows peripheral serves both, per-device targeting works | phone input over LAN |
-| 4 Return-edge feel | seamless switch back | PENDING (owner) | hotkey-only return |
+| 4 Return-edge feel | seamless switch back | **PASS** with deliberate-push guard; stuck-key checks PENDING | hotkey-only return |
 | 5 iroh transfer vs LocalSend | fast files on all three | 1 GiB loopback ✔ 64 MB/s; Wi-Fi PENDING (owner) | tune QUIC buffers |
 | 6 Shared core in Kotlin + Swift | three-app structure, no-Mac iOS | APK builds ✔, IPA builds on CI ✔; on-device PENDING (owner) | — |
 | 7 Phone → PC clipboard tile | Android clipboard workaround | PENDING (owner) | share-sheet / Phone Link |
@@ -53,10 +53,12 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 | Click, scroll | `ble-hid demo --clicks` | **PASS** 2026-11-03 |
 | S24+ pairs too; only target moves | `ble-hid hosts`, then `demo --target <id>` per id | **PASS** 2026-11-03: iPad `…5b:95:30:4d:1c:f5`, S24+ `…4e:5d:31:c1:13:6e`; each moved alone |
 | Both connected 10 min | leave `hosts` running | **PASS** 2026-11-03 |
-| Edge: 20 crossings each way | `ble-hid edge --target <id> --remote-at right --width 1180` | PENDING (owner) |
+| Edge crossings + both escapes | `ble-hid edge --target <id> --remote-at right --width 1366 --fast` | **PASS** 2026-11-03: entry, push-return, Ctrl+Alt+Q, Esc ×3 |
+| Latency | notify avg 3 ms, max ~29 ms; iPad interval 15 ms (fast request accepted, iPad keeps 15 ms) | **PASS**: "smoother and more responsive" after pacing; remaining feel = iPad 60 Hz + 15 ms slot + iPad pointer animations |
+| No accidental returns | deliberate-push guard (1 s grace, 300 ms dwell, 96 counts) | **PASS** 2026-11-03 |
 | No stuck keys across switch | hold Ctrl/Shift while switching | PENDING (owner) |
 | Disconnect while Shift held | turn off iPad Bluetooth mid-press | PENDING (owner) |
-| Tuned values | `--gain` / `--threshold` that felt right | PENDING (owner) |
+| Tuned values | defaults `--gain 1.0 --min-push 96 --dwell 300` felt right | **PASS** |
 
 Escape hatches always active in `edge`: Ctrl+Alt+Q, Esc ×3 in 1 s.
 
