@@ -1,5 +1,17 @@
 # Spike results
 
+## Summary (Task 8 — fill in after the device checks)
+
+| Spike | What it proves | Status | Path if it fails |
+|---|---|---|---|
+| 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | code ready, PENDING (owner) | clipboard via iPad app only |
+| 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | service publishes ✔, pairing PENDING (owner) | Universal Bridge as helper |
+| 3 iPad + S24+ on one BLE link | one link, per-device input | PENDING (owner) | phone input over LAN |
+| 4 Return-edge feel | seamless switch back | PENDING (owner) | hotkey-only return |
+| 5 iroh transfer vs LocalSend | fast files on all three | 1 GiB loopback ✔ 64 MB/s; Wi-Fi PENDING (owner) | tune QUIC buffers |
+| 6 Shared core in Kotlin + Swift | three-app structure, no-Mac iOS | APK builds ✔, IPA builds on CI ✔; on-device PENDING (owner) | — |
+| 7 Phone → PC clipboard tile | Android clipboard workaround | PENDING (owner) | share-sheet / Phone Link |
+
 Fill in as each check runs on the real devices. **PENDING (owner)** = needs you with the device.
 
 | | Value |
@@ -87,7 +99,7 @@ Built by `.github/workflows/ios-spike.yml` on a GitHub macOS runner (unsigned). 
 
 | Check | How | Result |
 |---|---|---|
-| CI builds unsigned `Spike.ipa` | push to `core/**` or `spikes/ios-app/**` | see below |
+| CI builds unsigned `Spike.ipa` | push to `core/**` or `spikes/ios-app/**` | **PASS** 2026-11-03 (run 41549281512); copy in `spikes/ios-app/dist/` |
 | Sideload | SideStore or AltStore on Windows, free Apple account, install `Spike.ipa` | PENDING (owner) |
 | iPad receives PDF/video | app → Start receiving → Copy my ticket → `bridge-send` | PENDING (owner) |
 | PDF opens from Files → On My iPad → CTP Spike | | PENDING (owner) |
