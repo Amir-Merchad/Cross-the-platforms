@@ -126,4 +126,28 @@ mod tests {
         assert_eq!(read(), None);
     }
     #[test] #[ignore] fn empty_clipboard_reads_none() { arboard::Clipboard::new().unwrap().clear().unwrap(); assert_eq!(read(), None); }
+    // Device check d: an iPad image written to Windows couldn't be pasted into Paint.
+    #[test] #[ignore] fn ipad_sized_image_is_pasteable_by_other_apps() {
+        use windows::Win32::System::DataExchange::{CloseClipboard, IsClipboardFormatAvailable, OpenClipboard};
+        let (w, h) = (2732u32, 2048u32);
+        let rgba: Vec<u8> = (0..w * h).flat_map(|i| [(i % 251) as u8, (i % 241) as u8, (i % 239) as u8, 255]).collect();
+        write(&Content::Image(Image { width: w, height: h, rgba })).unwrap();
+        unsafe {
+            OpenClipboard(None).unwrap();
+            let dib = IsClipboardFormatAvailable(8).is_ok();   // CF_DIB: what Paint and most apps paste
+            let dibv5 = IsClipboardFormatAvailable(17).is_ok(); // CF_DIBV5
+            let _ = CloseClipboard();
+            assert!(dibv5, "CF_DIBV5 missing");
+            assert!(dib, "CF_DIB missing (Windows should synthesise it from CF_DIBV5)");
+        }
+    }
+    /// Diagnostic, not a check: stats of the image on the clipboard now (no pixel content is printed).
+    #[test] #[ignore] fn inspect_clipboard_image_stats() {
+        let Some(Content::Image(i)) = read() else { println!("no image on the clipboard"); return };
+        let a: Vec<u8> = i.rgba.chunks(4).map(|p| p[3]).collect();
+        let zero = a.iter().filter(|&&x| x == 0).count();
+        let luma: u64 = i.rgba.chunks(4).map(|p| (p[0] as u64 + p[1] as u64 + p[2] as u64) / 3).sum();
+        println!("STATS {}x{} alpha min={} max={} zero={:.1}% mean_luma={}", i.width, i.height,
+            a.iter().min().unwrap(), a.iter().max().unwrap(), 100.0 * zero as f64 / a.len() as f64, luma / a.len() as u64);
+    }
 }
