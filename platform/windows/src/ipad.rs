@@ -50,13 +50,13 @@ pub fn classify(err: &str) -> IpadStatus {
 
 type Pasteboard = PasteboardServiceClient<Box<dyn ReadWrite>>;
 
-pub struct IpadLink {
-    // Keeps the tunnel alive for the two service connections.
-    _adapter: AdapterHandle,
-    watcher: Pasteboard,
-    setter: Pasteboard,
-    wifi: bool,
-}
+/// A connected iPad, in two halves so reading (a long wait for the next push) never has to be
+/// cancelled to write. Each half keeps the tunnel alive; it closes when both are dropped.
+pub struct IpadLink { pub reader: IpadReader, pub writer: IpadWriter, pub wifi: bool }
+
+pub struct IpadReader { _adapter: AdapterHandle, watcher: Pasteboard, resolver: Pasteboard }
+
+pub struct IpadWriter { _adapter: AdapterHandle, setter: Pasteboard }
 
 impl IpadLink {
     /// Wi-Fi first (needs the pairing record), then USB. Mounts the developer disk image when the
@@ -89,12 +89,13 @@ impl IpadLink {
             Err(e) => return Err(format!("pasteboard (watch): {e:?}")),
         };
         let setter = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (set): {e:?}"))?;
+        let resolver = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (resolve): {e:?}"))?;
         watcher.set_change_notifications(true, GENERAL_PASTEBOARD, None).await.map_err(|e| format!("AUTONOTIFY: {e:?}"))?;
-        Ok(IpadLink { _adapter: adapter, watcher, setter, wifi })
+        Ok(IpadLink { reader: IpadReader { _adapter: adapter.clone(), watcher, resolver }, writer: IpadWriter { _adapter: adapter, setter }, wifi })
     }
+}
 
-    pub fn is_wifi(&self) -> bool { self.wifi }
-
+impl IpadReader {
     /// Waits for the next iPad copy that has text or a readable image.
     pub async fn next_change(&mut self) -> Result<Content, String> {
         loop {
@@ -102,7 +103,7 @@ impl IpadLink {
             if let Some(t) = snap.text().filter(|t| !t.is_empty()) { return Ok(Content::Text(t)) }
             let promised = snap.promised_items();
             let Some(p) = IMAGE_UTIS.iter().find_map(|u| promised.iter().find(|p| p.uti == *u)) else { continue };
-            let bytes = self.setter.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve image: {e:?}"))?;
+            let bytes = self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve image: {e:?}"))?;
             match bytes.map(|b| codec::decode(&b)) {
                 Some(Ok(img)) => return Ok(Content::Image(img)),
                 Some(Err(e)) => crate::diag::log(format_args!("iPad image not decodable ({}): {e}", p.uti)),
@@ -111,6 +112,9 @@ impl IpadLink {
         }
     }
 
+}
+
+impl IpadWriter {
     pub async fn write(&mut self, c: &Content) -> Result<(), String> {
         match c {
             Content::Text(t) => self.setter.set_text(t, GENERAL_PASTEBOARD).await,
@@ -230,9 +234,9 @@ mod tests {
     // Device check: iPad on Wi-Fi (or USB), record in `ipad_dir()`. Our own write comes back as a change push.
     #[tokio::test] #[ignore] async fn live_write_echoes_back() {
         let mut link = IpadLink::connect(&ipad_dir()).await.unwrap();
-        eprintln!("connected, wifi={}", link.is_wifi());
-        link.write(&Content::Text("ctp test".into())).await.unwrap();
-        let got = tokio::time::timeout(Duration::from_secs(20), link.next_change()).await.expect("no push within 20 s").unwrap();
+        eprintln!("connected, wifi={}", link.wifi);
+        link.writer.write(&Content::Text("ctp test".into())).await.unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(20), link.reader.next_change()).await.expect("no push within 20 s").unwrap();
         assert_eq!(got, Content::Text("ctp test".into()));
     }
     #[test] fn fresh_mount_means_connecting() { assert_eq!(classify("developer disk image just mounted; reconnecting"), IpadStatus::Connecting); }

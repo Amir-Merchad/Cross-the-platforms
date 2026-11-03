@@ -2,6 +2,7 @@
 
 pub mod capture;
 pub mod clipboard;
+pub mod clipsync;
 pub mod diag;
 pub mod engine;
 pub mod ipad;
