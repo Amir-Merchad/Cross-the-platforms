@@ -9,6 +9,7 @@ use idevice::{
     IdeviceService, ReadWrite, RemoteXpcClient, RsdService,
     core_device::{GENERAL_PASTEBOARD, PasteboardServiceClient},
     core_device_proxy::CoreDeviceProxy,
+    mobile_image_mounter::ImageMounter,
     remote_pairing::{RemotePairingClient, RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native},
     rsd::RsdHandshake,
     tcp::handle::AdapterHandle,
@@ -31,6 +32,10 @@ pub enum IpadStatus { NotPaired, Connecting, Connected { wifi: bool }, Unavailab
 pub fn classify(err: &str) -> IpadStatus {
     let reason = if err.contains("pairing record") && err.contains("NotFound") {
         return IpadStatus::NotPaired;
+    } else if err.contains("just mounted") {
+        return IpadStatus::Connecting;
+    } else if err.contains("DDI mount over Wi-Fi") {
+        "Plug the iPad in once by USB to finish setup after its reboot".to_string()
     } else if err.contains("ServiceNotFound") {
         "Developer disk image not mounted yet".to_string()
     } else if err.contains("_remotepairing._tcp not found") {
@@ -54,25 +59,35 @@ pub struct IpadLink {
 }
 
 impl IpadLink {
-    /// Wi-Fi first (needs the pairing record), then USB.
+    /// Wi-Fi first (needs the pairing record), then USB. Mounts the developer disk image when the
+    /// pasteboard service is missing (after an iPad reboot); the caller reconnects after that.
     pub async fn connect(dir: &Path) -> Result<IpadLink, String> {
         let record = dir.join(RECORD);
         let wifi_err = if record.exists() {
-            match connect_wifi(&record).await {
-                Ok((a, h)) => return Self::open(a, h, true).await,
-                Err(e) => e,
-            }
+            let r = match connect_wifi(&record).await {
+                Ok((a, h)) => Self::open(dir, a, h, true).await,
+                Err(e) => Err(e),
+            };
+            match r { Ok(link) => return Ok(link), Err(e) => e }
         } else {
             "pairing record: NotFound".to_string()
         };
         match connect_usb().await {
-            Ok((a, h)) => Self::open(a, h, false).await,
+            Ok((a, h)) => Self::open(dir, a, h, false).await,
             Err(_) => Err(wifi_err),
         }
     }
 
-    async fn open(mut adapter: AdapterHandle, mut handshake: RsdHandshake, wifi: bool) -> Result<IpadLink, String> {
-        let mut watcher = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (watch): {e:?}"))?;
+    async fn open(dir: &Path, mut adapter: AdapterHandle, mut handshake: RsdHandshake, wifi: bool) -> Result<IpadLink, String> {
+        let mut watcher = match Pasteboard::connect_rsd(&mut adapter, &mut handshake).await {
+            Ok(w) => w,
+            Err(e) if format!("{e:?}").contains("ServiceNotFound") => {
+                mount_ddi(dir, &mut adapter, &mut handshake).await.map_err(|e| if wifi { format!("DDI mount over Wi-Fi failed: {e}") } else { e })?;
+                // The handshake lists the services from before the mount: start over.
+                return Err("developer disk image just mounted; reconnecting".into());
+            }
+            Err(e) => return Err(format!("pasteboard (watch): {e:?}")),
+        };
         let setter = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (set): {e:?}"))?;
         watcher.set_change_notifications(true, GENERAL_PASTEBOARD, None).await.map_err(|e| format!("AUTONOTIFY: {e:?}"))?;
         Ok(IpadLink { _adapter: adapter, watcher, setter, wifi })
@@ -103,6 +118,28 @@ impl IpadLink {
         }
         .map_err(|e| format!("iPad write: {e:?}"))
     }
+}
+
+#[derive(Debug)]
+pub struct DdiFiles { pub image: PathBuf, pub trust_cache: PathBuf, pub manifest: PathBuf }
+
+/// The personalized developer disk image files in `<dir>\ddi`; the error names the first missing one.
+pub fn ddi_files(dir: &Path) -> Result<DdiFiles, String> {
+    let ddi = dir.join("ddi");
+    let f = |name: &str| { let p = ddi.join(name); if p.is_file() { Ok(p) } else { Err(format!("missing {}", p.display())) } };
+    Ok(DdiFiles { image: f("Image.dmg")?, trust_cache: f("Image.dmg.trustcache")?, manifest: f("BuildManifest.plist")? })
+}
+
+/// iPads unmount the developer disk image on every reboot; the pasteboard service needs it.
+async fn mount_ddi(dir: &Path, adapter: &mut AdapterHandle, handshake: &mut RsdHandshake) -> Result<(), String> {
+    let files = ddi_files(dir)?;
+    let read = |p: &Path| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()));
+    let (image, trust_cache, manifest) = (read(&files.image)?, read(&files.trust_cache)?, read(&files.manifest)?);
+    let chip_id = handshake.properties.get("UniqueChipID").and_then(|v| v.as_unsigned_integer()).ok_or("iPad didn't report its chip id")?;
+    let mut mounter = ImageMounter::connect_rsd(adapter, handshake).await.map_err(|e| format!("image mounter: {e:?}"))?;
+    mounter.mount_personalized_rsd(adapter, handshake, image, trust_cache, &manifest, None, chip_id).await.map_err(|e| format!("DDI mount: {e:?}"))?;
+    crate::diag::log("iPad developer disk image mounted");
+    Ok(())
 }
 
 /// USB: usbmux → CoreDeviceProxy tunnel → RSD.
@@ -197,6 +234,17 @@ mod tests {
         link.write(&Content::Text("ctp test".into())).await.unwrap();
         let got = tokio::time::timeout(Duration::from_secs(20), link.next_change()).await.expect("no push within 20 s").unwrap();
         assert_eq!(got, Content::Text("ctp test".into()));
+    }
+    #[test] fn fresh_mount_means_connecting() { assert_eq!(classify("developer disk image just mounted; reconnecting"), IpadStatus::Connecting); }
+    #[test] fn wifi_mount_refused_asks_for_usb() {
+        assert!(matches!(classify("DDI mount over Wi-Fi failed: X"), IpadStatus::Unavailable(m) if m.contains("USB")));
+    }
+    #[test] fn ddi_files_names_what_is_missing() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("ddi")).unwrap();
+        std::fs::write(d.path().join("ddi/Image.dmg"), b"x").unwrap();
+        let e = ddi_files(d.path()).unwrap_err();
+        assert!(e.contains("Image.dmg.trustcache"), "{e}");
     }
     #[test] fn anything_else_is_passed_through_short() { assert!(matches!(classify("weird"), IpadStatus::Unavailable(_))); }
 }
