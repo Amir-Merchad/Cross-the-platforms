@@ -10,7 +10,7 @@
 | 4 Return-edge feel | seamless switch back | **PASS**: deliberate-push guard, no stuck keys, instant return on disconnect | hotkey-only return |
 | 5 iroh transfer vs LocalSend | fast files on all three | **PARTIAL**: works both ways phone↔PC (~40–44 MB/s, hash-verified) but LocalSend is ~2× faster (90 MB/s); window tuning doesn't help | LAN bulk over TCP+TLS, iroh for pairing/internet |
 | 6 Shared core in Kotlin + Swift | three-app structure, no-Mac iOS | APK builds ✔, IPA builds on CI ✔; on-device PENDING (owner) | — |
-| 7 Phone → PC clipboard tile | Android clipboard workaround | PENDING (owner) | share-sheet / Phone Link |
+| 7 Phone → PC clipboard tile | Android clipboard workaround | **PASS** (one tap via Quick Settings tile) | share-sheet / Phone Link |
 
 Fill in as each check runs on the real devices. **PENDING (owner)** = needs you with the device.
 
@@ -92,7 +92,7 @@ Install: plug in the S24+ with USB debugging on, `adb install -r <apk>` (adb is 
 | Phone receives | app → Start receiving | **PASS** 2026-11-04: PC→phone 200 MB in 4.72 s = **44.4 MB/s**, hash verified; files land in public `Download/Bridge` |
 | Phone sends to PC | `bridge-recv`, ticket injected via `adb run-as` into the app prefs | **PASS** 2026-11-03: 198 MB video in 5.0 s = **39.7 MB/s** over Wi-Fi, bytes intact |
 | Same files with LocalSend, same Wi-Fi | 198.5 MB video phone→PC | **LocalSend 90.0 MB/s vs ours 39.7 MB/s (PC→phone 44.4)**. Loopback ours ≈ 42–64 MB/s regardless of QUIC windows (1–64 MB tried) → per-packet QUIC/UDP cost on Windows, not flow control. v1: keep iroh for discovery/pairing/internet, move LAN bulk data to a direct TLS-over-TCP stream |
-| Clipboard tile (emoji text) | add "Send clipboard" tile, copy text, tap tile → `clip.txt` on PC matches | PENDING (owner) |
+| Clipboard tile | Quick Settings "Send clipboard" tile → `clip.txt` on PC | **PASS** 2026-11-04: text arrived byte-identical (incl. non-ASCII `’`); "Clipboard sent" toast. Spike saves a file; v1 writes it to the Windows clipboard |
 | Tile flow acceptable? | owner's call | PENDING (owner) |
 
 ### iPad spike app (Task 7)
