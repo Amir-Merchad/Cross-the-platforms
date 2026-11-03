@@ -2,7 +2,7 @@
 //!
 //!   ble-hid hosts                       list subscribed host ids
 //!   ble-hid demo [--target ID] [--clicks]   square + "hello" every 5 s
-//!   ble-hid edge --target ID [--remote-at right|left] [--width 1180] [--gain 1.0] [--threshold 60]
+//!   ble-hid edge --target ID [--remote-at right|left] [--width 1366] [--gain 1.0] [--min-push 96] [--dwell 300] [--fast]
 //!
 //! Back to Windows: Ctrl+Alt+Q, Esc ×3 within 1 s, pushing back through the edge, host disconnect.
 
@@ -80,15 +80,21 @@ fn edge(p: &HidPeripheral, args: &[String]) {
     let remote_right = arg(args, "--remote-at").as_deref() != Some("left");
     let width: f64 = arg(args, "--width").and_then(|v| v.parse().ok()).unwrap_or(1180.0);
     let gain: f64 = arg(args, "--gain").and_then(|v| v.parse().ok()).unwrap_or(1.0);
-    let threshold: f64 = arg(args, "--threshold").and_then(|v| v.parse().ok()).unwrap_or(60.0);
+    let min_push: f64 = arg(args, "--min-push").and_then(|v| v.parse().ok()).unwrap_or(96.0);
+    let dwell: u64 = arg(args, "--dwell").and_then(|v| v.parse().ok()).unwrap_or(300);
+    let clock = Instant::now();
+    let now_ms = || clock.elapsed().as_millis() as u64;
     // remote to the right of Windows → its left edge touches Windows
-    let mut tracker = EdgeTracker::new(if remote_right { Side::Left } else { Side::Right }, width, gain, threshold);
+    let mut tracker = EdgeTracker::new(if remote_right { Side::Left } else { Side::Right }, width, gain, min_push, dwell);
 
     std::panic::set_hook(Box::new(|info| { capture::unhook(); eprintln!("{info}"); }));
     let (tx, rx) = mpsc::channel::<Input>();
     thread::spawn(move || capture::run(tx, remote_right, Duration::from_millis(300)));
     eprintln!("host {host}: push the pointer through the {} edge", if remote_right { "right" } else { "left" });
 
+    // Ask the host for the fastest connection interval it will grant (kept alive for the session).
+    let _fast = args.iter().any(|a| a == "--fast").then(|| p.request_fast(&host)).flatten();
+    if _fast.is_some() { thread::sleep(Duration::from_secs(1)); }
     let interval = Duration::from_millis(p.report_interval_ms(&host));
     eprintln!("motion report interval: {} ms (from BLE connection interval)", interval.as_millis());
     let mut held = HeldInput::default();
@@ -119,10 +125,10 @@ fn edge(p: &HidPeripheral, args: &[String]) {
         match rx.recv_timeout(wait) {
             Ok(Input::Move(dx, dy)) => { mx += dx; my += dy; }
             Ok(other) => {
-                flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, &release);
+                flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, now_ms(), &release);
                 match other {
                     Input::Enter => {
-                        tracker.enter();
+                        tracker.enter(now_ms());
                         send_move(p, &host, 0, tracker.pin_delta(), 0);
                         let _ = p.take_stats();
                         eprintln!("on device");
@@ -140,7 +146,7 @@ fn edge(p: &HidPeripheral, args: &[String]) {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if (mx != 0 || my != 0) && Instant::now() >= next_motion {
-            flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, &release);
+            flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, now_ms(), &release);
             next_motion = Instant::now() + interval;
         }
         if last_check.elapsed() > Duration::from_millis(500) {
@@ -150,9 +156,10 @@ fn edge(p: &HidPeripheral, args: &[String]) {
     }
 }
 
-fn flush(p: &HidPeripheral, host: &str, t: &mut EdgeTracker, held: &mut HeldInput, mx: &mut i32, my: &mut i32, release: &impl Fn(&mut HeldInput)) {
+#[allow(clippy::too_many_arguments)]
+fn flush(p: &HidPeripheral, host: &str, t: &mut EdgeTracker, held: &mut HeldInput, mx: &mut i32, my: &mut i32, now_ms: u64, release: &impl Fn(&mut HeldInput)) {
     if *mx == 0 && *my == 0 || !capture::SUPPRESS.load(Ordering::SeqCst) { *mx = 0; *my = 0; return }
-    if t.on_move(*mx) == EdgeEvent::Return { release(held); } else {
+    if t.on_move(*mx, now_ms) == EdgeEvent::Return { release(held); } else {
         let b = held.button(0, true); // empty mask: reads current buttons so drags keep the button held
         send_move(p, host, b, *mx, *my);
     }

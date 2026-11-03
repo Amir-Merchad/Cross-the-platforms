@@ -128,6 +128,19 @@ impl HidPeripheral {
         match interval { Ok(units) => ((units as f64 * 1.25).ceil() as u64).clamp(8, 100), Err(_) => 8 }
     }
 
+    /// Requests the throughput-optimised (shortest) connection interval; the host may refuse.
+    /// The returned request must stay alive for the preference to hold.
+    pub fn request_fast(&self, host: &str) -> Option<windows::Devices::Bluetooth::BluetoothLEPreferredConnectionParametersRequest> {
+        let r = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host)).and_then(|op| op.join()).and_then(|d| {
+            d.RequestPreferredConnectionParameters(&windows::Devices::Bluetooth::BluetoothLEPreferredConnectionParameters::ThroughputOptimized()?)
+        });
+        match &r {
+            Ok(req) => eprintln!("fast connection request: {:?}", req.Status()),
+            Err(e) => eprintln!("fast connection request not available: {e}"),
+        }
+        r.ok()
+    }
+
     /// (reports sent, average ms, max ms) since the last call — how long each BLE notify blocked.
     pub fn take_stats(&self) -> (u64, f64, f64) {
         let n = self.stats_n.swap(0, Ordering::Relaxed);
