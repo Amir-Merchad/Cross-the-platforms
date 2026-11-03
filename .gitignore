@@ -15,3 +15,5 @@ spikes/ios-app/headers/
 node_modules/
 dist/
 apps/tauri/src-tauri/gen/
+apps/android/app/src/main/jniLibs/
+apps/android/app/src/main/java/uniffi/

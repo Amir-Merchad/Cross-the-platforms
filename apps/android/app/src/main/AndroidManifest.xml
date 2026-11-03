@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- connectedDevice FGS prerequisite (normal permission, granted at install). -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <application android:name=".App" android:label="Bridge" android:icon="@android:drawable/ic_menu_share"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".ShareActivity" android:exported="true" android:label="Bridge"
+            android:theme="@android:style/Theme.Material.Dialog" android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+        <!-- ZXing's scanner is landscape-locked by default; let it follow the phone. -->
+        <activity android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="fullSensor" tools:replace="screenOrientation" />
+        <activity android:name=".ClipActivity" android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true" />
+        <service android:name=".NodeService" android:exported="false" android:foregroundServiceType="connectedDevice" />
+        <service android:name=".ClipTile" android:exported="true" android:label="Send clipboard to PC"
+            android:icon="@android:drawable/ic_menu_send"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
+        </receiver>
+    </application>
+</manifest>
