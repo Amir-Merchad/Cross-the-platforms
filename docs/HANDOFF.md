@@ -54,7 +54,10 @@ In `ctp-app.exe` (Tauri tray app), while the iPad is in control: **keyboard neve
 - Node 26.3.0 here has CVE-2026-111497; owner advised to upgrade.
 
 ## Remaining after the bug
-0. **Plan 2 (clipboard, Windows ↔ iPad) written:** `docs/superpowers/plans/2026-11-03-v1-clipboard.md` — awaiting owner review + execution choice; implement on `v1/clipboard` from `v1/windows-hub-input`.
+0. **Plan 2 (clipboard, Windows ↔ iPad) IMPLEMENTED on `v1/clipboard`** (branched from `v1/windows-hub-input`, not pushed, no PR). Plan `docs/superpowers/plans/2026-11-03-v1-clipboard.md`; final review fixes in `2877c0b`.
+   - **Next:** owner device session with `docs/v1/checklist-clipboard.md` (all PENDING) using the worktree build `target\debug\ctp-app.exe`. Never verified on the iPad yet: live link (first attempt: iPad not found on Wi-Fi — asleep or firewall prompt), DDI mount over Wi-Fi after an iPad reboot, stale-replay baseline, keepalive on sleep/Wi-Fi-off.
+   - iPad files copied to `%APPDATA%\CrossThePlatforms\ipad\` (rp-pairing.plist + ddi\*) from `C:\dev\_ref`.
+   - Deferred minors from the final review: connect loop runs while sync off; tray check can disagree if save fails; watcher failure not in status; wrong DDI remounts forever; parallel Pair clicks; size check after decode; tab switch freezes if service dies.
 1. Finish v1 plan 1 acceptance — **owner deferred 2026-11-03** ("base app is working; fix bugs as they show up") (`docs/v1/checklist-input.md` App rows: tray, single instance, layout/calibration/diagnostics, BT off/on, sleep/resume, reboot, AltGr), then open the PR for `v1/windows-hub-input`.
 2. Deferred minors from the final review are listed at the end of the plan-1 conversation (hold reset on monitor poll, notices raw ids, stale Ctrl/Alt after secure desktop, RunEvent::Exit, settings range checks, connected() polling cost, gain label rounding, shadcn in deps).
 3. v1 plans 2–4: clipboard (all three devices), file transfer (TLS-TCP bulk), then Kotlin + Swift apps, then Tauri mobile.
