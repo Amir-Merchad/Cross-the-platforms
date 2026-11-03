@@ -2,6 +2,8 @@ target/
 .superpowers/
 *.plist
 pairing*
+!core/src/pairing.rs
+!core/tests/pairing.rs
 local.properties
 build/
 .gradle/
