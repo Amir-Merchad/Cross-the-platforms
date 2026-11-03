@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::{atomic::Ordering, mpsc},
+    sync::{atomic::Ordering, mpsc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -64,6 +64,53 @@ const STATUS_REFRESH: Duration = Duration::from_secs(1);
 const ADVERTISE_RETRY: Duration = Duration::from_secs(5);
 const COMMAND_LATENCY: Duration = Duration::from_millis(50);
 
+/// What the watcher thread last saw. Cloned by the input loop every poll.
+#[derive(Clone, Default)]
+struct Snapshot {
+    ids: Vec<String>,
+    up: HashSet<String>,
+    intervals: HashMap<String, u64>,
+    names: HashMap<String, Option<String>>,
+    keyboard_ready: HashSet<String>,
+    advertising: bool,
+}
+
+struct Watcher { stop: std::sync::Arc<std::sync::atomic::AtomicBool>, thread: Option<thread::JoinHandle<()>> }
+
+impl Watcher {
+    fn start(p: std::sync::Arc<HidPeripheral>, watched: std::sync::Arc<Mutex<Vec<String>>>, out: std::sync::Arc<Mutex<Snapshot>>) -> Self {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = thread::Builder::new().name("ctp-ble-watch".into()).spawn(move || {
+            let mut names: HashMap<String, Option<String>> = HashMap::new();
+            let mut last_adv = Instant::now() - MONITOR_POLL;
+            let mut advertising = true;
+            while !flag.load(Ordering::SeqCst) {
+                let started = Instant::now();
+                let mut ids: Vec<String> = p.hosts();
+                for id in watched.lock().unwrap().iter() { if !ids.contains(id) { ids.push(id.clone()) } }
+                let up: HashSet<String> = ids.iter().filter(|id| p.connected(id)).cloned().collect();
+                let intervals = up.iter().map(|id| (id.clone(), p.report_interval_ms(id))).collect();
+                for id in &up { names.entry(id.clone()).or_insert_with(|| p.host_name(id)); }
+                let keyboard_ready = up.iter().filter(|id| p.keyboard_ready(id)).cloned().collect();
+                if last_adv.elapsed() >= MONITOR_POLL { last_adv = Instant::now(); advertising = p.ensure_advertising(!up.is_empty()); }
+                *out.lock().unwrap() = Snapshot { ids, up, intervals, names: names.clone(), keyboard_ready, advertising };
+                let took = started.elapsed();
+                if took > Duration::from_millis(100) { crate::diag::log(format_args!("ble watcher pass took {} ms (off the input thread)", took.as_millis())); }
+                thread::sleep(CONNECTION_POLL.saturating_sub(took));
+            }
+        }).expect("spawn ble watcher");
+        Self { stop, thread: Some(thread) }
+    }
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() { let _ = t.join(); }
+    }
+}
+
 pub fn start(settings: Settings, on_status: impl Fn(Status) + Send + 'static) -> EngineHandle {
     let (tx, rx) = mpsc::channel();
     let thread = thread::spawn(move || run(settings, rx, on_status));
@@ -75,7 +122,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     // Advertise first; retry until the adapter is available (Bluetooth off, adapter busy…).
     let peripheral = loop {
         match HidPeripheral::start() {
-            Ok(p) => break p,
+            Ok(p) => break std::sync::Arc::new(p),
             Err(e) => {
                 status.notice = Some(format!("Bluetooth not ready: {}", e.message()));
                 on_status(status.clone());
@@ -102,6 +149,11 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut names: HashMap<String, Option<String>> = HashMap::new();
     let mut intervals: HashMap<String, u64> = HashMap::new();
     let (mut last_conn, mut last_mon, mut last_status) = (Instant::now() - CONNECTION_POLL, Instant::now(), Instant::now());
+    // Bluetooth bookkeeping runs on its own thread: WinRT calls there can take tens of ms, and every
+    // ms the input loop waits is a visible hitch of the remote pointer. The loop only reads snapshots.
+    let watched: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(settings.attachments.iter().map(|a| a.device_id.clone()).collect()));
+    let snapshot: std::sync::Arc<Mutex<Snapshot>> = std::sync::Arc::default();
+    let watcher = Watcher::start(peripheral.clone(), watched.clone(), snapshot.clone());
     let mut reported = Status::default();
     // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
     let mut keys = KeyQueue::default();
@@ -124,6 +176,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                 Command::Reload(s) => {
                     capture::set_hotkey_count(s.attachments.len() as u8);
                     router.set_settings(s.clone());
+                    *watched.lock().unwrap() = s.attachments.iter().map(|a| a.device_id.clone()).collect();
                     settings = s;
                 }
                 Command::SwitchTo(None) => actions.extend(router.on_input(Input::Hotkey(0), now_ms(), &is_up)),
@@ -137,50 +190,40 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
 
         if last_conn.elapsed() >= CONNECTION_POLL {
             last_conn = Instant::now();
-            let poll_started = Instant::now();
-            let mut ids: HashSet<String> = peripheral.hosts().into_iter().collect();
-            ids.extend(settings.attachments.iter().map(|a| a.device_id.clone()));
-            for id in &ids {
-                let up = peripheral.connected(id);
+            let snap = snapshot.lock().unwrap().clone();
+            for id in &snap.ids {
+                let up = snap.up.contains(id);
                 if up && !connected.contains(id) {
-                    let ms = peripheral.report_interval_ms(id);
-                    crate::diag::log(format_args!("{id} connected; interval {ms} ms; keyboard subscribed: {}", peripheral.keyboard_ready(id)));
-                    intervals.insert(id.clone(), ms);
-                    router.set_interval(id, ms);
-                    names.entry(id.clone()).or_insert_with(|| peripheral.host_name(id));
+                    crate::diag::log(format_args!("{id} connected; interval {} ms; keyboard subscribed: {}", snap.intervals.get(id).copied().unwrap_or(0), snap.keyboard_ready.contains(id)));
                 }
                 if !up && connected.contains(id) { crate::diag::log(format_args!("{id} disconnected")); }
                 if up { connected.insert(id.clone()); } else { connected.remove(id); }
             }
-            actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
-            for id in &ids {
-                if keys.pending(id) > 0 && peripheral.keyboard_ready(id) {
-                    for r in keys.drain(id, now_ms()) { peripheral.send_keyboard(id, r); }
-                    status.notice = None;
-                }
-            }
-            status.hosts = ids.iter().filter(|id| connected.contains(*id) || settings.attachments.iter().any(|a| &a.device_id == *id))
-                .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
-                .collect();
-            status.hosts.sort_by(|a, b| a.id.cmp(&b.id));
-            // This poll runs on the input thread: anything slow here freezes the remote pointer.
-            let took = poll_started.elapsed().as_millis();
-            if took > 20 { crate::diag::log(format_args!("connection poll took {took} ms (pointer stalls meanwhile)")); }
-        }
-        if last_mon.elapsed() >= MONITOR_POLL {
-            last_mon = Instant::now();
-            router.set_monitors(monitors::list());
-            // Interval can change after connect; the cached device makes this a cheap property read.
-            for id in connected.iter() {
-                let ms = peripheral.report_interval_ms(id);
+            for (id, &ms) in &snap.intervals {
                 if intervals.get(id) != Some(&ms) {
-                    crate::diag::log(format_args!("{id} interval now {ms} ms"));
+                    if intervals.contains_key(id) { crate::diag::log(format_args!("{id} interval now {ms} ms")); }
                     intervals.insert(id.clone(), ms);
                     router.set_interval(id, ms);
                 }
             }
-            status.advertising = peripheral.ensure_advertising(!connected.is_empty());
+            for (id, n) in &snap.names { names.insert(id.clone(), n.clone()); }
+            actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
+            for id in &snap.keyboard_ready {
+                if keys.pending(id) > 0 {
+                    for r in keys.drain(id, now_ms()) { peripheral.send_keyboard(id, r); }
+                    status.notice = None;
+                }
+            }
+            status.hosts = snap.ids.iter().filter(|id| connected.contains(*id) || settings.attachments.iter().any(|a| &a.device_id == *id))
+                .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
+                .collect();
+            status.hosts.sort_by(|a, b| a.id.cmp(&b.id));
+            status.advertising = snap.advertising;
             if !status.advertising && status.notice.is_none() { status.notice = Some("Bluetooth advertising restarting…".into()) }
+        }
+        if last_mon.elapsed() >= MONITOR_POLL {
+            last_mon = Instant::now();
+            router.set_monitors(monitors::list());
         }
 
         for a in actions {
@@ -220,5 +263,6 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             _ => {}
         }
     }
+    drop(watcher); // joins the watcher, releasing its handle on the peripheral
     drop(peripheral);
 }
