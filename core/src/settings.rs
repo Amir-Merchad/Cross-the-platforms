@@ -38,17 +38,32 @@ impl Settings {
     pub fn calibration_for(&self, id: &str) -> Calibration { self.calibration.get(id).cloned().unwrap_or_default() }
     pub fn width_for(&self, id: &str) -> f64 { self.remote_width.get(id).copied().unwrap_or(DEFAULT_WIDTH) }
 
-    pub fn load(path: &Path) -> Settings {
-        let Ok(text) = std::fs::read_to_string(path) else { return Settings::default() };
+    /// Missing file → defaults; corrupt/invalid → backed up as `.bak`, defaults. Any other read
+    /// error (locked by antivirus/OneDrive…) is an error, so a later Save can't overwrite real settings.
+    pub fn try_load(path: &Path) -> Result<Settings, String> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+            Err(e) => return Err(format!("can't read {}: {e}", path.display())),
+        };
         match serde_json::from_str::<Settings>(&text) {
-            Ok(s) if validate(&s.attachments).is_ok() => s,
+            Ok(s) if validate(&s.attachments).is_ok() => Ok(s),
             _ => {
                 let mut bak = path.as_os_str().to_owned();
                 bak.push(".bak");
                 let _ = std::fs::rename(path, bak);
-                Settings::default()
+                Ok(Settings::default())
             }
         }
+    }
+
+    /// `try_load`, retrying briefly through transient locks; defaults only if the file stays unreadable.
+    pub fn load(path: &Path) -> Settings {
+        for _ in 0..5 {
+            if let Ok(s) = Self::try_load(path) { return s }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        Settings::default()
     }
 
     /// Validates, then writes atomically (temp file + rename).
@@ -104,4 +119,13 @@ mod tests {
     }
     #[test] fn calibration_defaults_for_unknown_device() { assert_eq!(Settings::default().calibration_for("x"), Calibration { gain: 1.0, min_push: 96.0, dwell_ms: 300 }); }
     #[test] fn width_defaults_to_ipad_air_13() { assert_eq!(Settings::default().width_for("x"), 1366.0); }
+    // Final review (re-graded): a read error that isn't "not found" (e.g. a sharing violation) must not
+    // look like an empty file — the user's settings would be overwritten by the next Save.
+    #[test] fn unreadable_path_is_reported_not_defaulted() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("settings.json");
+        std::fs::create_dir(&p).unwrap(); // reading a directory fails with an IO error other than NotFound
+        assert!(Settings::try_load(&p).is_err());
+        assert!(p.is_dir(), "nothing renamed or replaced");
+    }
 }

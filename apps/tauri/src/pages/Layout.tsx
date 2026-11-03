@@ -1,6 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { hostName, type Edge, type Monitor, type Settings, type Status } from "@/lib/api";
+import { placeDevice } from "@/lib/layout";
 
 const EDGES: Edge[] = ["Left", "Right", "Top", "Bottom"];
 const NONE = "none";
@@ -8,10 +9,8 @@ const NONE = "none";
 export default function Layout({ status, settings, monitors, onChange }: { status: Status | null; settings: Settings; monitors: Monitor[]; onChange: (s: Settings) => void }) {
   // Devices shown: everything connected plus everything already placed.
   const ids = Array.from(new Set([...(status?.hosts.map((h) => h.id) ?? []), ...settings.attachments.map((a) => a.device_id)]));
-  const place = (id: string, monitor_id: string, edge: Edge | null) => {
-    const rest = settings.attachments.filter((a) => a.device_id !== id);
-    onChange({ ...settings, attachments: monitor_id === NONE || !edge ? rest : [...rest, { device_id: id, monitor_id, edge }] });
-  };
+  const place = (id: string, monitor_id: string, edge: Edge | null) =>
+    onChange({ ...settings, attachments: placeDevice(settings.attachments, id, monitor_id === NONE ? null : monitor_id, edge) });
   const monitorItems: Record<string, string> = Object.fromEntries([[NONE, "Not placed"], ...monitors.map((m, i): [string, string] => [m.id, `Screen ${i + 1} (${m.rect.right - m.rect.left}×${m.rect.bottom - m.rect.top})`])]);
   const edgeItems: Record<string, string> = Object.fromEntries(EDGES.map((e) => [e, e]));
 

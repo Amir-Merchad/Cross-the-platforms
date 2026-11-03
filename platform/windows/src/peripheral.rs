@@ -29,6 +29,7 @@ pub struct HidPeripheral {
     mouse: GattLocalCharacteristic,
     /// Every characteristic stays referenced for the provider's lifetime, as Universal Bridge does.
     _keep: Vec<GattLocalCharacteristic>,
+    params: GattServiceProviderAdvertisingParameters,
     stats_n: AtomicU64,
     stats_us: AtomicU64,
     stats_max_us: AtomicU64,
@@ -102,12 +103,23 @@ impl HidPeripheral {
             let status = provider.AdvertisementStatus()?;
             if status == GattServiceProviderAdvertisementStatus::Started { break }
             if std::time::Instant::now() > deadline {
+                // Never leave a half-published HID service behind (it can wedge the adapter).
+                let _ = provider.StopAdvertising();
                 return Err(Error::new(windows::core::HRESULT(-1), format!("advertising not started after 12 s: {status:?}")));
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         eprintln!("advertising: Started");
-        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds], stats_n: AtomicU64::new(0), stats_us: AtomicU64::new(0), stats_max_us: AtomicU64::new(0), devices: Mutex::new(Vec::new()) })
+        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds], params: ap, stats_n: AtomicU64::new(0), stats_us: AtomicU64::new(0), stats_max_us: AtomicU64::new(0), devices: Mutex::new(Vec::new()) })
+    }
+
+    /// True while advertising. After Bluetooth off/on or sleep the provider stops; this restarts it.
+    pub fn ensure_advertising(&self) -> bool {
+        match self._provider.AdvertisementStatus() {
+            Ok(GattServiceProviderAdvertisementStatus::Started | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData) => true,
+            Ok(GattServiceProviderAdvertisementStatus::Created) => false, // still starting
+            _ => { let _ = self._provider.StartAdvertisingWithParameters(&self.params); false }
+        }
     }
 
     /// Device ids of hosts subscribed to both keyboard and mouse reports.

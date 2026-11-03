@@ -33,9 +33,11 @@ fn main() {
             if settings.start_with_windows { let _ = handle.autolaunch().enable(); }
             let on_status = {
                 let handle = handle.clone();
+                // Runs on the engine thread: never block on the main thread here (Quit joins the engine there).
                 move |s: Status| {
                     *handle.state::<AppState>().status.lock().unwrap() = s.clone();
-                    tray::refresh(&handle, &s);
+                    let (h, tray_status) = (handle.clone(), s.clone());
+                    let _ = handle.run_on_main_thread(move || tray::refresh(&h, &tray_status));
                     let _ = handle.emit("status", s);
                 }
             };

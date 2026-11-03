@@ -32,6 +32,9 @@ static MS_HOOK: AtomicIsize = AtomicIsize::new(0);
 static THREAD: AtomicU32 = AtomicU32::new(0);
 static TX: OnceLock<Mutex<Option<Sender<Input>>>> = OnceLock::new();
 
+/// Ctrl+Alt+1…n only exist for placed devices; the engine keeps this in sync with the layout.
+pub fn set_hotkey_count(n: u8) { KB_GATE.lock().unwrap().set_hotkey_count(n); }
+
 /// Removes the hooks and gives input back to Windows. Safe to call more than once.
 pub fn unhook() {
     SUPPRESS.store(false, Ordering::SeqCst);
@@ -160,7 +163,7 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
                 Verdict::PassToWindows => {}
                 Verdict::Hotkey(0) => return back_to_windows(Input::Hotkey(0)),
                 Verdict::Hotkey(n) => { send(Input::Hotkey(n)); return LRESULT(1) }
-                Verdict::Remote if !suppress => return LRESULT(1), // hotkey key-up
+                Verdict::Drop => return LRESULT(1),
                 Verdict::Remote => {
                     if down && vk == VK_ESCAPE.0 {
                         ESC_TIMES.rotate_left(1);

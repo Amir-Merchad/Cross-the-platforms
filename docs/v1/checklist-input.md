@@ -13,6 +13,11 @@ Stop `ctp-engine` with **Enter**; quit the app from the **tray → Quit** (never
 | Ctrl+Alt+1 → iPad, Ctrl+Alt+2 → S24+, Ctrl+Alt+Q → Windows | PENDING |
 | Esc ×3 on a device → Windows | PENDING |
 | Shift held, iPad Bluetooth off → instant return, no stuck Shift | PENDING |
+| Hold Shift on Windows, cross, release on the iPad, come back → Windows Shift not stuck | PENDING |
+| Hold Ctrl+Alt+1 for a second → enters once, no flicker | PENDING |
+| German layout: AltGr+7 types `{`, AltGr+Q types `@` (Windows and iPad), no switching | PENDING |
+| Laptop Bluetooth off → on: re-advertises, devices reconnect by themselves | PENDING |
+| Laptop sleep → resume: devices reconnect by themselves | PENDING |
 
 ## App (`target\debug\ctp-app.exe`, Tasks 6–7)
 
@@ -27,3 +32,5 @@ Stop `ctp-engine` with **Enter**; quit the app from the **tray → Quit** (never
 | Reboot laptop → tray icon back, devices reconnect, no action needed | PENDING |
 | Quit from tray → Windows input normal | PENDING |
 | Log/terminal output has no keystrokes or clipboard text | PENDING |
+
+Note: with an external monitor at a different scaling than the laptop screen, check that both edges still trigger (DPI).

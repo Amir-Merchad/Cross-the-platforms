@@ -1,4 +1,4 @@
-import type { Attachment } from "./api";
+import type { Attachment, Edge } from "./api";
 
 /** Same rule as Rust `layout::validate`, so Save is disabled before the backend would reject it. */
 export function clashes(attachments: Attachment[]): string | null {
@@ -10,4 +10,13 @@ export function clashes(attachments: Attachment[]): string | null {
     }
   }
   return null;
+}
+
+/** Places, moves or (monitor null) unplaces a device, keeping list order so hotkey numbers stay put. */
+export function placeDevice(attachments: Attachment[], deviceId: string, monitorId: string | null, edge: Edge | null): Attachment[] {
+  if (!monitorId || !edge) return attachments.filter((a) => a.device_id !== deviceId);
+  const next = { device_id: deviceId, monitor_id: monitorId, edge };
+  return attachments.some((a) => a.device_id === deviceId)
+    ? attachments.map((a) => (a.device_id === deviceId ? next : a))
+    : [...attachments, next];
 }

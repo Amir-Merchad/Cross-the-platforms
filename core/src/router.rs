@@ -35,6 +35,8 @@ pub enum Action {
 
 /// Pacing used until the engine reports the host's real connection interval.
 const DEFAULT_INTERVAL_MS: u64 = 8;
+/// A pause longer than this while pushing into an edge restarts the entry hold.
+const HOLD_GAP_MS: u64 = 180;
 /// How far inside the edge the Windows cursor lands on return.
 const RETURN_INSET: i32 = 20;
 
@@ -52,8 +54,8 @@ pub struct Router {
     settings: Settings,
     monitors: Vec<Monitor>,
     intervals: HashMap<String, u64>,
-    /// (device id, since ms) while the cursor pushes into an attached edge.
-    hold: Option<(String, u64)>,
+    /// (device id, since ms, last push ms) while the cursor pushes into an attached edge.
+    hold: Option<(String, u64, u64)>,
     remote: Option<Remote>,
     cursor: (i32, i32),
 }
@@ -98,11 +100,14 @@ impl Router {
             .filter(|a| connected(&a.device_id))
             .cloned();
         let Some(a) = target else { self.hold = None; return Vec::new() };
-        match &self.hold {
-            Some((id, since)) if *id == a.device_id => {
-                if now_ms.saturating_sub(*since) >= self.settings.entry_hold_ms { self.enter(a, true, now_ms) } else { Vec::new() }
+        match self.hold.clone() {
+            // A continuing push (no pause longer than HOLD_GAP_MS) counts towards the hold.
+            Some((id, since, last)) if id == a.device_id && now_ms.saturating_sub(last) <= HOLD_GAP_MS => {
+                if now_ms.saturating_sub(since) >= self.settings.entry_hold_ms { return self.enter(a, true, now_ms) }
+                self.hold = Some((id, since, now_ms));
+                Vec::new()
             }
-            _ => { self.hold = Some((a.device_id, now_ms)); Vec::new() }
+            _ => { self.hold = Some((a.device_id, now_ms, now_ms)); Vec::new() }
         }
     }
 
@@ -219,7 +224,7 @@ mod tests {
 
     #[test] fn hold_at_edge_enters_after_300ms() {
         let mut r = r();
-        assert!(r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 0, &up).is_empty());
+        for t in [0, 100, 200] { assert!(r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, t, &up).is_empty()); }
         let a = r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 300, &up);
         assert_eq!(a.first(), Some(&Action::Suppress(true)));
         assert!(a.contains(&Action::Active(Some("ipad".into()))));
@@ -296,8 +301,7 @@ mod tests {
     }
     #[test] fn leaving_edge_entry_places_cursor_inside() {
         let mut r = r();
-        r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 0, &up);
-        r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 300, &up);
+        for t in [0, 100, 200, 300] { r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, t, &up); }
         assert!(r.on_input(Input::Escape, 400, &up).contains(&Action::PlaceCursor(1899, 500)));
     }
     #[test] fn wheel_keeps_held_buttons() {
@@ -309,5 +313,14 @@ mod tests {
     #[test] fn hotkey_zero_returns_to_windows() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
         assert!(r.on_input(Input::Hotkey(0), 10, &up).contains(&Action::Active(None)));
+    }
+    // Final review I4: a pause at the edge restarts the hold.
+    #[test] fn pause_at_edge_restarts_hold() {
+        let mut r = r();
+        r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 0, &up);
+        let a = r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 1000, &up);
+        assert!(a.is_empty(), "1 s pause then a nudge must not enter instantly");
+        assert!(r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 1150, &up).is_empty());
+        assert!(r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, 1300, &up).contains(&Action::Suppress(true)));
     }
 }

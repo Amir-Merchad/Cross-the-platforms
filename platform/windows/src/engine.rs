@@ -69,7 +69,7 @@ pub fn start(settings: Settings, on_status: impl Fn(Status) + Send + 'static) ->
     EngineHandle { tx, thread: Some(thread) }
 }
 
-fn run(settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn(Status)) {
+fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn(Status)) {
     let mut status = Status::default();
     // Advertise first; retry until the adapter is available (Bluetooth off, adapter busy…).
     let peripheral = loop {
@@ -78,7 +78,12 @@ fn run(settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn
             Err(e) => {
                 status.notice = Some(format!("Bluetooth not ready: {}", e.message()));
                 on_status(status.clone());
-                if let Ok(Command::Stop) = commands.recv_timeout(ADVERTISE_RETRY) { return }
+                // Keep settings saved meanwhile; drop switches (nothing to switch to yet).
+                match commands.recv_timeout(ADVERTISE_RETRY) {
+                    Ok(Command::Stop) => return,
+                    Ok(Command::Reload(s)) => settings = s,
+                    _ => {}
+                }
             }
         }
     };
@@ -88,7 +93,7 @@ fn run(settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn
     let (input_tx, input_rx) = mpsc::channel::<Input>();
     let mut capture = capture::start(input_tx);
     let mut router = Router::new(settings.clone(), monitors::list());
-    let mut settings = settings;
+    capture::set_hotkey_count(settings.attachments.len() as u8);
     let clock = Instant::now();
     let now_ms = || clock.elapsed().as_millis() as u64;
 
@@ -114,7 +119,11 @@ fn run(settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn
         while let Ok(c) = commands.try_recv() {
             match c {
                 Command::Stop => break 'outer,
-                Command::Reload(s) => { router.set_settings(s.clone()); settings = s; }
+                Command::Reload(s) => {
+                    capture::set_hotkey_count(s.attachments.len() as u8);
+                    router.set_settings(s.clone());
+                    settings = s;
+                }
                 Command::SwitchTo(None) => actions.extend(router.on_input(Input::Hotkey(0), now_ms(), &is_up)),
                 Command::SwitchTo(Some(id)) => match settings.attachments.iter().position(|a| a.device_id == id) {
                     Some(i) => actions.extend(router.on_input(Input::Hotkey(i as u8 + 1), now_ms(), &is_up)),
@@ -148,6 +157,8 @@ fn run(settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn
         if last_mon.elapsed() >= MONITOR_POLL {
             last_mon = Instant::now();
             router.set_monitors(monitors::list());
+            status.advertising = peripheral.ensure_advertising();
+            if !status.advertising && status.notice.is_none() { status.notice = Some("Bluetooth advertising restarting…".into()) }
         }
 
         for a in actions {
