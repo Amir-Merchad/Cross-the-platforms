@@ -89,7 +89,7 @@ Install: plug in the S24+ with USB debugging on, `adb install -r <apk>` (adb is 
 | Phone sends to PC | `bridge-recv`, ticket injected via `adb run-as` into the app prefs | **PASS** 2026-11-03: 198 MB video in 5.0 s = **39.7 MB/s** over Wi-Fi, bytes intact |
 | Same files with LocalSend, same Wi-Fi | 198.5 MB video phone→PC | **LocalSend 90.0 MB/s vs ours 39.7 MB/s (PC→phone 44.4)**. Loopback ours ≈ 42–64 MB/s regardless of QUIC windows (1–64 MB tried) → per-packet QUIC/UDP cost on Windows, not flow control. v1: keep iroh for discovery/pairing/internet, move LAN bulk data to a direct TLS-over-TCP stream |
 | Clipboard tile | Quick Settings "Send clipboard" tile → `clip.txt` on PC | **PASS** 2026-11-04: text arrived byte-identical (incl. non-ASCII `’`); "Clipboard sent" toast. Spike saves a file; v1 writes it to the Windows clipboard |
-| Tile flow acceptable? | owner's call | open: owner to confirm one-tap tile is acceptable |
+| Tile flow acceptable? | owner's call | **PASS**: owner accepted the one-tap tile (2026-11-04) |
 
 ### iPad spike app (Task 7)
 
