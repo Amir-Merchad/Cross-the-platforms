@@ -8,3 +8,4 @@ publish = false
 idevice = { version = "=0.1.68", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 arboard = "3"
+mdns-sd = "0.13"

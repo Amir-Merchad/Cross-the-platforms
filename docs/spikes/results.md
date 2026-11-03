@@ -4,7 +4,7 @@
 
 | Spike | What it proves | Status | Path if it fails |
 |---|---|---|---|
-| 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | **PASS over USB** (text, instant); image/lock/Wi-Fi PENDING | clipboard via iPad app only |
+| 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | **PASS**: USB and Wi-Fi, text instant, images readable, auto-reconnect. Needs Developer Mode + DDI mount (redo after iPad reboot) | clipboard via iPad app only |
 | 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | **PASS** pairing, move, click, scroll, typing | Universal Bridge as helper |
 | 3 iPad + S24+ on one BLE link | one link, per-device input | **PASS**: one Windows peripheral serves both, per-device targeting works | phone input over LAN |
 | 4 Return-edge feel | seamless switch back | **PASS**: deliberate-push guard, no stuck keys, instant return on disconnect | hotkey-only return |
@@ -37,9 +37,9 @@ If it can't see the iPad: `set USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015`.
 | Image | copy screenshot, `pasteboard items --policy promised`, `pasteboard resolve 0 public.png --out shot.png` | **PASS** 2026-11-03: valid 2732×2048 PNG (544 KB); HEIC/JPEG also offered (items are *promised*, resolved on demand) |
 | After lock | lock iPad with sync running | **Finding** 2026-11-03: iPad closes the pasteboard connection on lock; a fresh connection works immediately and the DDI stays mounted (only a reboot unmounts). `ipad-clip` now reconnects every 2 s; retest PENDING |
 | Two-way sync spike | `cargo run --release -p ipad-clip` | **PASS** 2026-11-03: both directions, "instant" |
-| Over Wi-Fi | `pair`, then `--host <ip> --pairing-file <file>` (file stays out of git) | PENDING (owner) |
+| Over Wi-Fi | one-time `ipad-clip --rp-pair <file>` over USB (RemotePairing, no tap needed), then `ipad-clip --wifi <file>` | **PASS** 2026-11-03: mDNS finds `_remotepairing._tcp` (192.168.1.3:49152), pair-verify → TLS-PSK tunnel → pasteboard; two-way sync works. Plain lockdown-over-Wi-Fi refuses CoreDeviceProxy; Apple's Windows usbmux doesn't list Wi-Fi devices |
 
-Verdict: PENDING
+Verdict: **GO** for no-app iPad clipboard over Wi-Fi. Costs: Developer Mode on, DDI re-mount after each iPad reboot (automate in v1), one-time USB pairing.
 
 ## Spikes 2–4 — BLE HID from Windows, two hosts, edge switching (Task 4)
 
