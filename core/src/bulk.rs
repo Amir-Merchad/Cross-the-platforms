@@ -68,29 +68,34 @@ impl BulkListener {
 
     /// Accepts one connection and writes the expected files into `dir`. On any error nothing is
     /// left behind (no final file, no `.part`) for the file in flight; finished files stay.
-    pub async fn receive(self, files: &[FileMeta], dir: &Path, mut progress: impl FnMut(u64, u64)) -> Result<Vec<PathBuf>> {
+    pub async fn receive(self, files: &[FileMeta], dir: &Path, progress: impl FnMut(u64, u64)) -> Result<Vec<PathBuf>> {
         let (tcp, _) = tokio::time::timeout(ACCEPT_TIMEOUT, self.tcp.accept()).await.context("sender never connected")??;
         tcp.set_nodelay(true)?;
         let mut s = tokio::time::timeout(IDLE_TIMEOUT, self.acceptor.accept(tcp)).await.context("TLS handshake timed out")??;
-        let mut tok = [0u8; 32];
-        idle(s.read_exact(&mut tok)).await?;
-        if tok.iter().zip(self.token.as_bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) != 0 { bail!("wrong token") }
-
-        tokio::fs::create_dir_all(dir).await?;
-        let total: u64 = files.iter().map(|f| f.size).sum();
-        let mut done = 0u64;
-        let mut out = Vec::with_capacity(files.len());
-        for f in files {
-            let path = safe_name(dir, &f.name);
-            let part = path.with_file_name(format!("{}.part", path.file_name().unwrap().to_string_lossy()));
-            match recv_one(&mut s, f.size, &part, &mut done, total, &mut progress).await {
-                Ok(()) => { tokio::fs::rename(&part, &path).await?; out.push(path); }
-                Err(e) => { let _ = tokio::fs::remove_file(&part).await; return Err(e) }
-            }
-        }
-        let _ = s.shutdown().await;
-        Ok(out)
+        receive_on(&mut s, &self.token, files, dir, progress).await
     }
+}
+
+/// The receiving half of the framing, over any byte stream (TLS here, an iroh stream as fallback).
+pub(crate) async fn receive_on<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, token: &str, files: &[FileMeta], dir: &Path, mut progress: impl FnMut(u64, u64)) -> Result<Vec<PathBuf>> {
+    let mut tok = [0u8; 32];
+    idle(s.read_exact(&mut tok)).await?;
+    if token.len() != 32 || tok.iter().zip(token.as_bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) != 0 { bail!("wrong token") }
+
+    tokio::fs::create_dir_all(dir).await?;
+    let total: u64 = files.iter().map(|f| f.size).sum();
+    let mut done = 0u64;
+    let mut out = Vec::with_capacity(files.len());
+    for f in files {
+        let path = safe_name(dir, &f.name);
+        let part = path.with_file_name(format!("{}.part", path.file_name().unwrap().to_string_lossy()));
+        match recv_one(s, f.size, &part, &mut done, total, &mut progress).await {
+            Ok(()) => { tokio::fs::rename(&part, &path).await?; out.push(path); }
+            Err(e) => { let _ = tokio::fs::remove_file(&part).await; return Err(e) }
+        }
+    }
+    let _ = s.shutdown().await;
+    Ok(out)
 }
 
 async fn idle<T>(f: impl Future<Output = std::io::Result<T>>) -> Result<T> {
@@ -126,9 +131,15 @@ async fn recv_one<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, size: u64, part:
     Ok(())
 }
 
-/// Streams `files` to a listener; returns the bytes sent. Tries each address within
-/// `CONNECT_TIMEOUT`; the server must present the cert whose SHA-256 is `cert_sha256`.
-pub async fn send(addrs: &[SocketAddr], cert_sha256: &str, token: &str, files: &[PathBuf], mut progress: impl FnMut(u64, u64)) -> Result<u64> {
+/// Streams `files` to a listener; returns the bytes sent.
+pub async fn send(addrs: &[SocketAddr], cert_sha256: &str, token: &str, files: &[PathBuf], progress: impl FnMut(u64, u64)) -> Result<u64> {
+    let mut s = connect(addrs, cert_sha256).await?;
+    send_on(&mut s, token, files, progress).await
+}
+
+/// Opens the TLS stream: tries each address within `CONNECT_TIMEOUT`; the server must present the
+/// cert whose SHA-256 is `cert_sha256`. A failure here is the cue to fall back to iroh.
+pub async fn connect(addrs: &[SocketAddr], cert_sha256: &str) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
     let p = provider();
     let verifier = Arc::new(Pinned { sha256: cert_sha256.to_ascii_lowercase(), algs: p.signature_verification_algorithms });
     let cfg = rustls::ClientConfig::builder_with_provider(p)
@@ -141,9 +152,12 @@ pub async fn send(addrs: &[SocketAddr], cert_sha256: &str, token: &str, files: &
     }
     let tcp = tcp.ok_or_else(|| anyhow!("can't reach the receiver over the LAN"))?;
     tcp.set_nodelay(true)?;
-    let mut s = idle(tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(ServerName::try_from(SNI)?, tcp)).await?;
-    idle(s.write_all(token.as_bytes())).await?;
+    idle(tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(ServerName::try_from(SNI)?, tcp)).await
+}
 
+/// The sending half of the framing, over any byte stream.
+pub(crate) async fn send_on<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, token: &str, files: &[PathBuf], mut progress: impl FnMut(u64, u64)) -> Result<u64> {
+    idle(s.write_all(token.as_bytes())).await?;
     let mut sizes = Vec::with_capacity(files.len());
     for f in files { sizes.push(tokio::fs::metadata(f).await?.len()); }
     let total: u64 = sizes.iter().sum();

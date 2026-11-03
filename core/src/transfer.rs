@@ -111,7 +111,7 @@ pub async fn send_file(ticket: &str, path: &Path) -> Result<u64> {
 
 /// Larger flow-control windows than Quinn's defaults (~1.25 MB per stream), so one bulk stream
 /// isn't throttled by window updates on Wi-Fi. Values from env for tuning: CTP_STREAM_WIN_MB / CTP_SEND_WIN_MB.
-fn fast_transport() -> iroh::endpoint::QuicTransportConfig {
+pub(crate) fn fast_transport() -> iroh::endpoint::QuicTransportConfig {
     let mb = |name: &str, default: u64| std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default) * 1024 * 1024;
     let stream = mb("CTP_STREAM_WIN_MB", 16);
     let send = mb("CTP_SEND_WIN_MB", 64);

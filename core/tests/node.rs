@@ -61,3 +61,50 @@ async fn pair_then_restart_keeps_pairing() {
     b2.send_clip(&aid, "still paired".into()).await.unwrap();
     wait_for(&mut arx2, |e| matches!(e, Event::Clip { text, .. } if text == "still paired")).await;
 }
+
+fn write(dir: &std::path::Path, name: &str, n: usize, seed: u8) -> std::path::PathBuf {
+    let p = dir.join(name);
+    std::fs::write(&p, (0..n).map(|i| (i as u8).wrapping_mul(13).wrapping_add(seed)).collect::<Vec<u8>>()).unwrap();
+    p
+}
+
+async fn received(rx: &mut Receiver<Event>, n: usize) -> Vec<(String, std::path::PathBuf, u64)> {
+    let mut v = Vec::new();
+    for _ in 0..n { if let Event::Received { from, path, size } = wait_for(rx, |e| matches!(e, Event::Received { .. })).await { v.push((from, path, size)) } }
+    v
+}
+
+#[tokio::test]
+async fn send_files_end_to_end() {
+    let ((a, mut arx, _da), (b, _brx, _db)) = paired().await;
+    let src = tempfile::tempdir().unwrap();
+    let (p1, p2) = (write(src.path(), "notes.pdf", 2_000_000, 1), write(src.path(), "clip.mp4", 3_000_000, 2));
+    assert_eq!(b.send_files(&a.id(), vec![p1.clone(), p2.clone()]).await.unwrap(), 5_000_000);
+    let got = received(&mut arx, 2).await;
+    assert!(got.iter().all(|(from, _, _)| *from == b.id()));
+    assert_eq!(got.iter().map(|g| g.2).collect::<Vec<_>>(), vec![2_000_000, 3_000_000]);
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&p1).unwrap());
+    assert_eq!(std::fs::read(&got[1].1).unwrap(), std::fs::read(&p2).unwrap());
+}
+
+#[tokio::test]
+async fn falls_back_to_iroh_when_tcp_unreachable() { // Review Focus 4
+    let ((a, mut arx, _da), (b, _brx, _db)) = paired().await;
+    a.test_bulk_addrs(Some(vec!["10.255.255.1:9".parse().unwrap()]));
+    let src = tempfile::tempdir().unwrap();
+    let p = write(src.path(), "slides.pdf", 1_000_000, 3);
+    let t = std::time::Instant::now();
+    b.send_files(&a.id(), vec![p.clone()]).await.unwrap();
+    let got = received(&mut arx, 1).await;
+    assert!(t.elapsed() < Duration::from_secs(8), "took {:?}", t.elapsed());
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&p).unwrap());
+}
+
+#[tokio::test]
+async fn send_to_unpaired_peer_fails_cleanly() {
+    let (a, _arx, _da) = node("Laptop", PeerKind::Windows).await;
+    let (c, _crx, _dc) = node("Stranger", PeerKind::Android).await;
+    let src = tempfile::tempdir().unwrap();
+    let p = write(src.path(), "x.bin", 10, 4);
+    assert!(c.send_files(&a.id(), vec![p]).await.is_err());
+}

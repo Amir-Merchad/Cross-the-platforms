@@ -11,16 +11,23 @@ use std::{
 };
 
 use anyhow::Result;
-use iroh::{Endpoint, EndpointAddr, PublicKey, endpoint::{Connection, presets}};
+use iroh::{Endpoint, EndpointAddr, PublicKey, endpoint::{Connection, RecvStream, SendStream, presets}};
 use serde::{Deserialize, Serialize};
-use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
+use tokio::{sync::{mpsc, oneshot}, task::JoinHandle, time::timeout};
 
 use crate::{
+    bulk::{self, BulkListener},
     identity::{PairedPeers, Peer, load_or_create_key},
     pairing::{self, PAIR_ALPN, PairInvite, PendingCode},
+    transfer::fast_transport,
 };
 
 pub const CTL_ALPN: &[u8] = b"ctp/ctl/1";
+/// File bytes over iroh when the LAN TLS stream can't connect (firewall, client isolation).
+const BULK_ALPN: &[u8] = b"ctp/bulk/1";
+const PROGRESS_EVERY: Duration = Duration::from_millis(100);
+/// How long a receiver waits for the iroh fallback after offering the TCP stream.
+const FALLBACK_WAIT: Duration = Duration::from_secs(30);
 /// Nodes tell their paired peers where they can be reached (iroh has no LAN discovery).
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -35,7 +42,7 @@ pub struct FileMeta { pub name: String, pub size: u64 }
 pub enum Ctl {
     Hello { addr: EndpointAddr },
     Offer { id: u64, files: Vec<FileMeta> },
-    Accept { id: u64, tcp: Vec<SocketAddr>, cert_sha256: String },
+    Accept { id: u64, tcp: Vec<SocketAddr>, cert_sha256: String, token: String },
     Reject { id: u64, reason: String },
     Clip { text: String },
 }
@@ -58,7 +65,6 @@ pub struct Node { inner: Arc<Inner> }
 pub(crate) struct Inner {
     pub(crate) ep: Endpoint,
     me: Peer,
-    #[allow(dead_code)] // used by file transfer (send_files)
     pub(crate) receive_dir: PathBuf,
     peers: Mutex<PairedPeers>,
     peers_path: PathBuf,
@@ -67,7 +73,12 @@ pub(crate) struct Inner {
     pending: Mutex<Option<PendingCode>>,
     pub(crate) events: mpsc::Sender<Event>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Accepted offers waiting for the sender's iroh fallback stream: id → (sender id, hand-off).
+    waiting: Mutex<HashMap<u64, (String, oneshot::Sender<IrohStream>)>>,
+    test_bulk_addrs: Mutex<Option<Vec<SocketAddr>>>,
 }
+
+type IrohStream = (Connection, SendStream, RecvStream);
 
 impl Drop for Inner {
     fn drop(&mut self) {
@@ -89,6 +100,7 @@ impl Node {
             peers: Mutex::new(PairedPeers::load(&peers_path)), peers_path,
             addrs: Mutex::new(addrs), addrs_path,
             pending: Mutex::new(None), events: tx, tasks: Mutex::new(Vec::new()),
+            waiting: Mutex::new(HashMap::new()), test_bulk_addrs: Mutex::new(None),
         });
         let node = Node { inner: inner.clone() };
         let accept = tokio::spawn(accept_loop(ep, Arc::downgrade(&inner)));
@@ -143,19 +155,69 @@ impl Node {
         self.send_ctl(peer_id, &[Ctl::Clip { text }]).await.map(|_| ())
     }
 
-    /// One control exchange: our `Hello`, then `msgs`; returns the peer's reply lines.
-    pub(crate) async fn send_ctl(&self, peer_id: &str, msgs: &[Ctl]) -> Result<Vec<Ctl>, String> {
+    /// Offers `paths` to a paired device and streams them once it accepts: LAN TLS first, iroh if
+    /// that can't connect within a few seconds. Returns the bytes sent.
+    pub async fn send_files(&self, peer_id: &str, paths: Vec<PathBuf>) -> Result<u64, String> {
+        let mut files = Vec::with_capacity(paths.len());
+        for p in &paths {
+            let m = tokio::fs::metadata(p).await.map_err(|e| format!("can't read a file: {e}"))?;
+            if !m.is_file() { return Err("only files can be sent".into()) }
+            files.push(FileMeta { name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), size: m.len() });
+        }
+        let id = random_id();
+        let replies = self.send_ctl(peer_id, &[Ctl::Offer { id, files }]).await?;
+        let (tcp, cert, token) = match replies.into_iter().find_map(|c| match c {
+            Ctl::Accept { id: i, tcp, cert_sha256, token } if i == id => Some(Ok((tcp, cert_sha256, token))),
+            Ctl::Reject { id: i, reason } if i == id => Some(Err(reason)),
+            _ => None,
+        }) {
+            Some(Ok(a)) => a,
+            Some(Err(reason)) => return Err(format!("declined: {reason}")),
+            None => return Err("the device didn't answer the offer".into()),
+        };
+        let progress = progress_events(self.inner.events.clone(), id);
+        let result = match bulk::connect(&tcp, &cert).await {
+            Ok(mut s) => bulk::send_on(&mut s, &token, &paths, progress).await,
+            Err(_) => self.send_over_iroh(peer_id, id, &token, &paths, progress).await,
+        };
+        result.map_err(|e| {
+            let reason = e.to_string();
+            let _ = self.inner.events.try_send(Event::Failed { id, reason: reason.clone() });
+            reason
+        })
+    }
+
+    async fn send_over_iroh(&self, peer_id: &str, id: u64, token: &str, paths: &[PathBuf], progress: impl FnMut(u64, u64)) -> Result<u64> {
+        let conn = self.connect(peer_id, BULK_ALPN).await.map_err(anyhow::Error::msg)?;
+        let (mut s, r) = conn.open_bi().await?;
+        s.write_all(&id.to_le_bytes()).await?;
+        let mut stream = tokio::io::join(r, s);
+        let n = bulk::send_on(&mut stream, token, paths, progress).await?;
+        conn.close(0u32.into(), b"done");
+        Ok(n)
+    }
+
+    /// Test hook: the addresses this node puts in `Accept` instead of its real ones.
+    #[doc(hidden)]
+    pub fn test_bulk_addrs(&self, addrs: Option<Vec<SocketAddr>>) { *self.inner.test_bulk_addrs.lock().unwrap() = addrs; }
+
+    async fn connect(&self, peer_id: &str, alpn: &[u8]) -> Result<Connection, String> {
         if !self.inner.peers.lock().unwrap().contains(peer_id) { return Err("not paired with that device".into()) }
         let addr = self.inner.addr_for(peer_id)?;
-        let conn = match timeout(CONNECT_TIMEOUT, self.inner.ep.connect(addr, CTL_ALPN)).await {
-            Ok(Ok(c)) => c,
+        match timeout(CONNECT_TIMEOUT, self.inner.ep.connect(addr, alpn)).await {
+            Ok(Ok(c)) => Ok(c),
             // The saved address may be stale (new network, new IP): let n0 discovery find it.
             _ => {
                 let id_only = PublicKey::from_str(peer_id).map(EndpointAddr::from).map_err(|e| format!("bad device id: {e}"))?;
-                timeout(CONNECT_TIMEOUT, self.inner.ep.connect(id_only, CTL_ALPN)).await
-                    .map_err(|_| "device not reachable".to_string())?.map_err(|e| format!("device not reachable: {e}"))?
+                timeout(CONNECT_TIMEOUT, self.inner.ep.connect(id_only, alpn)).await
+                    .map_err(|_| "device not reachable".to_string())?.map_err(|e| format!("device not reachable: {e}"))
             }
-        };
+        }
+    }
+
+    /// One control exchange: our `Hello`, then `msgs`; returns the peer's reply lines.
+    pub(crate) async fn send_ctl(&self, peer_id: &str, msgs: &[Ctl]) -> Result<Vec<Ctl>, String> {
+        let conn = self.connect(peer_id, CTL_ALPN).await?;
         let (mut s, mut r) = conn.open_bi().await.map_err(|e| e.to_string())?;
         let mut out = String::new();
         for m in std::iter::once(&Ctl::Hello { addr: self.inner.ep.addr() }).chain(msgs) {
@@ -201,15 +263,15 @@ impl Inner {
 /// Binds on the port this device used last time, so the addresses its peers saved stay valid
 /// across restarts; a random port (saved for next time) if that one is taken.
 async fn bind_endpoint(key: iroh::SecretKey, port_file: &Path) -> Result<Endpoint> {
-    let alpns = vec![PAIR_ALPN.to_vec(), CTL_ALPN.to_vec()];
+    let alpns = vec![PAIR_ALPN.to_vec(), CTL_ALPN.to_vec(), BULK_ALPN.to_vec()];
     let saved: Option<u16> = std::fs::read_to_string(port_file).ok().and_then(|t| t.trim().parse().ok());
     if let Some(port) = saved {
-        let fixed = Endpoint::builder(presets::N0).secret_key(key.clone()).alpns(alpns.clone()).clear_ip_transports()
+        let fixed = Endpoint::builder(presets::N0).secret_key(key.clone()).alpns(alpns.clone()).transport_config(fast_transport()).clear_ip_transports()
             .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
             .and_then(|b| b.bind_addr(SocketAddr::from(([0u16; 8], port))));
         if let Ok(b) = fixed && let Ok(ep) = b.bind().await { return Ok(ep) }
     }
-    let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(alpns).bind().await?;
+    let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(alpns).transport_config(fast_transport()).bind().await?;
     if let Some(port) = ep.bound_sockets().iter().find(|a| a.is_ipv4()).map(|a| a.port()) {
         if let Some(d) = port_file.parent() { let _ = std::fs::create_dir_all(d); }
         let _ = std::fs::write(port_file, port.to_string());
@@ -231,6 +293,7 @@ async fn accept_loop(ep: Endpoint, inner: Weak<Inner>) {
             let alpn = conn.alpn().to_vec();
             if alpn == PAIR_ALPN { handle_pair(conn, &inner).await }
             else if alpn == CTL_ALPN { handle_ctl(conn, Node { inner }).await }
+            else if alpn == BULK_ALPN { handle_bulk(conn, &inner).await }
             else { conn.close(1u32.into(), b"unknown protocol") }
         });
     }
@@ -273,8 +336,84 @@ impl Node {
         match msg {
             Ctl::Hello { addr } => { self.inner.remember_addr(from, addr); None }
             Ctl::Clip { text } => { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; None }
-            Ctl::Offer { id, .. } => Some(Ctl::Reject { id, reason: "file transfer not supported yet".into() }),
+            Ctl::Offer { id, files } => Some(self.accept_offer(from, id, files).await),
             Ctl::Accept { .. } | Ctl::Reject { .. } => None,
         }
     }
+
+    /// Paired peers' offers are accepted automatically: bind a one-shot TLS listener, wait for the
+    /// sender there or on the iroh fallback, write into the receive dir.
+    async fn accept_offer(&self, from: &str, id: u64, files: Vec<FileMeta>) -> Ctl {
+        let l = match BulkListener::bind().await { Ok(l) => l, Err(e) => return Ctl::Reject { id, reason: format!("can't receive: {e}") } };
+        let tcp = self.inner.test_bulk_addrs.lock().unwrap().clone().unwrap_or_else(|| l.addrs());
+        let (cert_sha256, token) = (l.cert_sha256(), l.token());
+        let (tx, rx) = oneshot::channel();
+        self.inner.waiting.lock().unwrap().insert(id, (from.to_string(), tx));
+        let _ = self.inner.events.send(Event::Incoming { from: from.to_string(), files: files.clone() }).await;
+        tokio::spawn(self.clone().receive_files(from.to_string(), id, files, l, token.clone(), rx));
+        Ctl::Accept { id, tcp, cert_sha256, token }
+    }
+
+    async fn receive_files(self, from: String, id: u64, files: Vec<FileMeta>, l: BulkListener, token: String, mut iroh: oneshot::Receiver<IrohStream>) {
+        let dir = self.inner.receive_dir.clone();
+        let events = self.inner.events.clone();
+        let over_iroh = |(conn, s, r): IrohStream| {
+            let (files, dir, token, events) = (files.clone(), dir.clone(), token.clone(), events.clone());
+            async move {
+                let mut stream = tokio::io::join(r, s);
+                let out = bulk::receive_on(&mut stream, &token, &files, &dir, progress_events(events, id)).await;
+                let _ = timeout(Duration::from_secs(2), conn.closed()).await;
+                out
+            }
+        };
+        let mut tcp = Box::pin(l.receive(&files, &dir, progress_events(events.clone(), id)));
+        let result = tokio::select! {
+            r = &mut tcp => match r {
+                Ok(paths) => Ok(paths),
+                // A failed TLS attempt (a stranger, a pinning mismatch) still leaves the iroh path.
+                Err(e) => match timeout(FALLBACK_WAIT, &mut iroh).await { Ok(Ok(st)) => over_iroh(st).await, _ => Err(e) },
+            },
+            st = &mut iroh => { drop(tcp); match st { Ok(st) => over_iroh(st).await, Err(_) => Err(anyhow::anyhow!("transfer abandoned")) } }
+        };
+        self.inner.waiting.lock().unwrap().remove(&id);
+        match result {
+            Ok(paths) => for (path, f) in paths.into_iter().zip(&files) {
+                let _ = events.send(Event::Received { from: from.clone(), path, size: f.size }).await;
+            },
+            Err(e) => { let _ = events.send(Event::Failed { id, reason: e.to_string() }).await; }
+        }
+    }
+}
+
+/// The sender's iroh fallback stream: it names the offer id first; only that offer's peer may use it.
+async fn handle_bulk(conn: Connection, inner: &Inner) {
+    let from = conn.remote_id().to_string();
+    if !inner.is_paired(&from) { conn.close(1u32.into(), b"not paired"); return }
+    let Ok((s, mut r)) = conn.accept_bi().await else { return };
+    let mut id = [0u8; 8];
+    if r.read_exact(&mut id).await.is_err() { return }
+    let id = u64::from_le_bytes(id);
+    let tx = {
+        let mut waiting = inner.waiting.lock().unwrap();
+        match waiting.get(&id) { Some((peer, _)) if *peer == from => waiting.remove(&id).map(|(_, tx)| tx), _ => None }
+    };
+    match tx { Some(tx) => { let _ = tx.send((conn, s, r)); } None => conn.close(1u32.into(), b"no such transfer") }
+}
+
+/// Progress as events, at most every `PROGRESS_EVERY` (plus the final one).
+fn progress_events(events: mpsc::Sender<Event>, id: u64) -> impl FnMut(u64, u64) + Send {
+    let mut last: Option<Instant> = None;
+    move |done, total| {
+        let now = Instant::now();
+        if done == total || last.is_none_or(|t| now - t >= PROGRESS_EVERY) {
+            last = Some(now);
+            let _ = events.try_send(Event::Progress { id, done, total });
+        }
+    }
+}
+
+fn random_id() -> u64 {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).expect("OS random source");
+    u64::from_le_bytes(b)
 }
