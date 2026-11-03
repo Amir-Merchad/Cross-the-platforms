@@ -2,7 +2,13 @@
 //! Items are compared by content hash, so an endpoint reporting back what we just wrote to it is
 //! dropped (no bouncing), and the newest copy anywhere wins. Contents are never logged.
 
+use std::collections::{HashMap, VecDeque};
+
 use sha2::{Digest, Sha256};
+
+/// Writes per endpoint whose echo we still expect. Enough for an app that sets the clipboard several
+/// times in a row; an echo that never comes just ages out.
+const PENDING_ECHOES: usize = 4;
 
 /// Items bigger than this (text bytes, or width × height × 4 for images) are not synced.
 pub const MAX_ITEM_BYTES: usize = 64 * 1024 * 1024;
@@ -40,13 +46,16 @@ pub struct Item { pub id: u64, pub origin: Endpoint, pub content: Content }
 pub struct Hub {
     endpoints: Vec<Endpoint>,
     last: Option<[u8; 32]>,
+    /// Hashes written to each endpoint whose echo hasn't come back yet: a late echo of an older write
+    /// must not overwrite a newer copy elsewhere.
+    pending: HashMap<Endpoint, VecDeque<[u8; 32]>>,
     next_id: u64,
     paused: bool,
     skipped: u64,
 }
 
 impl Hub {
-    pub fn new(endpoints: Vec<Endpoint>) -> Self { Self { endpoints, last: None, next_id: 1, paused: false, skipped: 0 } }
+    pub fn new(endpoints: Vec<Endpoint>) -> Self { Self { endpoints, last: None, pending: HashMap::new(), next_id: 1, paused: false, skipped: 0 } }
 
     pub fn set_paused(&mut self, p: bool) { self.paused = p; }
 
@@ -56,6 +65,10 @@ impl Hub {
     pub fn observe(&mut self, from: Endpoint, content: Content) -> Vec<(Endpoint, Item)> {
         if matches!(&content, Content::Text(t) if t.is_empty()) { return Vec::new() }
         let hash = content.hash();
+        if let Some(q) = self.pending.get_mut(&from) && let Some(i) = q.iter().position(|h| *h == hash) {
+            q.remove(i);
+            return Vec::new();
+        }
         if self.last == Some(hash) { return Vec::new() }
         // Seen even while paused, so resuming never replays it.
         self.last = Some(hash);
@@ -63,7 +76,13 @@ impl Hub {
         if content.size() > MAX_ITEM_BYTES { self.skipped += 1; return Vec::new() }
         let item = Item { id: self.next_id, origin: from.clone(), content };
         self.next_id += 1;
-        self.endpoints.iter().filter(|e| **e != from).map(|e| (e.clone(), item.clone())).collect()
+        let targets: Vec<Endpoint> = self.endpoints.iter().filter(|e| **e != from).cloned().collect();
+        for e in &targets {
+            let q = self.pending.entry(e.clone()).or_default();
+            if q.len() == PENDING_ECHOES { q.pop_front(); }
+            q.push_back(hash);
+        }
+        targets.into_iter().map(|e| (e, item.clone())).collect()
     }
 }
 
@@ -151,6 +170,13 @@ mod tests {
         h.set_paused(false);
         assert!(h.observe(Endpoint::Ipad, t("secret")).is_empty(), "copied while paused counts as seen");
         assert_eq!(h.observe(Endpoint::Windows, t("next")).len(), 1);
+    }
+    #[test] fn rapid_copies_dont_undo_the_newest() { // Final review I1
+        let mut h = hub();
+        assert_eq!(h.observe(Endpoint::Windows, t("A")).len(), 1);
+        assert_eq!(h.observe(Endpoint::Windows, t("B")).len(), 1);
+        assert!(h.observe(Endpoint::Ipad, t("A")).is_empty(), "late echo of A must not overwrite B on Windows");
+        assert!(h.observe(Endpoint::Ipad, t("B")).is_empty());
     }
     #[test] fn three_endpoints_fan_out_to_both_others() {
         let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad, Endpoint::Peer("s24".into())]);

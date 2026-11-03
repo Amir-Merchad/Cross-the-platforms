@@ -4,10 +4,10 @@
 
 use std::{net::SocketAddr, path::{Path, PathBuf}, time::Duration};
 
-use bridge_core::clipboard::{Content, codec};
+use bridge_core::clipboard::{Content, Image, MAX_ITEM_BYTES, codec};
 use idevice::{
     IdeviceService, ReadWrite, RemoteXpcClient, RsdService,
-    core_device::{GENERAL_PASTEBOARD, PasteboardServiceClient},
+    core_device::{DataInclusionPolicy, GENERAL_PASTEBOARD, PasteboardServiceClient},
     core_device_proxy::CoreDeviceProxy,
     mobile_image_mounter::ImageMounter,
     remote_pairing::{RemotePairingClient, RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native},
@@ -21,6 +21,21 @@ const HOST_NAME: &str = "cross-the-platforms";
 const RECORD: &str = "rp-pairing.plist";
 /// iPad image types we read, best first. We always write PNG.
 const IMAGE_UTIS: [&str; 3] = ["public.png", "public.jpeg", "public.tiff"];
+const TEXT_UTIS: [&str; 3] = ["public.utf8-plain-text", "public.plain-text", "public.text"];
+/// Pushes inline items up to this size and promise bigger ones (fetched on demand).
+const INLINE_LIMIT: i64 = 256 * 1024;
+/// Notices a silently dropped Wi-Fi link (iPad slept or left) instead of waiting forever.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Don't download what the size limit would throw away anyway.
+fn worth_resolving(size: Option<i64>) -> bool { size.is_none_or(|s| s <= MAX_ITEM_BYTES as i64) }
+
+/// Pushes at or below the change count seen when we subscribed describe the iPad's old clipboard:
+/// replaying them on every reconnect would overwrite newer Windows copies.
+fn is_fresh(change_count: Option<i64>, baseline: Option<i64>) -> bool {
+    match (change_count, baseline) { (Some(c), Some(b)) => c > b, _ => true }
+}
 
 /// `%APPDATA%\CrossThePlatforms\ipad` — pairing record and developer disk image (never in git).
 pub fn ipad_dir() -> PathBuf { crate::engine::settings_path().with_file_name("ipad") }
@@ -54,7 +69,7 @@ type Pasteboard = PasteboardServiceClient<Box<dyn ReadWrite>>;
 /// cancelled to write. Each half keeps the tunnel alive; it closes when both are dropped.
 pub struct IpadLink { pub reader: IpadReader, pub writer: IpadWriter, pub wifi: bool }
 
-pub struct IpadReader { _adapter: AdapterHandle, watcher: Pasteboard, resolver: Pasteboard }
+pub struct IpadReader { _adapter: AdapterHandle, watcher: Pasteboard, resolver: Pasteboard, baseline: Option<i64> }
 
 pub struct IpadWriter { _adapter: AdapterHandle, setter: Pasteboard }
 
@@ -89,9 +104,10 @@ impl IpadLink {
             Err(e) => return Err(format!("pasteboard (watch): {e:?}")),
         };
         let setter = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (set): {e:?}"))?;
-        let resolver = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (resolve): {e:?}"))?;
-        watcher.set_change_notifications(true, GENERAL_PASTEBOARD, None).await.map_err(|e| format!("AUTONOTIFY: {e:?}"))?;
-        Ok(IpadLink { reader: IpadReader { _adapter: adapter.clone(), watcher, resolver }, writer: IpadWriter { _adapter: adapter, setter }, wifi })
+        let mut resolver = Pasteboard::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("pasteboard (resolve): {e:?}"))?;
+        let baseline = resolver.get_with_policy(GENERAL_PASTEBOARD, DataInclusionPolicy::AllPromised).await.map_err(|e| format!("pasteboard baseline: {e:?}"))?.change_count;
+        watcher.set_change_notifications(true, GENERAL_PASTEBOARD, Some(DataInclusionPolicy::Threshold(INLINE_LIMIT))).await.map_err(|e| format!("AUTONOTIFY: {e:?}"))?;
+        Ok(IpadLink { reader: IpadReader { _adapter: adapter.clone(), watcher, resolver, baseline }, writer: IpadWriter { _adapter: adapter, setter }, wifi })
     }
 }
 
@@ -100,14 +116,26 @@ impl IpadReader {
     pub async fn next_change(&mut self) -> Result<Content, String> {
         loop {
             let snap = self.watcher.recv_push().await.map_err(|e| format!("push stream ended: {e:?}"))?;
+            if !is_fresh(snap.change_count, self.baseline) { continue }
+            // Small items arrive inline, big ones as promises: text first, then images, either way.
             if let Some(t) = snap.text().filter(|t| !t.is_empty()) { return Ok(Content::Text(t)) }
             let promised = snap.promised_items();
-            let Some(p) = IMAGE_UTIS.iter().find_map(|u| promised.iter().find(|p| p.uti == *u)) else { continue };
-            let bytes = self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve image: {e:?}"))?;
-            match bytes.map(|b| codec::decode(&b)) {
-                Some(Ok(img)) => return Ok(Content::Image(img)),
-                Some(Err(e)) => crate::diag::log(format_args!("iPad image not decodable ({}): {e}", p.uti)),
-                None => {}
+            let find = |utis: &[&str]| utis.iter().find_map(|u| promised.iter().find(|p| p.uti == *u && worth_resolving(p.size))).cloned();
+            if let Some(p) = find(&TEXT_UTIS) {
+                let bytes = self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve text: {e:?}"))?;
+                if let Some(t) = bytes.and_then(|b| String::from_utf8(b).ok()).filter(|t| !t.is_empty()) { return Ok(Content::Text(t)) }
+            }
+            let encoded = match snap.image() {
+                Some((uti, bytes)) => Some((uti.to_string(), bytes)),
+                None => match find(&IMAGE_UTIS) {
+                    Some(p) => self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve image: {e:?}"))?.map(|b| (p.uti, b)),
+                    None => None,
+                },
+            };
+            let Some((uti, bytes)) = encoded else { continue };
+            match decode_off_thread(bytes).await {
+                Ok(img) => return Ok(Content::Image(img)),
+                Err(e) => crate::diag::log(format_args!("iPad image not decodable ({uti}): {e}")),
             }
         }
     }
@@ -118,10 +146,19 @@ impl IpadWriter {
     pub async fn write(&mut self, c: &Content) -> Result<(), String> {
         match c {
             Content::Text(t) => self.setter.set_text(t, GENERAL_PASTEBOARD).await,
-            Content::Image(i) => self.setter.set_image(&codec::encode_png(i)?, "public.png", GENERAL_PASTEBOARD).await,
+            Content::Image(i) => {
+                let img = i.clone();
+                let png = tokio::task::spawn_blocking(move || codec::encode_png(&img)).await.map_err(|e| e.to_string())??;
+                self.setter.set_image(&png, "public.png", GENERAL_PASTEBOARD).await
+            }
         }
         .map_err(|e| format!("iPad write: {e:?}"))
     }
+}
+
+/// Image codecs take seconds on big screenshots: keep them off the async thread.
+async fn decode_off_thread(bytes: Vec<u8>) -> Result<Image, String> {
+    tokio::task::spawn_blocking(move || codec::decode(&bytes)).await.map_err(|e| e.to_string())?
 }
 
 #[derive(Debug)]
@@ -189,6 +226,8 @@ async fn connect_wifi(record: &Path) -> Result<(AdapterHandle, RsdHandshake), St
     rpc.connect(&mut rpf, async || "000000".to_string()).await.map_err(|e| format!("pair verify: {e:?}"))?;
     let tunnel_port = rpc.create_tcp_listener().await.map_err(|e| format!("tunnel listener: {e:?}"))?;
     let tunnel_stream = tokio::net::TcpStream::connect(SocketAddr::new(addr.ip(), tunnel_port)).await.map_err(|e| format!("tunnel connect: {e}"))?;
+    let keepalive = socket2::TcpKeepalive::new().with_time(KEEPALIVE_IDLE).with_interval(KEEPALIVE_INTERVAL);
+    socket2::SockRef::from(&tunnel_stream).set_tcp_keepalive(&keepalive).map_err(|e| format!("keepalive: {e}"))?;
     let tunnel = connect_tls_psk_tunnel_native(tunnel_stream, rpc.encryption_key()).await.map_err(|e| format!("TLS-PSK tunnel: {e:?}"))?;
     let client_ip: std::net::IpAddr = tunnel.info.client_address.parse().map_err(|e| format!("{e}"))?;
     let server_ip: std::net::IpAddr = tunnel.info.server_address.parse().map_err(|e| format!("{e}"))?;
@@ -249,6 +288,18 @@ mod tests {
         std::fs::write(d.path().join("ddi/Image.dmg"), b"x").unwrap();
         let e = ddi_files(d.path()).unwrap_err();
         assert!(e.contains("Image.dmg.trustcache"), "{e}");
+    }
+    #[test] fn oversized_promises_are_not_fetched() { // Final review I6
+        assert!(worth_resolving(Some(1000)));
+        assert!(worth_resolving(None));
+        assert!(!worth_resolving(Some(bridge_core::clipboard::MAX_ITEM_BYTES as i64 + 1)));
+    }
+    #[test] fn pushes_up_to_the_baseline_are_stale() { // Final review I8
+        assert!(!is_fresh(Some(7), Some(7)));
+        assert!(!is_fresh(Some(6), Some(7)));
+        assert!(is_fresh(Some(8), Some(7)));
+        assert!(is_fresh(None, Some(7)), "no counter: can't tell, keep it");
+        assert!(is_fresh(Some(1), None));
     }
     #[test] fn anything_else_is_passed_through_short() { assert!(matches!(classify("weird"), IpadStatus::Unavailable(_))); }
 }

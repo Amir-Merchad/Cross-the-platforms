@@ -7,7 +7,7 @@ use bridge_core::clipboard::{Content, Image};
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-        System::{DataExchange::AddClipboardFormatListener, LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
+        System::{DataExchange::{AddClipboardFormatListener, IsClipboardFormatAvailable, RegisterClipboardFormatW}, LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::WindowsAndMessaging::*,
     },
     core::w,
@@ -27,8 +27,15 @@ fn with_retry<T>(attempts: u32, delay: Duration, mut f: impl FnMut() -> Result<T
     }
 }
 
-/// Text if there is any, else an image, else `None` (files, RTF-only, empty, or still busy).
+/// Password managers (KeePass, 1Password, Bitwarden…) mark secrets with this format so clipboard
+/// tools and Windows' cloud clipboard leave them alone. So do we.
+fn excluded() -> bool {
+    unsafe { IsClipboardFormatAvailable(RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"))).is_ok() }
+}
+
+/// Text if there is any, else an image, else `None` (secrets, files, RTF-only, empty, or still busy).
 pub fn read() -> Option<Content> {
+    if excluded() { return None }
     let mut cb = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, arboard::Clipboard::new).ok()?;
     if let Ok(t) = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get_text()) && !t.is_empty() { return Some(Content::Text(t)) }
     let img = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get_image()).ok()?;
@@ -112,6 +119,11 @@ mod tests {
         let img = Image { width: 2, height: 2, rgba: vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255] };
         write(&Content::Image(img.clone())).unwrap();
         assert_eq!(read(), Some(Content::Image(img)));
+    }
+    #[test] #[ignore] fn password_manager_copy_is_not_read() { // Final review I7
+        use arboard::SetExtWindows;
+        arboard::Clipboard::new().unwrap().set().exclude_from_monitoring().text("hunter2").unwrap();
+        assert_eq!(read(), None);
     }
     #[test] #[ignore] fn empty_clipboard_reads_none() { arboard::Clipboard::new().unwrap().clear().unwrap(); assert_eq!(read(), None); }
 }

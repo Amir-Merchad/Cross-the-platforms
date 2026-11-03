@@ -34,7 +34,11 @@ impl Drop for ClipHandle {
 }
 
 const RECONNECT: Duration = Duration::from_secs(2);
-const IPAD_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Generous: a slow handshake (iPad half-asleep) must end in a retry, not hang reconnecting for good.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 5 s plus 1 s per MiB: big screenshots need encoding and a slow link, small text must fail fast.
+fn write_timeout(size: usize) -> Duration { Duration::from_secs(5 + (size / (1024 * 1024)) as u64) }
 
 pub fn start(enabled: bool, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
     let (tx, rx) = unbounded_channel();
@@ -69,6 +73,8 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
 
     let (ev_tx, mut events) = unbounded_channel();
     let mut writer: Option<IpadWriter> = None;
+    // Aborted with every session change: it holds a tunnel handle, and a tunnel lives until its last handle goes.
+    let mut reader_task: Option<tokio::task::JoinHandle<()>> = None;
     let mut session = 0u64;
     let mut connecting = false;
     let mut retry = tokio::time::Instant::now();
@@ -77,7 +83,13 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
         if writer.is_none() && !connecting && tokio::time::Instant::now() >= retry {
             connecting = true;
             let tx = ev_tx.clone();
-            tokio::task::spawn_local(async move { let _ = tx.send(Event::Connected(IpadLink::connect(&ipad::ipad_dir()).await.map(Box::new))); });
+            tokio::task::spawn_local(async move {
+                let r = match tokio::time::timeout(CONNECT_TIMEOUT, IpadLink::connect(&ipad::ipad_dir())).await {
+                    Ok(r) => r.map(Box::new),
+                    Err(_) => Err("iPad didn't answer in time".into()),
+                };
+                let _ = tx.send(Event::Connected(r));
+            });
         }
         if reported.as_ref() != Some(&status) { reported = Some(status.clone()); on_status(status.clone()); }
 
@@ -101,13 +113,14 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
                     status.ipad = Some(IpadStatus::Connected { wifi: link.wifi });
                     writer = Some(link.writer);
                     let (mut reader, tx, s) = (link.reader, ev_tx.clone(), session);
-                    tokio::task::spawn_local(async move {
+                    if let Some(t) = reader_task.take() { t.abort(); }
+                    reader_task = Some(tokio::task::spawn_local(async move {
                         loop {
                             let change = reader.next_change().await;
                             let end = change.is_err();
                             if tx.send(Event::FromIpad { session: s, change }).is_err() || end { break }
                         }
-                    });
+                    }));
                 }
                 Event::Connected(Err(e)) => {
                     connecting = false;
@@ -136,7 +149,7 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
                 Endpoint::Ipad => match writer.as_mut() {
                     // iPad down: drop it. The next copy anywhere wins anyway.
                     None => Err("iPad not connected".into()),
-                    Some(w) => match tokio::time::timeout(IPAD_WRITE_TIMEOUT, w.write(&c)).await {
+                    Some(w) => match tokio::time::timeout(write_timeout(c.size()), w.write(&c)).await {
                         Ok(r) => r,
                         Err(_) => Err("iPad write timed out".into()),
                     },
@@ -149,7 +162,8 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
                     diag::log(format_args!("clip {} -> {to:?} failed: {e}", c.kind()));
                     if to == Endpoint::Ipad && writer.is_some() {
                         writer = None;
-                        session += 1; // the reader of the broken session is ignored from now on
+                        session += 1;
+                        if let Some(t) = reader_task.take() { t.abort(); }
                         retry = tokio::time::Instant::now() + RECONNECT;
                         status.ipad = Some(ipad::classify(&e));
                     }
@@ -163,4 +177,13 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, on_sta
 
 fn route(hub: &mut Hub, from: Endpoint, c: Content) -> Vec<(Endpoint, Content)> {
     hub.observe(from, c).into_iter().map(|(to, item)| (to, item.content)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test] fn write_timeout_grows_with_size() { // Final review I5
+        assert_eq!(write_timeout(10), Duration::from_secs(5));
+        assert_eq!(write_timeout(33 * 1024 * 1024), Duration::from_secs(5 + 33));
+    }
 }
