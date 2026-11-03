@@ -1,0 +1,50 @@
+name: ios
+on:
+  workflow_dispatch:
+  push:
+    branches: ["v1/**"]
+    paths: ["core/**", "apps/ios/**", ".github/workflows/ios.yml"]
+
+jobs:
+  kit:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: BridgeKit tests
+        working-directory: apps/ios/BridgeKit
+        run: swift test
+  ipa:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-ios }
+      - uses: Swatinem/rust-cache@v2
+      - name: Build Rust core (device + host for bindgen)
+        env: { IPHONEOS_DEPLOYMENT_TARGET: "17.0" }
+        run: |
+          cargo build -p bridge-core --release --target aarch64-apple-ios
+          cargo build -p bridge-core --release
+      - name: Swift bindings
+        run: cargo run -q -p uniffi-bindgen --release -- generate --library target/release/libbridge_core.dylib --language swift --out-dir apps/ios/Generated
+      - name: XCFramework
+        working-directory: apps/ios
+        run: |
+          mkdir -p headers
+          cp Generated/bridge_coreFFI.h headers/
+          cp Generated/bridge_coreFFI.modulemap headers/module.modulemap
+          xcodebuild -create-xcframework -library ../../target/aarch64-apple-ios/release/libbridge_core.a -headers headers -output BridgeCore.xcframework
+      - name: Xcode project
+        working-directory: apps/ios
+        run: brew install xcodegen && xcodegen
+      - name: Build unsigned app
+        working-directory: apps/ios
+        run: xcodebuild -project Bridge.xcodeproj -scheme Bridge -sdk iphoneos -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Package IPA
+        working-directory: apps/ios
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/Bridge.app Payload/
+          zip -qr Bridge.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: Bridge-ipa, path: apps/ios/Bridge.ipa, retention-days: 3 }
