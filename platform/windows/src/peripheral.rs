@@ -13,6 +13,8 @@ use windows::{
     core::{Error, GUID, HSTRING, Result},
 };
 
+const DEVICE_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+
 fn uuid16(id: u16) -> GUID {
     GUID::from_values(id as u32, 0, 0x1000, [0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb])
 }
@@ -33,7 +35,7 @@ pub struct HidPeripheral {
     stats_n: AtomicU64,
     stats_us: AtomicU64,
     stats_max_us: AtomicU64,
-    devices: Mutex<Vec<(String, BluetoothLEDevice)>>,
+    devices: Mutex<Vec<(String, Option<BluetoothLEDevice>, std::time::Instant)>>,
 }
 
 impl HidPeripheral {
@@ -116,7 +118,9 @@ impl HidPeripheral {
     }
 
     /// True while advertising. After Bluetooth off/on or sleep the provider stops; this restarts it.
-    pub fn ensure_advertising(&self) -> bool {
+    pub fn ensure_advertising(&self, any_connected: bool) -> bool {
+        // Some adapters stop advertising once a host is connected; restarting it then disturbs the link.
+        if any_connected { return true }
         match self._provider.AdvertisementStatus() {
             Ok(GattServiceProviderAdvertisementStatus::Started | GattServiceProviderAdvertisementStatus::StartedWithoutAllAdvertisementData) => true,
             Ok(GattServiceProviderAdvertisementStatus::Created) => false, // still starting
@@ -145,44 +149,35 @@ impl HidPeripheral {
 
     /// Pacing for motion reports: one per BLE connection event, like Universal Bridge (8–100 ms).
     pub fn report_interval_ms(&self, host: &str) -> u64 {
-        let interval = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host))
-            .and_then(|op| op.join())
-            .and_then(|d| d.GetConnectionParameters())
-            .and_then(|c| c.ConnectionInterval());
-        match interval { Ok(units) => ((units as f64 * 1.25).ceil() as u64).clamp(8, 100), Err(_) => 8 }
+        let interval = self.device(host).ok_or(()).and_then(|d| d.GetConnectionParameters().and_then(|c| c.ConnectionInterval()).map_err(|_| ()));
+        match interval { Ok(units) => ((units as f64 * 1.25).ceil() as u64).clamp(8, 100), Err(()) => 8 }
     }
 
     /// True while the host's link is up. Unlike `hosts()` (subscriptions linger after the host
     /// turns Bluetooth off), the connection status flips as soon as the link drops.
     pub fn connected(&self, host: &str) -> bool {
-        let mut cache = self.devices.lock().unwrap();
-        if !cache.iter().any(|(id, _)| id == host)
-            && let Ok(d) = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host)).and_then(|op| op.join())
-        {
-            cache.push((host.to_string(), d));
-        }
-        cache.iter().find(|(id, _)| id == host).is_some_and(|(_, d)| {
+        self.device(host).is_some_and(|d| {
             d.ConnectionStatus().is_ok_and(|s| s == windows::Devices::Bluetooth::BluetoothConnectionStatus::Connected)
         })
     }
 
-    /// The host's Bluetooth name (e.g. "Amir's iPad"), if Windows knows it.
-    pub fn host_name(&self, host: &str) -> Option<String> {
-        BluetoothLEDevice::FromIdAsync(&HSTRING::from(host)).and_then(|op| op.join()).and_then(|d| d.Name()).ok()
-            .map(|n| n.to_string()).filter(|n| !n.is_empty())
+    /// One cached `BluetoothLEDevice` per host. Creating them is a blocking round trip to the Bluetooth
+    /// stack, so never in the input loop: a failed lookup (device away/unpaired) is retried every 10 s.
+    fn device(&self, host: &str) -> Option<BluetoothLEDevice> {
+        let mut cache = self.devices.lock().unwrap();
+        match cache.iter().position(|(id, _, _)| id == host) {
+            Some(i) if cache[i].1.is_some() || cache[i].2.elapsed() < DEVICE_RETRY => return cache[i].1.clone(),
+            Some(i) => { cache.remove(i); }
+            None => {}
+        }
+        let d = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host)).and_then(|op| op.join()).ok();
+        cache.push((host.to_string(), d.clone(), std::time::Instant::now()));
+        d
     }
 
-    /// Requests the throughput-optimised (shortest) connection interval; the host may refuse.
-    /// The returned request must stay alive for the preference to hold.
-    pub fn request_fast(&self, host: &str) -> Option<windows::Devices::Bluetooth::BluetoothLEPreferredConnectionParametersRequest> {
-        let r = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host)).and_then(|op| op.join()).and_then(|d| {
-            d.RequestPreferredConnectionParameters(&windows::Devices::Bluetooth::BluetoothLEPreferredConnectionParameters::ThroughputOptimized()?)
-        });
-        match &r {
-            Ok(req) => eprintln!("fast connection request: {:?}", req.Status()),
-            Err(e) => eprintln!("fast connection request not available: {e}"),
-        }
-        r.ok()
+    /// The host's Bluetooth name (e.g. "Amir's iPad"), if Windows knows it.
+    pub fn host_name(&self, host: &str) -> Option<String> {
+        self.device(host).and_then(|d| d.Name().ok()).map(|n| n.to_string()).filter(|n| !n.is_empty())
     }
 
     /// (reports sent, average ms, max ms) since the last call — how long each BLE notify blocked.

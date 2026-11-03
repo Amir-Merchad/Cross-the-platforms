@@ -14,7 +14,7 @@ use bridge_core::{
     settings::Settings,
 };
 use serde::Serialize;
-use windows::{Devices::Bluetooth::BluetoothLEPreferredConnectionParametersRequest, Win32::UI::WindowsAndMessaging::SetCursorPos};
+use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
 use crate::{capture, monitors, peripheral::HidPeripheral};
 
@@ -101,7 +101,6 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut connected: HashSet<String> = HashSet::new();
     let mut names: HashMap<String, Option<String>> = HashMap::new();
     let mut intervals: HashMap<String, u64> = HashMap::new();
-    let mut fast: HashMap<String, BluetoothLEPreferredConnectionParametersRequest> = HashMap::new();
     let (mut last_conn, mut last_mon, mut last_status) = (Instant::now() - CONNECTION_POLL, Instant::now(), Instant::now());
     let mut reported = Status::default();
     // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
@@ -138,6 +137,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
 
         if last_conn.elapsed() >= CONNECTION_POLL {
             last_conn = Instant::now();
+            let poll_started = Instant::now();
             let mut ids: HashSet<String> = peripheral.hosts().into_iter().collect();
             ids.extend(settings.attachments.iter().map(|a| a.device_id.clone()));
             for id in &ids {
@@ -147,17 +147,10 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     crate::diag::log(format_args!("{id} connected; interval {ms} ms; keyboard subscribed: {}", peripheral.keyboard_ready(id)));
                     intervals.insert(id.clone(), ms);
                     router.set_interval(id, ms);
-                    if let Some(req) = peripheral.request_fast(id) { fast.insert(id.clone(), req); }
                     names.entry(id.clone()).or_insert_with(|| peripheral.host_name(id));
                 }
                 if !up && connected.contains(id) { crate::diag::log(format_args!("{id} disconnected")); }
-                if up { connected.insert(id.clone()); } else { connected.remove(id); fast.remove(id); }
-                if up && intervals.get(id).is_some_and(|&ms| ms != peripheral.report_interval_ms(id)) {
-                    let ms = peripheral.report_interval_ms(id);
-                    crate::diag::log(format_args!("{id} interval now {ms} ms"));
-                    intervals.insert(id.clone(), ms);
-                    router.set_interval(id, ms);
-                }
+                if up { connected.insert(id.clone()); } else { connected.remove(id); }
             }
             actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
             for id in &ids {
@@ -170,11 +163,23 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                 .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
                 .collect();
             status.hosts.sort_by(|a, b| a.id.cmp(&b.id));
+            // This poll runs on the input thread: anything slow here freezes the remote pointer.
+            let took = poll_started.elapsed().as_millis();
+            if took > 20 { crate::diag::log(format_args!("connection poll took {took} ms (pointer stalls meanwhile)")); }
         }
         if last_mon.elapsed() >= MONITOR_POLL {
             last_mon = Instant::now();
             router.set_monitors(monitors::list());
-            status.advertising = peripheral.ensure_advertising();
+            // Interval can change after connect; the cached device makes this a cheap property read.
+            for id in connected.iter() {
+                let ms = peripheral.report_interval_ms(id);
+                if intervals.get(id) != Some(&ms) {
+                    crate::diag::log(format_args!("{id} interval now {ms} ms"));
+                    intervals.insert(id.clone(), ms);
+                    router.set_interval(id, ms);
+                }
+            }
+            status.advertising = peripheral.ensure_advertising(!connected.is_empty());
             if !status.advertising && status.notice.is_none() { status.notice = Some("Bluetooth advertising restarting…".into()) }
         }
 
