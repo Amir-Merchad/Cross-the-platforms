@@ -189,7 +189,7 @@ pub(crate) async fn send_on<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, token:
 }
 
 /// The primary LAN IPv4: the source address the OS would use to reach the internet. Sends nothing.
-fn primary_ipv4() -> Option<Ipv4Addr> {
+pub(crate) fn primary_ipv4() -> Option<Ipv4Addr> {
     let u = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     u.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
     match u.local_addr().ok()?.ip() { IpAddr::V4(ip) if !ip.is_unspecified() && !ip.is_loopback() => Some(ip), _ => None }

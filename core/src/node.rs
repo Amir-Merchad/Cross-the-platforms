@@ -140,7 +140,7 @@ impl Node {
         let pending = PendingCode::new(Instant::now());
         let code = pending.code().to_string();
         *self.inner.pending.lock().unwrap() = Some(pending);
-        PairInvite { v: 1, name: self.inner.me.name.clone(), addr: self.inner.ep.addr(), code }
+        PairInvite { v: 1, name: self.inner.me.name.clone(), addr: pairing::compact_addr(&self.inner.ep.addr(), bulk::primary_ipv4()), code }
     }
 
     /// Scans side: pair with the device that showed `invite`.

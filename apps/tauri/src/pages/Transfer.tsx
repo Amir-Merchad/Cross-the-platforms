@@ -59,7 +59,7 @@ export default function Transfer() {
   const showQr = async () => {
     try {
       const inv = await pairInvite();
-      setQr({ img: await QRCode.toDataURL(inv.qr, { margin: 1, width: 240 }), until: Date.now() + inv.expires_in_s * 1000 });
+      setQr({ img: await QRCode.toDataURL(inv.qr, { margin: 4, width: 576, errorCorrectionLevel: "L" }), until: Date.now() + inv.expires_in_s * 1000 });
       setError(null);
     } catch (e) { fail(e); }
   };
@@ -106,7 +106,7 @@ export default function Transfer() {
         <CardContent className="flex items-center gap-6">
           {qr && left > 0 ? (
             <>
-              <img src={qr.img} alt="Pairing code" className="size-48 rounded-md bg-white p-2" />
+              <img src={qr.img} alt="Pairing code" className="size-72 rounded-md bg-white [image-rendering:pixelated]" />
               <p className="text-sm tabular-nums text-muted-foreground">Expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}</p>
             </>
           ) : (
