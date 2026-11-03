@@ -41,12 +41,47 @@ final class OutgoingQueueTests: XCTestCase {
         XCTAssertEqual(Set(b[0].map(\.path)).count, 2)
     }
 
+    private func age(_ url: URL, by seconds: TimeInterval) throws {
+        try FileManager.default.setAttributes([.creationDate: Date(timeIntervalSinceNow: -seconds)], ofItemAtPath: url.path)
+    }
+
     func testHalfCopiedBatchIsNeverSent() throws {
-        try FileManager.default.createDirectory(at: tmp.appendingPathComponent(".incoming-1"), withIntermediateDirectories: true)
+        let half = tmp.appendingPathComponent(".incoming-1")
+        try FileManager.default.createDirectory(at: half, withIntermediateDirectories: true)
+        try age(half, by: 2 * 3600)
         let q = OutgoingQueue(root: tmp)
         XCTAssertTrue(q.batches().isEmpty)
         q.sweepIncomplete()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent(".incoming-1").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: half.path))
+    }
+
+    func testFreshIncomingFolderSurvivesTheSweep() throws {
+        let live = tmp.appendingPathComponent(".incoming-live")
+        try FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+        OutgoingQueue(root: tmp).sweepIncomplete()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: live.path))
+    }
+
+    func testRemoveIgnoresFilesOutsideTheQueue() throws {
+        let other = tmp.deletingLastPathComponent().appendingPathComponent("other")
+        let file = other.appendingPathComponent("x/f.txt")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: file)
+        try OutgoingQueue(root: tmp).remove(batchOf: file)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: other.path))
+    }
+
+    func testBatchesAreOldestFirst() throws {
+        let q = OutgoingQueue(root: tmp)
+        let first = try q.enqueue([dirA.appendingPathComponent("a.pdf")])
+        let second = try q.enqueue([dirB.appendingPathComponent("a.pdf")])
+        try age(first, by: 200)
+        try age(second, by: 100)
+        let b = q.batches()
+        XCTAssertEqual(b.count, 2)
+        XCTAssertTrue(b[0][0].path.hasPrefix(first.path))
+        XCTAssertTrue(b[1][0].path.hasPrefix(second.path))
     }
 
     func testRemoveDropsTheWholeBatch() throws {
@@ -78,6 +113,13 @@ final class NodeLifecycleTests: XCTestCase {
         var l = NodeLifecycle(); _ = l.foreground(); l.transferStarted(files: 1); _ = l.background()
         XCTAssertEqual(l.backgroundTimeExpired(), [.stop, .endBackgroundTime])
         XCTAssertEqual(l.foreground(), [.start])
+    }
+    func testOneFailureDoesNotEndTheOtherTransfer() {
+        var l = NodeLifecycle(); _ = l.foreground()
+        l.transferStarted(files: 1); l.transferStarted(files: 1)
+        XCTAssertEqual(l.transferFailed(), [])
+        XCTAssertEqual(l.background(), [.beginBackgroundTime])
+        XCTAssertEqual(l.fileFinished(), [.stop, .endBackgroundTime])
     }
     func testReturningInTimeKeepsTheNode() {
         var l = NodeLifecycle(); _ = l.foreground(); l.transferStarted(files: 1); _ = l.background()
