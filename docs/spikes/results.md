@@ -4,7 +4,7 @@
 
 | Spike | What it proves | Status | Path if it fails |
 |---|---|---|---|
-| 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | code ready, PENDING (owner) | clipboard via iPad app only |
+| 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | **PASS over USB** (text, instant); image/lock/Wi-Fi PENDING | clipboard via iPad app only |
 | 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | **PASS** pairing, move, click, scroll, typing | Universal Bridge as helper |
 | 3 iPad + S24+ on one BLE link | one link, per-device input | **PASS**: one Windows peripheral serves both, per-device targeting works | phone input over LAN |
 | 4 Return-edge feel | seamless switch back | **PASS**: deliberate-push guard, no stuck keys, instant return on disconnect | hotkey-only return |
@@ -30,13 +30,13 @@ If it can't see the iPad: `set USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015`.
 
 | Check | Command | Result |
 |---|---|---|
-| Mount developer disk image | `idevice-tools mounter -h` → mount | PENDING (owner) |
-| iPad → PC text | copy in Notes, `idevice-tools pasteboard paste` | PENDING (owner) |
-| PC → iPad, emoji/non-Latin | `idevice-tools pasteboard copy "héllo 👋 مرحبا"`, paste in Notes | PENDING (owner) |
+| Mount developer disk image | Developer Mode on (`amfi show` reveals the switch), DDI from `doronz88/DeveloperDiskImage` (Xcode files, 16.5 MB), `mounter mount --image … --manifest … --trustcache …` | **PASS** 2026-11-03: personalized via Apple TSS. Without DDI the pasteboard service is `ServiceNotFound` |
+| iPad → PC text | `idevice-tools pasteboard paste` | **PASS** (plain text + RTF items present) |
+| PC → iPad, emoji/non-Latin | `pasteboard copy "héllo 👋 مرحبا from Windows"` | **PASS**, identical in Notes |
 | Change notifications | `idevice-tools pasteboard watch`, copy 3× on iPad | PENDING (owner) |
 | Image | copy screenshot, `pasteboard items`, `pasteboard resolve <i> public.png --out shot.png` | PENDING (owner) |
 | After 5 min locked | repeat `paste` | PENDING (owner) |
-| Two-way sync spike | `cargo run -p ipad-clip`, 10× each way incl. emoji | PENDING (owner) |
+| Two-way sync spike | `cargo run --release -p ipad-clip` | **PASS** 2026-11-03: both directions, "instant" |
 | Over Wi-Fi | `pair`, then `--host <ip> --pairing-file <file>` (file stays out of git) | PENDING (owner) |
 
 Verdict: PENDING
