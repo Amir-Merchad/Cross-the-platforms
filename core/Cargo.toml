@@ -16,6 +16,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 getrandom = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rcgen = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 uniffi = { version = "0.32", features = ["tokio"] }
 

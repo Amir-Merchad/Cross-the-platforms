@@ -13,3 +13,4 @@ pub mod clipboard;
 pub mod identity;
 pub mod pairing;
 pub mod node;
+pub mod bulk;
