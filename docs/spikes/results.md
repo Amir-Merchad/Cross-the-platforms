@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | code ready, PENDING (owner) | clipboard via iPad app only |
 | 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | **PASS** pairing, move, click, scroll, typing | Universal Bridge as helper |
-| 3 iPad + S24+ on one BLE link | one link, per-device input | PENDING (owner) | phone input over LAN |
+| 3 iPad + S24+ on one BLE link | one link, per-device input | **PASS**: one Windows peripheral serves both, per-device targeting works | phone input over LAN |
 | 4 Return-edge feel | seamless switch back | PENDING (owner) | hotkey-only return |
 | 5 iroh transfer vs LocalSend | fast files on all three | 1 GiB loopback ✔ 64 MB/s; Wi-Fi PENDING (owner) | tune QUIC buffers |
 | 6 Shared core in Kotlin + Swift | three-app structure, no-Mac iOS | APK builds ✔, IPA builds on CI ✔; on-device PENDING (owner) | — |
@@ -51,8 +51,8 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 | Clean shutdown | stop with Ctrl+C / `check` exits by itself | Required: force-killing a publisher wedged the MT7921 Bluetooth function once (fixed by Shift+Shutdown + 20 s power-button drain) |
 | iPad pairs, square + `hello` | iPad Settings → Bluetooth → this PC; `ble-hid demo` | **PASS** 2026-11-03: paired, pointer square + typing work |
 | Click, scroll | `ble-hid demo --clicks` | **PASS** 2026-11-03 |
-| S24+ pairs too; only target moves | `ble-hid hosts`, then `demo --target <id>` per id | PENDING (owner) |
-| Both connected 10 min | leave `hosts` running | PENDING (owner) |
+| S24+ pairs too; only target moves | `ble-hid hosts`, then `demo --target <id>` per id | **PASS** 2026-11-03: iPad `…5b:95:30:4d:1c:f5`, S24+ `…4e:5d:31:c1:13:6e`; each moved alone |
+| Both connected 10 min | leave `hosts` running | **PASS** 2026-11-03 |
 | Edge: 20 crossings each way | `ble-hid edge --target <id> --remote-at right --width 1180` | PENDING (owner) |
 | No stuck keys across switch | hold Ctrl/Shift while switching | PENDING (owner) |
 | Disconnect while Shift held | turn off iPad Bluetooth mid-press | PENDING (owner) |
