@@ -63,6 +63,10 @@ pub fn pair_invite(app: AppHandle) -> Result<Invite, String> { Ok(Invite { qr: t
 #[tauri::command]
 pub fn paired_peers(app: AppHandle) -> Result<Vec<Peer>, String> { Ok(transfer(&app)?.peers()) }
 
+/// Files waiting for a closed iPad, by peer id; the page asks on load because the outbox survives a restart.
+#[tauri::command]
+pub fn queued_files(app: AppHandle) -> Result<std::collections::HashMap<String, usize>, String> { Ok(transfer(&app)?.waiting().into_iter().collect()) }
+
 #[tauri::command]
 pub fn forget_peer(app: AppHandle, id: String) -> Result<(), String> {
     transfer(&app)?.forget(&id);

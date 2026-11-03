@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  forgetPeer, formatBytes, formatRate, onTransfer, openReceiveDir, pairInvite, pairedPeers, progressPercent, queuedLine, receiveDir,
+  forgetPeer, formatBytes, formatRate, onTransfer, openReceiveDir, pairInvite, pairedPeers, progressPercent, queuedFiles, queuedLine, receiveDir,
   sendFiles, setReceiveDir, type Peer,
 } from "@/lib/transfer";
 
@@ -33,6 +33,7 @@ export default function Transfer() {
   useEffect(() => {
     refresh();
     receiveDir().then(setDir, fail);
+    queuedFiles().then((q) => setWaiting((w) => ({ ...q, ...w })), fail);
     const off = onTransfer((e) => {
       if (e.type === "Paired") { setQr(null); refresh(); }
       if (e.type === "Progress") setLive((l) => ({ ...l, [e.id]: { done: e.done, total: e.total, started: l[e.id]?.started ?? Date.now(), now: Date.now() } }));

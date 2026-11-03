@@ -170,7 +170,8 @@ async fn queue_survives_a_pc_restart() { // Review Focus 1
     assert!(matches!(pc.send_or_queue(&ipad_id, vec![f.clone()]).await.unwrap(), SendOutcome::Queued));
     wait_for(&mut pcrx, |e| matches!(e, Event::Queued { .. })).await;
     pc.shutdown().await;
-    let (_pc2, _pcrx2) = restart(&dp, "Laptop", PeerKind::Windows).await;
+    let (pc2, _pcrx2) = restart(&dp, "Laptop", PeerKind::Windows).await;
+    assert_eq!(pc2.waiting(), vec![(ipad_id.clone(), 1)], "the restarted PC still knows what waits");
     let (_ipad2, mut irx2) = restart(&di, "S24+", PeerKind::Ipad).await;
     let got = received(&mut irx2, 1).await;
     assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());

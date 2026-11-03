@@ -143,6 +143,12 @@ impl Node {
     pub fn set_receive_dir(&self, dir: PathBuf) { *self.inner.receive_dir.lock().unwrap() = dir; }
     pub fn peers(&self) -> Vec<Peer> { self.inner.peers.lock().unwrap().list().to_vec() }
 
+    /// (peer id, files waiting) for each paired peer with something queued; what `Event::Queued` last said.
+    pub fn waiting(&self) -> Vec<(String, usize)> {
+        let o = self.inner.outbox.lock().unwrap();
+        self.peers().into_iter().map(|p| { let n = o.pending_files(&p.id); (p.id, n) }).filter(|(_, n)| *n > 0).collect()
+    }
+
     pub fn forget(&self, id: &str) {
         let mut p = self.inner.peers.lock().unwrap();
         p.remove(id);

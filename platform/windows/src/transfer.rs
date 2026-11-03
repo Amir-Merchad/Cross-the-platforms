@@ -42,6 +42,7 @@ impl TransferHandle {
 
     pub fn invite(&self) -> PairInvite { self.node.invite() }
     pub fn peers(&self) -> Vec<Peer> { self.node.peers() }
+    pub fn waiting(&self) -> Vec<(String, usize)> { self.node.waiting() }
     pub fn forget(&self, id: &str) { self.node.forget(id) }
     pub fn set_receive_dir(&self, dir: PathBuf) { self.node.set_receive_dir(dir) }
 

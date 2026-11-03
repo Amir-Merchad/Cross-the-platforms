@@ -16,6 +16,7 @@ export type TransferEvent =
 
 export const pairInvite = () => invoke<{ qr: string; expires_in_s: number }>("pair_invite");
 export const pairedPeers = () => invoke<Peer[]>("paired_peers");
+export const queuedFiles = () => invoke<Record<string, number>>("queued_files");
 export const forgetPeer = (id: string) => invoke<void>("forget_peer", { id });
 export const sendFiles = (peerId: string, paths: string[]) => invoke<void>("send_files", { peerId, paths });
 export const receiveDir = () => invoke<string>("receive_dir");
