@@ -61,7 +61,8 @@ pub enum Event {
     Received { from: String, path: PathBuf, size: u64 },
     Failed { id: u64, reason: String },
     Clip { from: String, text: String },
-    /// A send to an unreachable iPad is waiting on this device until it comes back.
+    /// Files currently waiting on this device for an unreachable iPad; sent every time the count
+    /// changes, `files: 0` once the last batch has left.
     Queued { peer: String, files: usize },
 }
 
@@ -187,8 +188,11 @@ impl Node {
     pub async fn send_or_queue(&self, peer_id: &str, paths: Vec<PathBuf>) -> Result<SendOutcome, String> {
         let ipad = self.peers().iter().any(|p| p.id == peer_id && p.kind == PeerKind::Ipad);
         if ipad && !matches!(timeout(IPAD_PROBE, self.send_ctl(peer_id, &[])).await, Ok(Ok(_))) {
-            let files = paths.len();
-            self.inner.outbox.lock().unwrap().add(peer_id, paths)?;
+            let files = {
+                let mut o = self.inner.outbox.lock().unwrap();
+                o.add(peer_id, paths)?;
+                o.pending_files(peer_id)
+            };
             let _ = self.inner.events.send(Event::Queued { peer: peer_id.to_string(), files }).await;
             return Ok(SendOutcome::Queued);
         }
@@ -208,7 +212,12 @@ impl Node {
                 if reason.starts_with(NOT_REACHABLE) { break } // stays queued, not a failure
                 let _ = self.inner.events.send(Event::Failed { id, reason }).await;
             }
-            if self.inner.outbox.lock().unwrap().pop(peer_id).is_err() { break }
+            let left = {
+                let mut o = self.inner.outbox.lock().unwrap();
+                if o.pop(peer_id).is_err() { break }
+                o.pending_files(peer_id)
+            };
+            let _ = self.inner.events.send(Event::Queued { peer: peer_id.to_string(), files: left }).await;
         }
         self.inner.flushing.lock().unwrap().remove(peer_id);
     }

@@ -36,10 +36,7 @@ export default function Transfer() {
     const off = onTransfer((e) => {
       if (e.type === "Paired") { setQr(null); refresh(); }
       if (e.type === "Progress") setLive((l) => ({ ...l, [e.id]: { done: e.done, total: e.total, started: l[e.id]?.started ?? Date.now(), now: Date.now() } }));
-      if (e.type === "Queued") setWaiting((w) => ({ ...w, [e.peer]: (w[e.peer] ?? 0) + e.files }));
-      // Failed carries no peer, so it clears every notice.
-      if (e.type === "Failed") setWaiting({});
-      if (e.type === "Received") setWaiting(({ [e.from]: _, ...rest }) => rest);
+      if (e.type === "Queued") setWaiting((w) => ({ ...w, [e.peer]: e.files }));
       if (e.type === "Failed") setLive((l) => ({ ...l, [e.id]: { ...(l[e.id] ?? { done: 0, total: 0, started: Date.now(), now: Date.now() }), failed: e.reason } }));
       if (e.type === "Received") setGot((g) => [{ name: fileName(e.path), size: e.size }, ...g].slice(0, 20));
     });

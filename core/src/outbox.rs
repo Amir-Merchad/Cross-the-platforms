@@ -31,6 +31,9 @@ impl Outbox {
 
     pub fn pending(&self, peer: &str) -> usize { self.batches.get(peer).map_or(0, Vec::len) }
 
+    /// Files across all of `peer`'s batches.
+    pub fn pending_files(&self, peer: &str) -> usize { self.batches.get(peer).map_or(0, |b| b.iter().map(Vec::len).sum()) }
+
     fn save(&self) -> Result<(), String> {
         let mut tmp = self.path.as_os_str().to_owned();
         tmp.push(".tmp");
@@ -63,6 +66,15 @@ mod tests {
         o.add("a", vec!["x".into()]).unwrap();
         assert!(o.peek("b").is_none());
         assert_eq!(o.pending("a"), 1);
+    }
+    #[test] fn counts_files_across_batches() {
+        let d = tempdir().unwrap(); let mut o = Outbox::load(&d.path().join("o.json"));
+        o.add("a", vec!["x".into(), "y".into()]).unwrap();
+        o.add("a", vec!["z".into()]).unwrap();
+        assert_eq!(o.pending_files("a"), 3);
+        o.pop("a").unwrap();
+        assert_eq!(o.pending_files("a"), 1);
+        assert_eq!(o.pending_files("b"), 0);
     }
     #[test] fn corrupt_file_starts_empty() {
         let d = tempdir().unwrap(); let p = d.path().join("o.json");

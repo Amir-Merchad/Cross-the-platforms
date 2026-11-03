@@ -157,6 +157,7 @@ async fn send_to_closed_ipad_queues_and_arrives_on_next_start() { // Review Focu
     let (_ipad2, mut irx2) = restart(&di, "S24+", PeerKind::Ipad).await;
     let got = received(&mut irx2, 1).await;
     assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
+    wait_for(&mut pcrx, |e| matches!(e, Event::Queued { files: 0, .. })).await;
 }
 
 #[tokio::test]
@@ -188,6 +189,7 @@ async fn missing_queued_file_fails_alone() { // Review Focus 2
     wait_for(&mut pcrx, |e| matches!(e, Event::Failed { .. })).await;
     let got = received(&mut irx2, 1).await;
     assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&b).unwrap());
+    wait_for(&mut pcrx, |e| matches!(e, Event::Queued { files: 0, .. })).await;
     assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&ipad_id), 0);
 }
 
