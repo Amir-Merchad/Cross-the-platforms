@@ -26,6 +26,8 @@ pub struct HidPeripheral {
     _provider: GattServiceProvider,
     keyboard: GattLocalCharacteristic,
     mouse: GattLocalCharacteristic,
+    /// Every characteristic stays referenced for the provider's lifetime, as Universal Bridge does.
+    _keep: Vec<GattLocalCharacteristic>,
 }
 
 impl HidPeripheral {
@@ -43,8 +45,11 @@ impl HidPeripheral {
             let p = GattLocalCharacteristicParameters::new()?;
             p.SetCharacteristicProperties(props)?;
             p.SetReadProtectionLevel(GattProtectionLevel::EncryptionRequired)?;
-            p.SetWriteProtectionLevel(GattProtectionLevel::EncryptionRequired)?;
-            if let Some(v) = value { p.SetStaticValue(&buf(v)?)?; }
+            // Static (read-only) values get read protection only, exactly like Universal Bridge.
+            match value {
+                Some(v) => p.SetStaticValue(&buf(v)?)?,
+                None => p.SetWriteProtectionLevel(GattProtectionLevel::EncryptionRequired)?,
+            }
             let r = service.CreateCharacteristicAsync(uuid16(uuid), &p)?.join()?;
             ensure(r.Error()?, "create characteristic")?;
             r.Characteristic()
@@ -57,8 +62,8 @@ impl HidPeripheral {
         };
 
         // bcdHID 1.11, country 0, NormallyConnectable
-        make(0x2A4A, GattCharacteristicProperties::Read, Some(&[0x11, 0x01, 0x00, 0x02]))?;
-        make(0x2A4B, GattCharacteristicProperties::Read, Some(REPORT_MAP))?;
+        let info = make(0x2A4A, GattCharacteristicProperties::Read, Some(&[0x11, 0x01, 0x00, 0x02]))?;
+        let map = make(0x2A4B, GattCharacteristicProperties::Read, Some(REPORT_MAP))?;
         let control = make(0x2A4C, GattCharacteristicProperties::WriteWithoutResponse, None)?;
         control.WriteRequested(&TypedEventHandler::new(|_, args: windows::core::Ref<GattWriteRequestedEventArgs>| {
             if let Some(a) = args.as_ref() { respond_write(a); }
@@ -85,7 +90,19 @@ impl HidPeripheral {
         ap.SetIsConnectable(true)?;
         ap.SetIsDiscoverable(true)?;
         provider.StartAdvertisingWithParameters(&ap)?;
-        Ok(Self { _provider: provider, keyboard, mouse })
+        // Wait up to 12 s for Started, like Universal Bridge. `Aborted` is transient on some adapters
+        // (MediaTek MT7921 reports it first, then starts), so it is not treated as failure.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        loop {
+            let status = provider.AdvertisementStatus()?;
+            if status == GattServiceProviderAdvertisementStatus::Started { break }
+            if std::time::Instant::now() > deadline {
+                return Err(Error::new(windows::core::HRESULT(-1), format!("advertising not started after 12 s: {status:?}")));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        eprintln!("advertising: Started");
+        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds] })
     }
 
     /// Device ids of hosts subscribed to both keyboard and mouse reports.
@@ -117,6 +134,11 @@ impl HidPeripheral {
 
     pub fn send_mouse(&self, host: &str, r: MouseReport) -> bool { self.notify(&self.mouse, host, &r.to_bytes()) }
     pub fn send_keyboard(&self, host: &str, r: KeyboardReport) -> bool { self.notify(&self.keyboard, host, &r.to_bytes()) }
+}
+
+impl Drop for HidPeripheral {
+    // Leaving a published service behind can wedge some Bluetooth drivers (MediaTek MT7921 did).
+    fn drop(&mut self) { let _ = self._provider.StopAdvertising(); }
 }
 
 fn respond_reads(c: &GattLocalCharacteristic, value: Vec<u8>) -> Result<()> {

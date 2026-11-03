@@ -47,7 +47,8 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 
 | Check | How | Result |
 |---|---|---|
-| Rust publishes HID service + advertises | `ble-hid hosts` | **PASS** 2026-11-03: service 0x1812 created, advertising, no errors |
+| Rust publishes HID service + advertises | `ble-hid check` | **PASS** 2026-11-03 after fix: MT7921 reports `Aborted` first, then `Started`; tool now waits 12 s like UB |
+| Clean shutdown | stop with Ctrl+C / `check` exits by itself | Required: force-killing a publisher wedged the MT7921 Bluetooth function once (fixed by Shift+Shutdown + 20 s power-button drain) |
 | iPad pairs, square + `hello` | iPad Settings → Bluetooth → this PC; `ble-hid demo` | PENDING (owner) |
 | Click, scroll | `ble-hid demo --clicks` | PENDING (owner) |
 | S24+ pairs too; only target moves | `ble-hid hosts`, then `demo --target <id>` per id | PENDING (owner) |

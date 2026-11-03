@@ -40,6 +40,11 @@ fn main() {
     let p = HidPeripheral::start().expect("BLE HID start failed (quit Universal Bridge first)");
 
     match mode {
+        // Start, confirm advertising, then stop cleanly (Drop stops advertising).
+        "check" => {
+            thread::sleep(Duration::from_secs(5));
+            eprintln!("hosts: {:?}; stopping cleanly", p.hosts());
+        }
         "hosts" => loop {
             eprintln!("hosts: {:?}", p.hosts());
             thread::sleep(Duration::from_secs(2));
