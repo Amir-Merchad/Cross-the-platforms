@@ -122,6 +122,8 @@ impl HeldInput {
         self.buttons
     }
 
+    pub fn buttons(&self) -> u8 { self.buttons }
+
     pub fn release_all(&mut self) -> (KeyboardReport, MouseReport) {
         *self = Self::default();
         (self.report(), MouseReport::default())
@@ -168,6 +170,11 @@ mod tests {
         let mut h = HeldInput::default();
         for vk in 0x41..=0x47 { h.key_down(vk); }
         assert_eq!(h.key_down(0x48).keys.iter().filter(|&&k| k != 0).count(), 6);
+    }
+    #[test] fn buttons_getter_reads_held_buttons() {
+        let mut h = HeldInput::default();
+        h.button(0b101, true);
+        assert_eq!(h.buttons(), 0b101);
     }
     #[test] fn report_map_declares_both_report_ids() {
         assert!(REPORT_MAP.windows(2).any(|w| w == [0x85, 1]));
