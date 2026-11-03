@@ -5,7 +5,7 @@
 | Spike | What it proves | Status | Path if it fails |
 |---|---|---|---|
 | 1 iPad clipboard via `idevice` | no-app clipboard Windows ↔ iPad | code ready, PENDING (owner) | clipboard via iPad app only |
-| 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | service publishes ✔, pairing PENDING (owner) | Universal Bridge as helper |
+| 2 Rust BLE HID → iPad | own Bluetooth keyboard/mouse | **PASS** pairing, move, typing; clicks/scroll PENDING | Universal Bridge as helper |
 | 3 iPad + S24+ on one BLE link | one link, per-device input | PENDING (owner) | phone input over LAN |
 | 4 Return-edge feel | seamless switch back | PENDING (owner) | hotkey-only return |
 | 5 iroh transfer vs LocalSend | fast files on all three | 1 GiB loopback ✔ 64 MB/s; Wi-Fi PENDING (owner) | tune QUIC buffers |
@@ -49,7 +49,7 @@ Binary: `cargo run -p ble-hid -- <mode>`. **Quit Universal Bridge first** (only 
 |---|---|---|
 | Rust publishes HID service + advertises | `ble-hid check` | **PASS** 2026-11-03 after fix: MT7921 reports `Aborted` first, then `Started`; tool now waits 12 s like UB |
 | Clean shutdown | stop with Ctrl+C / `check` exits by itself | Required: force-killing a publisher wedged the MT7921 Bluetooth function once (fixed by Shift+Shutdown + 20 s power-button drain) |
-| iPad pairs, square + `hello` | iPad Settings → Bluetooth → this PC; `ble-hid demo` | PENDING (owner) |
+| iPad pairs, square + `hello` | iPad Settings → Bluetooth → this PC; `ble-hid demo` | **PASS** 2026-11-03: paired, pointer square + typing work |
 | Click, scroll | `ble-hid demo --clicks` | PENDING (owner) |
 | S24+ pairs too; only target moves | `ble-hid hosts`, then `demo --target <id>` per id | PENDING (owner) |
 | Both connected 10 min | leave `hosts` running | PENDING (owner) |
