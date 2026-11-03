@@ -89,6 +89,8 @@ fn edge(p: &HidPeripheral, args: &[String]) {
     thread::spawn(move || capture::run(tx, remote_right, Duration::from_millis(300)));
     eprintln!("host {host}: push the pointer through the {} edge", if remote_right { "right" } else { "left" });
 
+    let interval = Duration::from_millis(p.report_interval_ms(&host));
+    eprintln!("motion report interval: {} ms (from BLE connection interval)", interval.as_millis());
     let mut held = HeldInput::default();
     let mut last_check = Instant::now();
     let release = |held: &mut HeldInput| {
@@ -104,41 +106,43 @@ fn edge(p: &HidPeripheral, args: &[String]) {
             let _ = GetCursorPos(&mut pt);
             let _ = SetCursorPos(if remote_right { w - 20 } else { 20 }, pt.y);
         }
-        eprintln!("back on Windows");
+        let (n, avg, max) = p.take_stats();
+        eprintln!("back on Windows ({n} reports, notify avg {avg:.1} ms, max {max:.1} ms)");
     };
 
+    // Motion is paced: accumulate deltas, send at most one report per connection interval
+    // (Universal Bridge's approach). Clicks/keys/wheel go out immediately after pending motion.
+    let (mut mx, mut my) = (0, 0);
+    let mut next_motion = Instant::now();
     loop {
-        let Ok(first) = rx.recv_timeout(Duration::from_millis(500)) else {
-            if capture::SUPPRESS.load(Ordering::SeqCst) && !p.hosts().contains(&host) { release(&mut held); }
-            continue;
-        };
-        // Coalesce queued moves so a slow BLE notify doesn't build a backlog.
-        let mut batch = vec![first];
-        while let Ok(i) = rx.try_recv() { batch.push(i); }
-        let (mut mx, mut my) = (0, 0);
-        for i in batch {
-            match i {
-                Input::Move(dx, dy) => { mx += dx; my += dy; }
-                other => {
-                    flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, &release);
-                    match other {
-                        Input::Enter => {
-                            tracker.enter();
-                            send_move(p, &host, 0, tracker.pin_delta(), 0);
-                            eprintln!("on device");
-                        }
-                        // after an escape, queued remote events are stale: drop them
-                        Input::Button { .. } | Input::Key { .. } | Input::Wheel(_) if !capture::SUPPRESS.load(Ordering::SeqCst) => {}
-                        Input::Button { mask, down } => { p.send_mouse(&host, MouseReport { buttons: held.button(mask, down), ..Default::default() }); }
-                        Input::Wheel(w) => { p.send_mouse(&host, MouseReport { wheel: w, ..Default::default() }); }
-                        Input::Key { vk, down } => { p.send_keyboard(&host, if down { held.key_down(vk) } else { held.key_up(vk) }); }
-                        Input::Escape => release(&mut held),
-                        Input::Move(..) => unreachable!(),
+        let wait = if mx != 0 || my != 0 { next_motion.saturating_duration_since(Instant::now()) } else { Duration::from_millis(500) };
+        match rx.recv_timeout(wait) {
+            Ok(Input::Move(dx, dy)) => { mx += dx; my += dy; }
+            Ok(other) => {
+                flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, &release);
+                match other {
+                    Input::Enter => {
+                        tracker.enter();
+                        send_move(p, &host, 0, tracker.pin_delta(), 0);
+                        let _ = p.take_stats();
+                        eprintln!("on device");
                     }
+                    // after an escape, queued remote events are stale: drop them
+                    Input::Button { .. } | Input::Key { .. } | Input::Wheel(_) if !capture::SUPPRESS.load(Ordering::SeqCst) => {}
+                    Input::Button { mask, down } => { p.send_mouse(&host, MouseReport { buttons: held.button(mask, down), ..Default::default() }); }
+                    Input::Wheel(w) => { p.send_mouse(&host, MouseReport { buttons: held.button(0, true), wheel: w, ..Default::default() }); }
+                    Input::Key { vk, down } => { p.send_keyboard(&host, if down { held.key_down(vk) } else { held.key_up(vk) }); }
+                    Input::Escape => release(&mut held),
+                    Input::Move(..) => unreachable!(),
                 }
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, &release);
+        if (mx != 0 || my != 0) && Instant::now() >= next_motion {
+            flush(p, &host, &mut tracker, &mut held, &mut mx, &mut my, &release);
+            next_motion = Instant::now() + interval;
+        }
         if last_check.elapsed() > Duration::from_millis(500) {
             last_check = Instant::now();
             if capture::SUPPRESS.load(Ordering::SeqCst) && !p.hosts().contains(&host) { release(&mut held); }

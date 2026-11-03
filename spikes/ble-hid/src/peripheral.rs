@@ -1,11 +1,11 @@
 //! Windows as a BLE HID keyboard+mouse (HOGP server). GATT layout mirrors Universal Bridge's
 //! BleHidTransport (MIT). Notifications always target exactly one subscribed host.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}};
 
 use bridge_core::hid::{KeyboardReport, MouseReport, REPORT_MAP};
 use windows::{
-    Devices::Bluetooth::{BluetoothAdapter, BluetoothError, GenericAttributeProfile::*},
+    Devices::Bluetooth::{BluetoothAdapter, BluetoothError, BluetoothLEDevice, GenericAttributeProfile::*},
     Foundation::TypedEventHandler,
     Security::Cryptography::CryptographicBuffer,
     Storage::Streams::IBuffer,
@@ -28,6 +28,9 @@ pub struct HidPeripheral {
     mouse: GattLocalCharacteristic,
     /// Every characteristic stays referenced for the provider's lifetime, as Universal Bridge does.
     _keep: Vec<GattLocalCharacteristic>,
+    stats_n: AtomicU64,
+    stats_us: AtomicU64,
+    stats_max_us: AtomicU64,
 }
 
 impl HidPeripheral {
@@ -102,7 +105,7 @@ impl HidPeripheral {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         eprintln!("advertising: Started");
-        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds] })
+        Ok(Self { _provider: provider, keyboard, mouse, _keep: vec![info, map, control, leds], stats_n: AtomicU64::new(0), stats_us: AtomicU64::new(0), stats_max_us: AtomicU64::new(0) })
     }
 
     /// Device ids of hosts subscribed to both keyboard and mouse reports.
@@ -116,7 +119,34 @@ impl HidPeripheral {
         both
     }
 
+    /// Pacing for motion reports: one per BLE connection event, like Universal Bridge (8–100 ms).
+    pub fn report_interval_ms(&self, host: &str) -> u64 {
+        let interval = BluetoothLEDevice::FromIdAsync(&HSTRING::from(host))
+            .and_then(|op| op.join())
+            .and_then(|d| d.GetConnectionParameters())
+            .and_then(|c| c.ConnectionInterval());
+        match interval { Ok(units) => ((units as f64 * 1.25).ceil() as u64).clamp(8, 100), Err(_) => 8 }
+    }
+
+    /// (reports sent, average ms, max ms) since the last call — how long each BLE notify blocked.
+    pub fn take_stats(&self) -> (u64, f64, f64) {
+        let n = self.stats_n.swap(0, Ordering::Relaxed);
+        let total = self.stats_us.swap(0, Ordering::Relaxed);
+        let max = self.stats_max_us.swap(0, Ordering::Relaxed);
+        (n, if n == 0 { 0.0 } else { total as f64 / n as f64 / 1000.0 }, max as f64 / 1000.0)
+    }
+
     fn notify(&self, c: &GattLocalCharacteristic, host: &str, bytes: &[u8]) -> bool {
+        let t0 = std::time::Instant::now();
+        let ok = self.notify_inner(c, host, bytes);
+        let us = t0.elapsed().as_micros() as u64;
+        self.stats_n.fetch_add(1, Ordering::Relaxed);
+        self.stats_us.fetch_add(us, Ordering::Relaxed);
+        self.stats_max_us.fetch_max(us, Ordering::Relaxed);
+        ok
+    }
+
+    fn notify_inner(&self, c: &GattLocalCharacteristic, host: &str, bytes: &[u8]) -> bool {
         let Ok(clients) = c.SubscribedClients() else { return false };
         let target = HSTRING::from(host);
         for client in clients {
