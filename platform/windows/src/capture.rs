@@ -15,7 +15,7 @@ use windows::{
         UI::{
             Input::{
                 GetRawInputData, HRAWINPUT, KeyboardAndMouse::VK_ESCAPE, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
-                RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEMOUSE, RegisterRawInputDevices,
+                RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
             },
             WindowsAndMessaging::*,
         },
@@ -42,6 +42,34 @@ pub fn unhook() {
     for h in [&KB_HOOK, &MS_HOOK] {
         let v = h.swap(0, Ordering::SeqCst);
         if v != 0 { unsafe { let _ = UnhookWindowsHookEx(HHOOK(v as _)); } }
+    }
+}
+
+/// Diagnostics, logged at most once a second from WM_INPUT: calls, worst lag (event time → callback)
+/// and worst callback time. Raw keyboard input is the witness: keys Windows saw, hooked or not.
+struct HookStats { calls: AtomicU32, lag_ms: AtomicU32, busy_us: AtomicU32 }
+static KB_STATS: HookStats = HookStats { calls: AtomicU32::new(0), lag_ms: AtomicU32::new(0), busy_us: AtomicU32::new(0) };
+static MS_STATS: HookStats = HookStats { calls: AtomicU32::new(0), lag_ms: AtomicU32::new(0), busy_us: AtomicU32::new(0) };
+static RAW_COUNT: AtomicU32 = AtomicU32::new(0);
+static RAW_KB: AtomicU32 = AtomicU32::new(0);
+static mut LAST_STATS: Option<Instant> = None;
+
+fn record(s: &HookStats, event_time: u32, start: Instant) {
+    s.calls.fetch_add(1, Ordering::Relaxed);
+    s.lag_ms.fetch_max(unsafe { windows::Win32::System::SystemInformation::GetTickCount() }.wrapping_sub(event_time).min(60_000), Ordering::Relaxed);
+    s.busy_us.fetch_max(start.elapsed().as_micros() as u32, Ordering::Relaxed);
+}
+
+fn log_stats() {
+    let take = |s: &HookStats| (s.calls.swap(0, Ordering::Relaxed), s.lag_ms.swap(0, Ordering::Relaxed), s.busy_us.swap(0, Ordering::Relaxed));
+    let (kb, ms, raw, raw_kb) = (take(&KB_STATS), take(&MS_STATS), RAW_COUNT.swap(0, Ordering::Relaxed), RAW_KB.swap(0, Ordering::Relaxed));
+    let suppress = SUPPRESS.load(Ordering::SeqCst);
+    let skipped = raw_kb > 0 && kb.0 == 0;
+    if suppress || skipped || kb.1 > 100 || ms.1 > 100 || kb.2 > 50_000 || ms.2 > 50_000 {
+        crate::diag::log(format_args!(
+            "stats suppress={suppress} kb calls={} lag={}ms busy={}us raw_kb={raw_kb}{} | ms calls={} lag={}ms busy={}us | raw={raw} | fg {}",
+            kb.0, kb.1, kb.2, if skipped { " HOOK SKIPPED" } else { "" }, ms.0, ms.1, ms.2, crate::diag::foreground()
+        ));
     }
 }
 
@@ -79,7 +107,8 @@ pub fn start(tx: Sender<Input>) -> CaptureHandle {
         RegisterClassW(&class);
         let hwnd = CreateWindowExW(Default::default(), w!("ctp-capture"), w!(""), Default::default(), 0, 0, 0, 0, Some(HWND_MESSAGE), None, Some(hinst.into()), None).unwrap();
         let dev = RAWINPUTDEVICE { usUsagePage: 0x01, usUsage: 0x02, dwFlags: RIDEV_INPUTSINK, hwndTarget: hwnd };
-        RegisterRawInputDevices(&[dev], size_of::<RAWINPUTDEVICE>() as u32).unwrap();
+        let kb = RAWINPUTDEVICE { usUsage: 0x06, ..dev };
+        RegisterRawInputDevices(&[dev, kb], size_of::<RAWINPUTDEVICE>() as u32).unwrap();
         KB_HOOK.store(SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook), Some(hinst.into()), 0).unwrap().0 as isize, Ordering::SeqCst);
         MS_HOOK.store(SetWindowsHookExW(WH_MOUSE_LL, Some(ms_hook), Some(hinst.into()), 0).unwrap().0 as isize, Ordering::SeqCst);
         crate::diag::log("hooks installed");
@@ -111,13 +140,15 @@ static mut WHEEL_ACC: (i32, i32) = (0, 0);
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg != WM_INPUT { return unsafe { DefWindowProcW(hwnd, msg, wp, lp) } }
     unsafe {
+        if LAST_STATS.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) { LAST_STATS = Some(Instant::now()); log_stats(); }
         let mut raw = RAWINPUT::default();
         let mut size = size_of::<RAWINPUT>() as u32;
-        if GetRawInputData(HRAWINPUT(lp.0 as _), RID_INPUT, Some(&mut raw as *mut _ as _), &mut size, size_of::<RAWINPUTHEADER>() as u32) == u32::MAX
-            || raw.header.dwType != RIM_TYPEMOUSE.0
-        {
+        if GetRawInputData(HRAWINPUT(lp.0 as _), RID_INPUT, Some(&mut raw as *mut _ as _), &mut size, size_of::<RAWINPUTHEADER>() as u32) == u32::MAX {
             return LRESULT(0);
         }
+        if raw.header.dwType == RIM_TYPEKEYBOARD.0 { RAW_KB.fetch_add(1, Ordering::Relaxed); return LRESULT(0) }
+        if raw.header.dwType != RIM_TYPEMOUSE.0 { return LRESULT(0) }
+        RAW_COUNT.fetch_add(1, Ordering::Relaxed);
         let m = raw.data.mouse;
         // Pens, touchscreens and remote-desktop sessions report absolute positions: not deltas.
         if m.usFlags.0 & MOUSE_MOVE_ABSOLUTE != 0 { return LRESULT(0) }
@@ -157,8 +188,22 @@ fn back_to_windows(event: Input) -> LRESULT {
     LRESULT(1)
 }
 
-#[allow(static_mut_refs)]
 unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let start = Instant::now();
+    let r = unsafe { kb_hook_inner(code, wp, lp) };
+    if code == HC_ACTION as i32 { record(&KB_STATS, unsafe { (*(lp.0 as *const KBDLLHOOKSTRUCT)).time }, start) }
+    r
+}
+
+unsafe extern "system" fn ms_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let start = Instant::now();
+    let r = unsafe { ms_hook_inner(code, wp, lp) };
+    if code == HC_ACTION as i32 { record(&MS_STATS, unsafe { (*(lp.0 as *const MSLLHOOKSTRUCT)).time }, start) }
+    r
+}
+
+#[allow(static_mut_refs)]
+unsafe fn kb_hook_inner(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if code == HC_ACTION as i32 {
             let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
@@ -190,7 +235,7 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
     }
 }
 
-unsafe extern "system" fn ms_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+unsafe fn ms_hook_inner(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if code == HC_ACTION as i32 {
             let suppress = SUPPRESS.load(Ordering::SeqCst);

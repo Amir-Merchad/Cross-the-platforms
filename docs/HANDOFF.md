@@ -23,6 +23,16 @@ In `ctp-app.exe` (Tauri tray app), while the iPad is in control: **keyboard neve
 - The diagnostic build now logs: `hooks installed`, `hooks removed`, `PANIC on thread …`, and every `kb hook: down suppress=… -> Verdict`. **Next step:** have the owner run `target\debug\ctp-app.exe`, wait for iPad connected, Ctrl+Alt+1, type, move mouse, Ctrl+Alt+Q (or BT off), quit from tray; then read `%APPDATA%\CrossThePlatforms\engine.log`.
   - No `kb hook:` lines at all → hook never/no longer installed → look for `hooks removed`/`PANIC`.
   - `kb hook` lines with `suppress=false` while active → SUPPRESS cleared (unhook) → find who called it.
+- **Update 2026-11-03 (4 device runs): PARKED by the owner, intermittent, not root-caused.**
+  - 3 of 4 runs clean (hotkey and edge entry, typing, Esc×3, Ctrl+Alt+Q all fine). Run 2 failed: iPad entered by edge 5 s after launch,
+    and `kb_hook` was **never called** from launch until ~79 s (no `kb hook` lines at all, incl. two iPad sessions), then worked normally.
+    No `hooks removed`, no `PANIC` → (a) panic-unhook and (b) Windows removing the hook are both **ruled out**; Windows skipped the hook.
+    Mouse kept working (Raw Input), so the capture thread was pumping — not a hung thread.
+  - Not UIPI in the clean runs (fg never elevated). Touchpad, not a high-rate mouse. Hook lag 0 ms, callback < 3 ms in all logged seconds.
+  - Only remaining difference spotted: in run 2 Notepad really had focus; clean runs had `claude.exe` focused. Untested.
+  - Uncommitted diag in worktree `ctp-windows-hub-input-bug-b2c51e`: per-second hook stats + foreground exe/elevation, and a raw-keyboard
+    witness that logs `HOOK SKIPPED` when Windows delivers keys our hook never saw (swallowed keys never reach raw input, so raw keys = skip).
+  - Proposed safety net (not built): raw key-**down** while SUPPRESS → return to Windows + reinstall hooks, so the first key press frees you.
 - Follow superpowers:systematic-debugging (one hypothesis at a time; this is fix attempt #2 after `a22f2fe`).
 - Likely fixes once confirmed: only unhook in the panic hook for panics on the capture/engine threads (name them); detect a dead hook (no hook callbacks while WM_INPUT arrives) and reinstall; move work out of the hook thread; test in a **release** build of the app.
 
