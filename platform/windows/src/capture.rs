@@ -23,7 +23,7 @@ use windows::{
     core::w,
 };
 
-use crate::keys::{KeyGate, Verdict};
+use crate::keys::{HookWitness, KeyGate, Verdict};
 
 /// While true, local input is swallowed and forwarded to the active device.
 pub static SUPPRESS: AtomicBool = AtomicBool::new(false);
@@ -146,7 +146,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         if GetRawInputData(HRAWINPUT(lp.0 as _), RID_INPUT, Some(&mut raw as *mut _ as _), &mut size, size_of::<RAWINPUTHEADER>() as u32) == u32::MAX {
             return LRESULT(0);
         }
-        if raw.header.dwType == RIM_TYPEKEYBOARD.0 { RAW_KB.fetch_add(1, Ordering::Relaxed); return LRESULT(0) }
+        if raw.header.dwType == RIM_TYPEKEYBOARD.0 {
+            RAW_KB.fetch_add(1, Ordering::Relaxed);
+            let k = raw.data.keyboard;
+            let (vk, down) = (sided_vk(k.VKey, k.MakeCode, k.Flags), k.Flags & RI_KEY_BREAK == 0);
+            // Windows skips LL hooks while our own window has focus. Raw input still arrives, so a key the
+            // hook never saw is routed here: the device still gets it and Esc ×3 / Ctrl+Alt+Q still work.
+            // (Raw input can't swallow it, so the focused Windows window also receives it.)
+            if WITNESS.lock().unwrap().raw_was_skipped(vk, down, now_ms(), SUPPRESS.load(Ordering::SeqCst)) {
+                if down { crate::diag::log("raw fallback: key the hook never saw"); }
+                route_key(vk, down);
+            }
+            return LRESULT(0)
+        }
         if raw.header.dwType != RIM_TYPEMOUSE.0 { return LRESULT(0) }
         RAW_COUNT.fetch_add(1, Ordering::Relaxed);
         let m = raw.data.mouse;
@@ -202,36 +214,74 @@ unsafe extern "system" fn ms_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
     r
 }
 
+static WITNESS: Mutex<HookWitness> = Mutex::new(HookWitness::new());
+static CLOCK: OnceLock<Instant> = OnceLock::new();
+fn now_ms() -> u64 { CLOCK.get_or_init(Instant::now).elapsed().as_millis() as u64 }
+
+const RI_KEY_BREAK: u16 = 0x01;
+const RI_KEY_E0: u16 = 0x02;
+
+/// Raw input reports generic Shift/Ctrl/Alt; the gate and HID map need the left/right codes the hook sees.
+fn sided_vk(vk: u16, make: u16, flags: u16) -> u16 {
+    match vk {
+        0x10 => if make == 0x36 { 0xA1 } else { 0xA0 },
+        0x11 => if flags & RI_KEY_E0 != 0 { 0xA3 } else { 0xA2 },
+        0x12 => if flags & RI_KEY_E0 != 0 { 0xA5 } else { 0xA4 },
+        v => v,
+    }
+}
+
+/// Key routing shared by the hook and the raw-input fallback. True = keep the key from Windows.
 #[allow(static_mut_refs)]
+fn route_key(vk: u16, down: bool) -> bool {
+    let suppress = SUPPRESS.load(Ordering::SeqCst);
+    let verdict = KB_GATE.lock().unwrap().on_key(vk, down, suppress);
+    match verdict {
+        Verdict::PassToWindows => false,
+        Verdict::Hotkey(0) => { back_to_windows(Input::Hotkey(0)); true }
+        Verdict::Hotkey(n) => { send(Input::Hotkey(n)); true }
+        Verdict::Drop => true,
+        Verdict::Remote => unsafe {
+            if down && vk == VK_ESCAPE.0 {
+                ESC_TIMES.rotate_left(1);
+                ESC_TIMES[2] = Some(Instant::now());
+                if ESC_TIMES[0].is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+                    ESC_TIMES = [None; 3];
+                    back_to_windows(Input::Escape);
+                    return true;
+                }
+            }
+            send(Input::Key { vk, down });
+            true
+        },
+    }
+}
+
 unsafe fn kb_hook_inner(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         if code == HC_ACTION as i32 {
             let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
             let down = matches!(wp.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             let vk = k.vkCode as u16;
-            let suppress = SUPPRESS.load(Ordering::SeqCst);
-            let verdict = KB_GATE.lock().unwrap().on_key(vk, down, suppress);
-            if down { crate::diag::log(format_args!("kb hook: down suppress={suppress} -> {verdict:?}")); }
-            match verdict {
-                Verdict::PassToWindows => {}
-                Verdict::Hotkey(0) => return back_to_windows(Input::Hotkey(0)),
-                Verdict::Hotkey(n) => { send(Input::Hotkey(n)); return LRESULT(1) }
-                Verdict::Drop => return LRESULT(1),
-                Verdict::Remote => {
-                    if down && vk == VK_ESCAPE.0 {
-                        ESC_TIMES.rotate_left(1);
-                        ESC_TIMES[2] = Some(Instant::now());
-                        if ESC_TIMES[0].is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
-                            ESC_TIMES = [None; 3];
-                            return back_to_windows(Input::Escape);
-                        }
-                    }
-                    send(Input::Key { vk, down });
-                    return LRESULT(1);
-                }
-            }
+            WITNESS.lock().unwrap().hook_saw(vk, down, now_ms());
+            if route_key(vk, down) { return LRESULT(1) }
         }
         CallNextHookEx(None, code, wp, lp)
+    }
+}
+
+/// Windows skips our keyboard hook while one of our own windows has focus, so before a device takes
+/// control, focus moves to the desktop if it's ours.
+pub fn release_own_focus() {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    unsafe {
+        let fg = GetForegroundWindow();
+        let mut pid = 0;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        if pid == GetCurrentProcessId() {
+            let _ = SetForegroundWindow(GetShellWindow());
+            crate::diag::log("moved focus off our own window before taking control");
+        }
     }
 }
 

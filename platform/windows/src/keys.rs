@@ -67,6 +67,28 @@ impl KeyGate {
     }
 }
 
+/// Tells raw keyboard input the hook never saw (Windows skips LL hooks while our own window has focus)
+/// from input the hook let through. A key the hook swallowed never reaches raw input at all.
+pub struct HookWitness { seen: [[u64; 2]; 256] }
+
+impl Default for HookWitness { fn default() -> Self { Self::new() } }
+
+/// The hook runs before raw input is generated; anything older than this wasn't this event.
+const WITNESS_WINDOW_MS: u64 = 100;
+
+impl HookWitness {
+    pub const fn new() -> Self { Self { seen: [[u64::MAX; 2]; 256] } }
+
+    pub fn hook_saw(&mut self, vk: u16, down: bool, now_ms: u64) { self.seen[(vk & 0xFF) as usize][down as usize] = now_ms; }
+
+    /// True when a device is in control and this raw key event never went through the hook.
+    pub fn raw_was_skipped(&self, vk: u16, down: bool, now_ms: u64, suppress: bool) -> bool {
+        if !suppress { return false }
+        let t = self.seen[(vk & 0xFF) as usize][down as usize];
+        t == u64::MAX || now_ms.saturating_sub(t) > WITNESS_WINDOW_MS
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +186,27 @@ mod tests {
         g.set_hotkey_count(2);
         g.on_key(LCTRL, true, false); g.on_key(LALT, true, false);
         assert_eq!(g.on_key(0x33, true, false), Verdict::PassToWindows);
+    }
+    // Hook-skip safety net: Windows skips our LL hook while our own window has focus; raw input still arrives.
+    #[test] fn key_seen_by_hook_is_not_skipped() {
+        let mut w = HookWitness::default();
+        w.hook_saw(0x41, true, 1000);
+        assert!(!w.raw_was_skipped(0x41, true, 1010, true));
+    }
+    #[test] fn key_unseen_while_remote_is_skipped() {
+        assert!(HookWitness::default().raw_was_skipped(0x41, true, 1000, true));
+    }
+    #[test] fn key_unseen_while_local_is_left_alone() {
+        assert!(!HookWitness::default().raw_was_skipped(0x41, true, 1000, false));
+    }
+    #[test] fn old_sighting_does_not_count() {
+        let mut w = HookWitness::default();
+        w.hook_saw(0x41, true, 0);
+        assert!(w.raw_was_skipped(0x41, true, 500, true));
+    }
+    #[test] fn press_and_release_are_tracked_separately() {
+        let mut w = HookWitness::default();
+        w.hook_saw(0x41, true, 1000);
+        assert!(w.raw_was_skipped(0x41, false, 1010, true));
     }
 }

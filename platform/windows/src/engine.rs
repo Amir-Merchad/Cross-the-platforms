@@ -180,7 +180,10 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
 
         for a in actions {
             match a {
-                Action::Suppress(on) => capture::SUPPRESS.store(on, Ordering::SeqCst),
+                Action::Suppress(on) => {
+                    if on { capture::release_own_focus(); }
+                    capture::SUPPRESS.store(on, Ordering::SeqCst);
+                }
                 Action::Mouse { host, report } => { peripheral.send_mouse(&host, report); }
                 Action::Keyboard { host, report } => {
                     // Keep order: once something is queued for this host, queue behind it.
