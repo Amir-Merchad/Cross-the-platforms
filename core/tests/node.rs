@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bridge_core::{identity::{Peer, PeerKind}, node::{CTL_ALPN, Event, Node, NodeConfig}};
+use bridge_core::{identity::{Peer, PeerKind}, node::{CTL_ALPN, Event, Node, NodeConfig, SendOutcome}, outbox::Outbox};
 use tempfile::TempDir;
 use tokio::{sync::mpsc::Receiver, time::timeout};
 
@@ -15,8 +15,10 @@ async fn wait_for(rx: &mut Receiver<Event>, f: impl Fn(&Event) -> bool) -> Event
     timeout(Duration::from_secs(15), async { loop { let e = rx.recv().await.expect("node stopped"); if f(&e) { return e } } }).await.expect("timed out")
 }
 
-async fn paired() -> ((Node, Receiver<Event>, TempDir), (Node, Receiver<Event>, TempDir)) {
-    let (mut a, mut b) = (node("Laptop", PeerKind::Windows).await, node("S24+", PeerKind::Android).await);
+async fn paired() -> ((Node, Receiver<Event>, TempDir), (Node, Receiver<Event>, TempDir)) { paired_with(PeerKind::Android).await }
+
+async fn paired_with(kind: PeerKind) -> ((Node, Receiver<Event>, TempDir), (Node, Receiver<Event>, TempDir)) {
+    let (mut a, mut b) = (node("Laptop", PeerKind::Windows).await, node("S24+", kind).await);
     let peer = b.0.join(&a.0.invite()).await.unwrap();
     assert_eq!(peer.id, a.0.id());
     wait_for(&mut a.1, |e| matches!(e, Event::Paired(p) if p.name == "S24+")).await;
@@ -137,4 +139,64 @@ async fn failed_send_is_reported_to_the_sender_window() { // final review I3
     assert!(matches!(e, Event::Failed { reason, .. } if reason.contains("not paired")));
     assert!(c.send_files(&a.id(), vec![src.path().join("missing.pdf")]).await.is_err());
     wait_for(&mut crx, |e| matches!(e, Event::Failed { .. })).await;
+}
+
+async fn restart(d: &TempDir, name: &str, kind: PeerKind) -> (Node, Receiver<Event>) {
+    Node::start(NodeConfig { data_dir: d.path().join("data"), receive_dir: d.path().join("in"), me: Peer { id: String::new(), name: name.into(), kind } }).await.unwrap()
+}
+
+#[tokio::test]
+async fn send_to_closed_ipad_queues_and_arrives_on_next_start() { // Review Focus 1
+    let ((pc, mut pcrx, _dp), (ipad, _irx, di)) = paired_with(PeerKind::Ipad).await;
+    let ipad_id = ipad.id();
+    ipad.shutdown().await;
+    let src = tempfile::tempdir().unwrap();
+    let f = write(src.path(), "notes.pdf", 500_000, 6);
+    assert!(matches!(pc.send_or_queue(&ipad_id, vec![f.clone()]).await.unwrap(), SendOutcome::Queued));
+    wait_for(&mut pcrx, |e| matches!(e, Event::Queued { files: 1, .. })).await;
+    let (_ipad2, mut irx2) = restart(&di, "S24+", PeerKind::Ipad).await;
+    let got = received(&mut irx2, 1).await;
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
+}
+
+#[tokio::test]
+async fn queue_survives_a_pc_restart() { // Review Focus 1
+    let ((pc, mut pcrx, dp), (ipad, _irx, di)) = paired_with(PeerKind::Ipad).await;
+    let ipad_id = ipad.id();
+    ipad.shutdown().await;
+    let src = tempfile::tempdir().unwrap();
+    let f = write(src.path(), "notes.pdf", 500_000, 7);
+    assert!(matches!(pc.send_or_queue(&ipad_id, vec![f.clone()]).await.unwrap(), SendOutcome::Queued));
+    wait_for(&mut pcrx, |e| matches!(e, Event::Queued { .. })).await;
+    pc.shutdown().await;
+    let (_pc2, _pcrx2) = restart(&dp, "Laptop", PeerKind::Windows).await;
+    let (_ipad2, mut irx2) = restart(&di, "S24+", PeerKind::Ipad).await;
+    let got = received(&mut irx2, 1).await;
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
+}
+
+#[tokio::test]
+async fn missing_queued_file_fails_alone() { // Review Focus 2
+    let ((pc, mut pcrx, dp), (ipad, _irx, di)) = paired_with(PeerKind::Ipad).await;
+    let ipad_id = ipad.id();
+    ipad.shutdown().await;
+    let src = tempfile::tempdir().unwrap();
+    let (a, b) = (write(src.path(), "a.pdf", 1000, 8), write(src.path(), "b.pdf", 2000, 9));
+    for f in [&a, &b] { assert!(matches!(pc.send_or_queue(&ipad_id, vec![f.clone()]).await.unwrap(), SendOutcome::Queued)); }
+    std::fs::remove_file(&a).unwrap();
+    let (_ipad2, mut irx2) = restart(&di, "S24+", PeerKind::Ipad).await;
+    wait_for(&mut pcrx, |e| matches!(e, Event::Failed { .. })).await;
+    let got = received(&mut irx2, 1).await;
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&b).unwrap());
+    assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&ipad_id), 0);
+}
+
+#[tokio::test]
+async fn closed_android_peer_is_not_queued() {
+    let ((pc, _pcrx, dp), (phone, _prx, _dd)) = paired().await;
+    let phone_id = phone.id();
+    phone.shutdown().await;
+    let src = tempfile::tempdir().unwrap();
+    assert!(pc.send_or_queue(&phone_id, vec![write(src.path(), "x.bin", 10, 10)]).await.is_err());
+    assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&phone_id), 0);
 }

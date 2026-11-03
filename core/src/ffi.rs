@@ -40,6 +40,7 @@ pub enum FfiEvent {
     Received { from: String, path: String, size: u64 },
     Failed { id: u64, reason: String },
     Clip { from: String, text: String },
+    Queued { peer: String, files: u64 },
 }
 
 impl From<Event> for FfiEvent {
@@ -51,6 +52,7 @@ impl From<Event> for FfiEvent {
             Event::Received { from, path, size } => FfiEvent::Received { from, path: path.to_string_lossy().into_owned(), size },
             Event::Failed { id, reason } => FfiEvent::Failed { id, reason },
             Event::Clip { from, text } => FfiEvent::Clip { from, text },
+            Event::Queued { peer, files } => FfiEvent::Queued { peer, files: files as u64 },
         }
     }
 }

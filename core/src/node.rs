@@ -2,7 +2,7 @@
 //! paired peers may use (clipboard text, file offers). File bytes travel separately (see `bulk`).
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
@@ -17,7 +17,8 @@ use tokio::{sync::{mpsc, oneshot}, task::JoinHandle, time::timeout};
 
 use crate::{
     bulk::{self, BulkListener},
-    identity::{PairedPeers, Peer, load_or_create_key},
+    identity::{PairedPeers, Peer, PeerKind, load_or_create_key},
+    outbox::Outbox,
     pairing::{self, PAIR_ALPN, PairInvite, PendingCode},
     transfer::fast_transport,
 };
@@ -31,6 +32,8 @@ const FALLBACK_WAIT: Duration = Duration::from_secs(30);
 /// Nodes tell their paired peers where they can be reached (iroh has no LAN discovery).
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a send to an iPad waits for it before queueing instead.
+const IPAD_PROBE: Duration = Duration::from_secs(5);
 /// Big enough for a long clipboard text, small enough that a peer can't exhaust memory.
 const MAX_CTL_LINE: usize = 4 << 20;
 
@@ -56,7 +59,11 @@ pub enum Event {
     Received { from: String, path: PathBuf, size: u64 },
     Failed { id: u64, reason: String },
     Clip { from: String, text: String },
+    /// A send to an unreachable iPad is waiting on this device until it comes back.
+    Queued { peer: String, files: usize },
 }
+
+pub enum SendOutcome { Sent(u64), Queued }
 
 pub struct NodeConfig { pub data_dir: PathBuf, pub receive_dir: PathBuf, pub me: Peer }
 
@@ -77,6 +84,9 @@ pub(crate) struct Inner {
     /// Accepted offers waiting for the sender's iroh fallback stream: id → (sender id, hand-off).
     waiting: Mutex<HashMap<u64, (String, oneshot::Sender<IrohStream>)>>,
     test_bulk_addrs: Mutex<Option<Vec<SocketAddr>>>,
+    outbox: Mutex<Outbox>,
+    /// Peers whose queued batches are going out right now (two quick `Hello`s must not double-send).
+    flushing: Mutex<HashSet<String>>,
 }
 
 type IrohStream = (Connection, SendStream, RecvStream);
@@ -102,6 +112,7 @@ impl Node {
             addrs: Mutex::new(addrs), addrs_path,
             pending: Mutex::new(None), events: tx, tasks: Mutex::new(Vec::new()),
             waiting: Mutex::new(HashMap::new()), test_bulk_addrs: Mutex::new(None),
+            outbox: Mutex::new(Outbox::load(&cfg.data_dir.join("outbox.json"))), flushing: Mutex::new(HashSet::new()),
         });
         let node = Node { inner: inner.clone() };
         let accept = tokio::spawn(accept_loop(ep, Arc::downgrade(&inner)));
@@ -167,6 +178,35 @@ impl Node {
         self.send_files_as(id, peer_id, paths).await.inspect_err(|reason| {
             let _ = self.inner.events.try_send(Event::Failed { id, reason: reason.clone() });
         })
+    }
+
+    /// Like `send_files`, but a closed iPad (iPadOS suspends apps) isn't an error: the batch waits
+    /// here and goes out when its node next says `Hello`. Other peers are sent to directly.
+    pub async fn send_or_queue(&self, peer_id: &str, paths: Vec<PathBuf>) -> Result<SendOutcome, String> {
+        let ipad = self.peers().iter().any(|p| p.id == peer_id && p.kind == PeerKind::Ipad);
+        if ipad && !matches!(timeout(IPAD_PROBE, self.send_ctl(peer_id, &[])).await, Ok(Ok(_))) {
+            let files = paths.len();
+            self.inner.outbox.lock().unwrap().add(peer_id, paths)?;
+            let _ = self.inner.events.send(Event::Queued { peer: peer_id.to_string(), files }).await;
+            return Ok(SendOutcome::Queued);
+        }
+        self.send_files(peer_id, paths).await.map(SendOutcome::Sent)
+    }
+
+    /// Sends what waited for `peer_id`, oldest first. A batch that fails already reports
+    /// `Event::Failed`; one that fails because the peer is gone again goes back, with the rest.
+    async fn flush_outbox(&self, peer_id: &str) {
+        if self.inner.outbox.lock().unwrap().pending(peer_id) == 0 || !self.inner.flushing.lock().unwrap().insert(peer_id.to_string()) { return }
+        let batches = self.inner.outbox.lock().unwrap().take(peer_id).unwrap_or_default();
+        let mut batches = batches.into_iter();
+        while let Some(paths) = batches.next() {
+            if matches!(self.send_files(peer_id, paths.clone()).await, Err(e) if e.starts_with("device not reachable")) {
+                let mut o = self.inner.outbox.lock().unwrap();
+                for b in std::iter::once(paths).chain(batches) { let _ = o.add(peer_id, b); }
+                break;
+            }
+        }
+        self.inner.flushing.lock().unwrap().remove(peer_id);
     }
 
     async fn send_files_as(&self, id: u64, peer_id: &str, paths: Vec<PathBuf>) -> Result<u64, String> {
@@ -351,7 +391,12 @@ impl Node {
     /// Handles one control message from a paired peer; returns the reply line, if any.
     async fn on_ctl(&self, from: &str, msg: Ctl) -> Option<Ctl> {
         match msg {
-            Ctl::Hello { addr } => { self.inner.remember_addr(from, addr); None }
+            Ctl::Hello { addr } => {
+                self.inner.remember_addr(from, addr);
+                let (node, from) = (self.clone(), from.to_string());
+                tokio::spawn(async move { node.flush_outbox(&from).await });
+                None
+            }
             Ctl::Clip { text } => { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; None }
             Ctl::Offer { id, files } => Some(self.accept_offer(from, id, files).await),
             Ctl::Accept { .. } | Ctl::Reject { .. } => None,
