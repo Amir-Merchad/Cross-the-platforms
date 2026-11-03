@@ -34,7 +34,7 @@ If it can't see the iPad: `set USBMUXD_SOCKET_ADDRESS=127.0.0.1:27015`.
 | iPad → PC text | `idevice-tools pasteboard paste` | **PASS** (plain text + RTF items present) |
 | PC → iPad, emoji/non-Latin | `pasteboard copy "héllo 👋 مرحبا from Windows"` | **PASS**, identical in Notes |
 | Change notifications | `idevice-tools pasteboard watch`, copy 3× on iPad | PENDING (owner) |
-| Image | copy screenshot, `pasteboard items`, `pasteboard resolve <i> public.png --out shot.png` | PENDING (owner) |
+| Image | copy screenshot, `pasteboard items --policy promised`, `pasteboard resolve 0 public.png --out shot.png` | **PASS** 2026-11-03: valid 2732×2048 PNG (544 KB); HEIC/JPEG also offered (items are *promised*, resolved on demand) |
 | After 5 min locked | repeat `paste` | PENDING (owner) |
 | Two-way sync spike | `cargo run --release -p ipad-clip` | **PASS** 2026-11-03: both directions, "instant" |
 | Over Wi-Fi | `pair`, then `--host <ip> --pairing-file <file>` (file stays out of git) | PENDING (owner) |
