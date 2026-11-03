@@ -20,5 +20,5 @@ iPad: Developer Mode on, same Wi-Fi as the laptop.
 | iPad off Wi-Fi → status says so → back on → reconnects by itself | PENDING |
 | iPad reboot → unlock once → disk image remounted, sync back (note if USB was needed) | PENDING |
 | Laptop reboot → sync works without opening the app | PENDING |
-| Keyboard/mouse sharing still works while clipboard syncs | PENDING |
+| Keyboard/mouse sharing still works while clipboard syncs | **PASS** 2026-11-03 (build 0d45c13): "mouse, keyboard and copy-paste run smoothly" |
 | `engine.log` has no clipboard text | **PASS** 2026-11-03: only sizes (`clip image -> Windows (22380544 bytes)`) |
