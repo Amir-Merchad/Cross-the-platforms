@@ -103,8 +103,8 @@ Built by `.github/workflows/ios-spike.yml` on a GitHub macOS runner (unsigned). 
 | Check | How | Result |
 |---|---|---|
 | CI builds unsigned `Spike.ipa` | push to `core/**` or `spikes/ios-app/**` | **PASS** 2026-11-03 (run 41549281512); copy in `spikes/ios-app/dist/` |
-| Sideload | SideStore or AltStore on Windows, free Apple account, install `Spike.ipa` | PENDING (owner) |
-| iPad receives PDF/video | app → Start receiving → Copy my ticket → `bridge-send` | PENDING (owner) |
+| Sideload | iloader v2.4.1 (Windows, uses Apple Devices' usbmux) → SideStore **0.7.0** (0.6.4 and older: sign-in broken) → iloader "Import IPA" | **PASS** 2026-11-04. AltStore PAL (EU) doesn't help: needs Apple-notarized apps (paid account) |
+| iPad receives | ticket read from the iPad clipboard via `idevice` | **PASS** 2026-11-04: PC→iPad 200 MB in 2.64 s = **79.3 MB/s**, hash verified |
 | PDF opens from Files → On My iPad → CTP Spike | | PENDING (owner) |
-| iPad sends both | `bridge-recv` + paste ticket | PENDING (owner) |
+| iPad sends | ticket put on the iPad clipboard via `idevice` | **PASS** 2026-11-04: 46.5 MB video arrived intact (iPad-side speed: see note) |
 | Same files with LocalSend | time it | PENDING (owner) |
