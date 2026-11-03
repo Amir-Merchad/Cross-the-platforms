@@ -1217,8 +1217,11 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "bridge-core",
+ "idevice",
+ "mdns-sd",
  "serde",
  "serde_json",
+ "tokio",
  "windows",
 ]
 

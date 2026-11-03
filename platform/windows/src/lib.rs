@@ -4,6 +4,7 @@ pub mod capture;
 pub mod clipboard;
 pub mod diag;
 pub mod engine;
+pub mod ipad;
 pub mod keys;
 pub mod monitors;
 pub mod peripheral;
