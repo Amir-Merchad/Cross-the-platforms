@@ -24,11 +24,10 @@ matters), no Mac, free Apple ID, uses it daily while studying. No merge / PR / p
 
 ## 3. Branches (all stacked; nothing merged into `main` yet)
 ```
-main ── v1/windows-hub-input (04c6a13, pushed) ── v1/clipboard (2b73b7b, pushed) ── v1/transfer (local only!)
+main ── v1/windows-hub-input (04c6a13, pushed) ── v1/clipboard (2b73b7b, pushed) ── v1/transfer (c60b197+, pushed)
 ```
 - **`v1/transfer`** is the newest and contains everything. It lives in the worktree
-  `C:\dev\Cross-the-platforms\.claude\worktrees\ctp-windows-hub-input-bug-b2c51e`. **Not pushed yet** — push it as a backup:
-  `git push -u origin v1/transfer` (run inside the worktree).
+  `C:\dev\Cross-the-platforms\.claude\worktrees\ctp-windows-hub-input-bug-b2c51e`. Pushed to `origin`.
 - `main` = foundation + spikes (PR #1, merged by the owner).
 - To finish v1 cleanly: open PRs in order `v1/windows-hub-input → main`, then `v1/clipboard`, then `v1/transfer` (each
   based on the previous), or one PR of `v1/transfer → main` with all ~50 commits. Owner decides.
@@ -81,10 +80,9 @@ build from the new place and start it once so autostart follows.
 - Debug builds only so far; no installer, no code signing.
 
 ## 7. Remaining work to the finished product, in order
-### 7.1 Finish plan 3 (transfer) — device checks still open (`docs/v1/checklist-transfer.md`)
-2 pairing survives both reboots · 3 same QR again → "used" · 4 code after 5 min → "expired" · 9 phone Wi-Fi off mid-transfer →
-no complete-looking file, error on both sides · 10 block `ctp-app.exe` inbound in Windows Firewall → still arrives (iroh) ·
-13 phone reboot, don't open Bridge → receives · and **share 5 files at once from the phone** (verifies final-review fix I4).
+### 7.1 Finish plan 3 (transfer) — DONE (owner closed it 2026-11-04)
+Owner skipped the open device checks, so these stay **untested**: rows 2, 3, 4, 9, 10, 13 of `docs/v1/checklist-transfer.md` and the
+5-file share from the phone (final-review fix I4). If pairing, cut-off, firewall fallback or boot receive misbehaves, start there.
 
 ### 7.2 Deferred minors from plan 3's final review (do any time; each is small)
 1. `node.rs` `on_ctl` Hello: ignore `Hello{addr}` unless `addr.id == from`.
@@ -143,6 +141,7 @@ pairing keys and iroh relay already work over the internet (QR carries the relay
 - adb: `$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe`; `MSYS_NO_PATHCONV=1` for device paths.
 - Don't read `%APPDATA%\CrossThePlatforms\ipad\rp-pairing.plist` (secret; existence checks only). Apple ID password only typed by
   the owner into tools, never in chat.
+- `.gitignore` has `pairing*` for secrets, with exceptions for `core/src/pairing.rs` and `core/tests/pairing.rs`. New files named `pairing*` need an exception too. Never run `git clean -X` here without checking.
 - Local-only (not in git): `C:\dev\_ref\` (Universal Bridge + idevice clones, DDI in `ddi\`, pairing records).
 - Many tool calls need the sandbox disabled (gh push, Bluetooth, Gradle loopback, pnpm install, adb).
 - `[profile.dev.package."*"] opt-level = 2`: a fresh target dir takes ~20 min for the Tauri app, ~9 min for cargo-ndk.
