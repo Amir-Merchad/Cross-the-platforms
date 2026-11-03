@@ -72,11 +72,12 @@ impl HidPeripheral {
         let map = make(0x2A4B, GattCharacteristicProperties::Read, Some(REPORT_MAP))?;
         let control = make(0x2A4C, GattCharacteristicProperties::WriteWithoutResponse, None)?;
         control.WriteRequested(&TypedEventHandler::new(|_, args: windows::core::Ref<GattWriteRequestedEventArgs>| {
-            if let Some(a) = args.as_ref() { respond_write(a); }
+            if let Some(a) = args.as_ref() { respond_write(a, Some("control point")); }
             Ok(())
         }))?;
 
         let keyboard = make(0x2A4D, GattCharacteristicProperties::Read | GattCharacteristicProperties::Notify, None)?;
+        log_subscriptions(&keyboard, "keyboard")?;
         reference(&keyboard, 1, 1)?;
         respond_reads(&keyboard, vec![0; 8])?;
 
@@ -84,11 +85,12 @@ impl HidPeripheral {
         reference(&leds, 1, 2)?;
         respond_reads(&leds, vec![0])?;
         leds.WriteRequested(&TypedEventHandler::new(|_, args: windows::core::Ref<GattWriteRequestedEventArgs>| {
-            if let Some(a) = args.as_ref() { respond_write(a); }
+            if let Some(a) = args.as_ref() { respond_write(a, Some("LED report")); }
             Ok(())
         }))?;
 
         let mouse = make(0x2A4D, GattCharacteristicProperties::Read | GattCharacteristicProperties::Notify, None)?;
+        log_subscriptions(&mouse, "mouse")?;
         reference(&mouse, 2, 1)?;
         respond_reads(&mouse, vec![0; 7])?;
 
@@ -195,6 +197,10 @@ impl HidPeripheral {
         let t0 = std::time::Instant::now();
         let ok = self.notify_inner(c, host, bytes);
         let us = t0.elapsed().as_micros() as u64;
+        let kind = if c == &self.keyboard { "keyboard" } else { "mouse" };
+        if !ok { crate::diag::log(format_args!("{kind} send FAILED to {host} ({} ms)", us / 1000)); }
+        else if kind == "keyboard" { crate::diag::log(format_args!("keyboard send ok to {host} ({} ms)", us / 1000)); }
+        else if us > 30_000 { crate::diag::log(format_args!("mouse send slow to {host}: {} ms", us / 1000)); }
         self.stats_n.fetch_add(1, Ordering::Relaxed);
         self.stats_us.fetch_add(us, Ordering::Relaxed);
         self.stats_max_us.fetch_max(us, Ordering::Relaxed);
@@ -240,10 +246,27 @@ fn respond_reads(c: &GattLocalCharacteristic, value: Vec<u8>) -> Result<()> {
     Ok(())
 }
 
-fn respond_write(a: &GattWriteRequestedEventArgs) {
+fn log_subscriptions(c: &GattLocalCharacteristic, kind: &'static str) -> Result<()> {
+    c.SubscribedClientsChanged(&TypedEventHandler::new(move |c: windows::core::Ref<GattLocalCharacteristic>, _| {
+        if let Some(c) = c.as_ref() {
+            let ids: Vec<String> = c.SubscribedClients().map(|v| v.into_iter().filter_map(|s| s.Session().ok()?.DeviceId().ok()?.Id().ok().map(|i| i.to_string())).collect()).unwrap_or_default();
+            crate::diag::log(format_args!("{kind} subscribers now {ids:?}"));
+        }
+        Ok(())
+    }))?;
+    Ok(())
+}
+
+fn respond_write(a: &GattWriteRequestedEventArgs, what: Option<&str>) {
     let _ = (|| -> Result<()> {
         let _d = a.GetDeferral()?;
         let req = a.GetRequestAsync()?.join()?;
+        if let Some(what) = what {
+            let mut bytes = windows::core::Array::<u8>::new();
+            CryptographicBuffer::CopyToByteArray(&req.Value()?, &mut bytes)?;
+            let host = a.Session()?.DeviceId()?.Id()?;
+            crate::diag::log(format_args!("{what} write from {host}: {:?}", &bytes[..]));
+        }
         if req.Option()? == GattWriteOption::WriteWithResponse { req.Respond()?; }
         Ok(())
     })();

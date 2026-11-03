@@ -143,13 +143,21 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             for id in &ids {
                 let up = peripheral.connected(id);
                 if up && !connected.contains(id) {
+                    crate::diag::log(format_args!("{id} connected; keyboard subscribed: {}", peripheral.keyboard_ready(id)));
                     let ms = peripheral.report_interval_ms(id);
                     intervals.insert(id.clone(), ms);
                     router.set_interval(id, ms);
                     if let Some(req) = peripheral.request_fast(id) { fast.insert(id.clone(), req); }
                     names.entry(id.clone()).or_insert_with(|| peripheral.host_name(id));
                 }
+                if !up && connected.contains(id) { crate::diag::log(format_args!("{id} disconnected")); }
                 if up { connected.insert(id.clone()); } else { connected.remove(id); fast.remove(id); }
+                if up && intervals.get(id).is_some_and(|&ms| ms != peripheral.report_interval_ms(id)) {
+                    let ms = peripheral.report_interval_ms(id);
+                    crate::diag::log(format_args!("{id} interval now {ms} ms"));
+                    intervals.insert(id.clone(), ms);
+                    router.set_interval(id, ms);
+                }
             }
             actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
             for id in &ids {
@@ -182,7 +190,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     }
                 }
                 Action::PlaceCursor(x, y) => unsafe { let _ = SetCursorPos(x, y); },
-                Action::Active(a) => { status.active = a; status.notice = None; }
+                Action::Active(a) => { crate::diag::log(format_args!("active -> {a:?}")); status.active = a; status.notice = None; }
                 Action::Notice(n) => status.notice = Some(n),
             }
         }

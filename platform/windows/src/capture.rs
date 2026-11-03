@@ -37,6 +37,7 @@ pub fn set_hotkey_count(n: u8) { KB_GATE.lock().unwrap().set_hotkey_count(n); }
 
 /// Removes the hooks and gives input back to Windows. Safe to call more than once.
 pub fn unhook() {
+    if KB_HOOK.load(Ordering::SeqCst) != 0 { crate::diag::log("hooks removed"); }
     SUPPRESS.store(false, Ordering::SeqCst);
     for h in [&KB_HOOK, &MS_HOOK] {
         let v = h.swap(0, Ordering::SeqCst);
@@ -66,7 +67,11 @@ impl Drop for CaptureHandle { fn drop(&mut self) { self.stop() } }
 pub fn start(tx: Sender<Input>) -> CaptureHandle {
     *TX.get_or_init(|| Mutex::new(None)).lock().unwrap() = Some(tx);
     let prev = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| { unhook(); prev(info) }));
+    std::panic::set_hook(Box::new(move |info| {
+        crate::diag::log(format_args!("PANIC on thread {:?}: {info}", std::thread::current().name()));
+        unhook();
+        prev(info)
+    }));
     let thread = std::thread::spawn(|| unsafe {
         THREAD.store(GetCurrentThreadId(), Ordering::SeqCst);
         let hinst = GetModuleHandleW(None).unwrap();
@@ -77,6 +82,7 @@ pub fn start(tx: Sender<Input>) -> CaptureHandle {
         RegisterRawInputDevices(&[dev], size_of::<RAWINPUTDEVICE>() as u32).unwrap();
         KB_HOOK.store(SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook), Some(hinst.into()), 0).unwrap().0 as isize, Ordering::SeqCst);
         MS_HOOK.store(SetWindowsHookExW(WH_MOUSE_LL, Some(ms_hook), Some(hinst.into()), 0).unwrap().0 as isize, Ordering::SeqCst);
+        crate::diag::log("hooks installed");
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
@@ -159,7 +165,9 @@ unsafe extern "system" fn kb_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
             let down = matches!(wp.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             let vk = k.vkCode as u16;
             let suppress = SUPPRESS.load(Ordering::SeqCst);
-            match KB_GATE.lock().unwrap().on_key(vk, down, suppress) {
+            let verdict = KB_GATE.lock().unwrap().on_key(vk, down, suppress);
+            if down { crate::diag::log(format_args!("kb hook: down suppress={suppress} -> {verdict:?}")); }
+            match verdict {
                 Verdict::PassToWindows => {}
                 Verdict::Hotkey(0) => return back_to_windows(Input::Hotkey(0)),
                 Verdict::Hotkey(n) => { send(Input::Hotkey(n)); return LRESULT(1) }
