@@ -42,6 +42,8 @@ pub fn start(enabled: bool, on_status: impl Fn(ClipStatus) + Send + 'static) -> 
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         // Single-threaded on purpose: idevice futures don't prove Send, and nothing here needs more threads.
         tokio::task::LocalSet::new().block_on(&rt, run(enabled, rx, on_status));
+        // Don't let a pending mDNS lookup (up to 10 s, blocking pool) hold up Quit.
+        rt.shutdown_background();
     });
     ClipHandle { tx, thread: Some(thread) }
 }

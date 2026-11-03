@@ -7,7 +7,10 @@ mod tray;
 use std::sync::Mutex;
 
 use bridge_core::settings::Settings;
-use ctp_windows::engine::{self, EngineHandle, Status, settings_path};
+use ctp_windows::{
+    clipsync::{self, ClipHandle, ClipStatus},
+    engine::{self, EngineHandle, Status, settings_path},
+};
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
@@ -15,6 +18,8 @@ pub struct AppState {
     pub engine: Mutex<Option<EngineHandle>>,
     pub status: Mutex<Status>,
     pub settings: Mutex<Settings>,
+    pub clip: Mutex<Option<ClipHandle>>,
+    pub clip_status: Mutex<ClipStatus>,
 }
 
 fn main() {
@@ -23,9 +28,10 @@ fn main() {
         // A second launch just opens the existing settings window.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_window(app)))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
-        .manage(AppState { engine: Mutex::new(None), status: Mutex::new(Status::default()), settings: Mutex::new(settings.clone()) })
+        .manage(AppState { engine: Mutex::new(None), status: Mutex::new(Status::default()), settings: Mutex::new(settings.clone()), clip: Mutex::new(None), clip_status: Mutex::new(ClipStatus::default()) })
         .invoke_handler(tauri::generate_handler![
-            commands::get_settings, commands::save_settings, commands::get_status, commands::list_monitors, commands::switch_to
+            commands::get_settings, commands::save_settings, commands::get_status, commands::list_monitors, commands::switch_to,
+            commands::get_clip_status, commands::set_clipboard_sync, commands::pair_ipad
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -42,6 +48,14 @@ fn main() {
                 }
             };
             *app.state::<AppState>().engine.lock().unwrap() = Some(engine::start(settings.clone(), on_status));
+            let on_clip = {
+                let handle = handle.clone();
+                move |s: ClipStatus| {
+                    *handle.state::<AppState>().clip_status.lock().unwrap() = s.clone();
+                    let _ = handle.emit("clip-status", s);
+                }
+            };
+            *app.state::<AppState>().clip.lock().unwrap() = Some(clipsync::start(settings.clipboard_sync, on_clip));
             Ok(())
         })
         // Closing the window hides it; the app keeps running in the tray.

@@ -12,6 +12,7 @@ export interface Settings {
   entry_hold_ms: number;
   start_with_windows: boolean;
   remote_width: Record<string, number>;
+  clipboard_sync: boolean;
 }
 export interface Rect { left: number; top: number; right: number; bottom: number }
 export interface Monitor { id: string; rect: Rect }
@@ -27,5 +28,13 @@ export const getStatus = () => invoke<Status>("get_status");
 export const listMonitors = () => invoke<Monitor[]>("list_monitors");
 export const switchTo = (deviceId: string | null) => invoke<void>("switch_to", { deviceId });
 export const onStatus = (cb: (s: Status) => void): Promise<UnlistenFn> => listen<Status>("status", (e) => cb(e.payload));
+
+export type IpadStatus = "NotPaired" | "Connecting" | { Connected: { wifi: boolean } } | { Unavailable: string };
+export interface ClipStatus { enabled: boolean; ipad: IpadStatus | null; synced: number; skipped_too_large: number; notice: string | null }
+
+export const getClipStatus = () => invoke<ClipStatus>("get_clip_status");
+export const setClipboardSync = (on: boolean) => invoke<void>("set_clipboard_sync", { on });
+export const pairIpad = () => invoke<void>("pair_ipad");
+export const onClipStatus = (cb: (s: ClipStatus) => void): Promise<UnlistenFn> => listen<ClipStatus>("clip-status", (e) => cb(e.payload));
 
 export const hostName = (s: Status | null, id: string) => s?.hosts.find((h) => h.id === id)?.name ?? id;

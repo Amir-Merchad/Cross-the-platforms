@@ -3,7 +3,7 @@
 use ctp_windows::engine::{Command, Status};
 use tauri::{
     AppHandle, Manager,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
@@ -55,6 +55,8 @@ fn build_menu(app: &AppHandle, s: &Status) -> tauri::Result<Menu<tauri::Wry>> {
     }
     menu.append(&MenuItem::with_id(app, "back", "Back to Windows", s.active.is_some(), None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
+    let clip_on = app.state::<AppState>().settings.lock().unwrap().clipboard_sync;
+    menu.append(&CheckMenuItem::with_id(app, "clipboard", "Clipboard sync", true, clip_on, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?)?;
     menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
     Ok(menu)
@@ -64,10 +66,15 @@ fn on_menu(app: &AppHandle, id: &str) {
     let state = app.state::<AppState>();
     match id {
         "settings" => show_window(app),
+        "clipboard" => {
+            let on = !state.settings.lock().unwrap().clipboard_sync;
+            let _ = crate::commands::set_clipboard_sync_now(app, on);
+        }
         "back" => { if let Some(e) = state.engine.lock().unwrap().as_ref() { e.send(Command::SwitchTo(None)); } }
         "quit" => {
             // Engine drop returns input to Windows and stops advertising before the process exits.
             drop(state.engine.lock().unwrap().take());
+            drop(state.clip.lock().unwrap().take());
             app.exit(0);
         }
         other => if let Some(host) = other.strip_prefix("switch:")
