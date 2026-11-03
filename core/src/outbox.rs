@@ -16,11 +16,17 @@ impl Outbox {
         self.save()
     }
 
-    /// Removes and returns `peer`'s batches, oldest first.
-    pub fn take(&mut self, peer: &str) -> Result<Vec<Vec<PathBuf>>, String> {
-        let b = self.batches.remove(peer).unwrap_or_default();
-        if !b.is_empty() { self.save()?; }
-        Ok(b)
+    /// `peer`'s oldest batch, still queued: `pop` it once it's delivered.
+    pub fn peek(&self, peer: &str) -> Option<Vec<PathBuf>> { self.batches.get(peer).and_then(|b| b.first().cloned()) }
+
+    /// Drops `peer`'s oldest batch.
+    pub fn pop(&mut self, peer: &str) -> Result<(), String> {
+        if let Some(b) = self.batches.get_mut(peer) {
+            if !b.is_empty() { b.remove(0); }
+            if b.is_empty() { self.batches.remove(peer); }
+            self.save()?;
+        }
+        Ok(())
     }
 
     pub fn pending(&self, peer: &str) -> usize { self.batches.get(peer).map_or(0, Vec::len) }
@@ -45,13 +51,17 @@ mod tests {
         o.add("ipad", vec!["b.pdf".into()]).unwrap();
         let mut o = Outbox::load(&p);
         assert_eq!(o.pending("ipad"), 2);
-        assert_eq!(o.take("ipad").unwrap(), vec![vec![PathBuf::from("a.pdf")], vec![PathBuf::from("b.pdf")]]);
-        assert_eq!(Outbox::load(&p).pending("ipad"), 0, "taken means gone from disk too");
+        assert_eq!(o.peek("ipad"), Some(vec![PathBuf::from("a.pdf")]));
+        assert_eq!(Outbox::load(&p).pending("ipad"), 2, "peeked is still on disk");
+        o.pop("ipad").unwrap();
+        assert_eq!(Outbox::load(&p).peek("ipad"), Some(vec![PathBuf::from("b.pdf")]));
+        o.pop("ipad").unwrap();
+        assert_eq!(Outbox::load(&p).pending("ipad"), 0, "popped means gone from disk too");
     }
     #[test] fn peers_are_separate() {
         let d = tempdir().unwrap(); let mut o = Outbox::load(&d.path().join("o.json"));
         o.add("a", vec!["x".into()]).unwrap();
-        assert!(o.take("b").unwrap().is_empty());
+        assert!(o.peek("b").is_none());
         assert_eq!(o.pending("a"), 1);
     }
     #[test] fn corrupt_file_starts_empty() {

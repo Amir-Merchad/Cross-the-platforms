@@ -31,6 +31,8 @@ const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 const FALLBACK_WAIT: Duration = Duration::from_secs(30);
 /// Nodes tell their paired peers where they can be reached (iroh has no LAN discovery).
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(60);
+/// Starts the `connect` error for a peer that didn't answer; `flush_outbox` keys on it.
+const NOT_REACHABLE: &str = "device not reachable";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a send to an iPad waits for it before queueing instead.
 const IPAD_PROBE: Duration = Duration::from_secs(5);
@@ -195,16 +197,18 @@ impl Node {
 
     /// Sends what waited for `peer_id`, oldest first. A batch that fails already reports
     /// `Event::Failed`; one that fails because the peer is gone again goes back, with the rest.
-    async fn flush_outbox(&self, peer_id: &str) {
+    #[doc(hidden)]
+    pub async fn flush_outbox(&self, peer_id: &str) {
         if self.inner.outbox.lock().unwrap().pending(peer_id) == 0 || !self.inner.flushing.lock().unwrap().insert(peer_id.to_string()) { return }
-        let batches = self.inner.outbox.lock().unwrap().take(peer_id).unwrap_or_default();
-        let mut batches = batches.into_iter();
-        while let Some(paths) = batches.next() {
-            if matches!(self.send_files(peer_id, paths.clone()).await, Err(e) if e.starts_with("device not reachable")) {
-                let mut o = self.inner.outbox.lock().unwrap();
-                for b in std::iter::once(paths).chain(batches) { let _ = o.add(peer_id, b); }
-                break;
+        // A batch leaves the disk only once its send is over, so a crash mid-flush loses nothing.
+        loop {
+            let Some(paths) = self.inner.outbox.lock().unwrap().peek(peer_id) else { break };
+            let id = random_id();
+            if let Err(reason) = self.send_files_as(id, peer_id, paths).await {
+                if reason.starts_with(NOT_REACHABLE) { break } // stays queued, not a failure
+                let _ = self.inner.events.send(Event::Failed { id, reason }).await;
             }
+            if self.inner.outbox.lock().unwrap().pop(peer_id).is_err() { break }
         }
         self.inner.flushing.lock().unwrap().remove(peer_id);
     }
@@ -266,7 +270,7 @@ impl Node {
             Ok(Err(e)) => e.to_string(),
             Err(_) => "no answer in 10 s".into(),
         };
-        Err(format!("device not reachable — saved address ({saved} paths, {first_ms} ms): {first}; lookup by id: {second}"))
+        Err(format!("{NOT_REACHABLE} — saved address ({saved} paths, {first_ms} ms): {first}; lookup by id: {second}"))
     }
 
     /// One control exchange: our `Hello`, then `msgs`; returns the peer's reply lines.
@@ -394,7 +398,8 @@ impl Node {
             Ctl::Hello { addr } => {
                 self.inner.remember_addr(from, addr);
                 let (node, from) = (self.clone(), from.to_string());
-                tokio::spawn(async move { node.flush_outbox(&from).await });
+                let task = tokio::spawn(async move { node.flush_outbox(&from).await });
+                self.inner.tasks.lock().unwrap().push(task);
                 None
             }
             Ctl::Clip { text } => { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; None }

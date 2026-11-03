@@ -200,3 +200,19 @@ async fn closed_android_peer_is_not_queued() {
     assert!(pc.send_or_queue(&phone_id, vec![write(src.path(), "x.bin", 10, 10)]).await.is_err());
     assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&phone_id), 0);
 }
+
+#[tokio::test]
+async fn batch_stays_queued_when_the_ipad_goes_away_mid_flush() { // Review Focus 1
+    let ((pc, mut pcrx, dp), (ipad, _irx, di)) = paired_with(PeerKind::Ipad).await;
+    let ipad_id = ipad.id();
+    ipad.shutdown().await;
+    let src = tempfile::tempdir().unwrap();
+    let f = write(src.path(), "notes.pdf", 1000, 11);
+    assert!(matches!(pc.send_or_queue(&ipad_id, vec![f.clone()]).await.unwrap(), SendOutcome::Queued));
+    pc.flush_outbox(&ipad_id).await; // the iPad said Hello, then vanished
+    assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&ipad_id), 1, "still on disk");
+    assert!(timeout(Duration::from_millis(300), async { loop { if let Some(Event::Failed { .. }) = pcrx.recv().await { return } } }).await.is_err(), "going away is not a failure");
+    let (_ipad2, mut irx2) = restart(&di, "S24+", PeerKind::Ipad).await;
+    let got = received(&mut irx2, 1).await;
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
+}
