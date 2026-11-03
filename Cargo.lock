@@ -619,6 +619,7 @@ name = "bridge-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "image",
  "iroh",
  "libc",
  "serde",
@@ -2856,6 +2857,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

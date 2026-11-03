@@ -67,6 +67,40 @@ impl Hub {
     }
 }
 
+/// PNG/JPEG/TIFF ⇄ canonical `Image`. Lossless both ways for PNG, so our own PNG echoing back hashes the same.
+pub mod codec {
+    use super::Image;
+
+    pub fn encode_png(img: &Image) -> Result<Vec<u8>, String> {
+        let buf = image::RgbaImage::from_raw(img.width, img.height, img.rgba.clone()).ok_or("image size doesn't match its pixels")?;
+        let mut out = Vec::new();
+        buf.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+        Ok(out)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Image, String> {
+        let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?.to_rgba8();
+        Ok(Image { width: img.width(), height: img.height(), rgba: img.into_raw() })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn sample() -> Image { Image { width: 3, height: 2, rgba: (0..24).map(|i| (i * 10) as u8).collect() } }
+        #[test] fn png_round_trip_is_identical() { // Review Focus 1: echo of our own PNG hashes the same
+            assert_eq!(decode(&encode_png(&sample()).unwrap()).unwrap(), sample());
+        }
+        #[test] fn decodes_jpeg_to_rgba() {
+            let mut jpg = Vec::new();
+            image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+            let img = decode(&jpg).unwrap();
+            assert_eq!((img.width, img.height, img.rgba.len()), (4, 4, 64));
+        }
+        #[test] fn garbage_is_an_error_not_a_panic() { assert!(decode(b"not an image").is_err()); }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
