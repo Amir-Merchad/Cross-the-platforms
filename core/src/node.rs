@@ -1,0 +1,280 @@
+//! A device on the network: persistent identity, paired peers, and the control channel that only
+//! paired peers may use (clipboard text, file offers). File bytes travel separately (see `bulk`).
+
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant},
+};
+
+use anyhow::Result;
+use iroh::{Endpoint, EndpointAddr, PublicKey, endpoint::{Connection, presets}};
+use serde::{Deserialize, Serialize};
+use tokio::{sync::mpsc, task::JoinHandle, time::timeout};
+
+use crate::{
+    identity::{PairedPeers, Peer, load_or_create_key},
+    pairing::{self, PAIR_ALPN, PairInvite, PendingCode},
+};
+
+pub const CTL_ALPN: &[u8] = b"ctp/ctl/1";
+/// Nodes tell their paired peers where they can be reached (iroh has no LAN discovery).
+const ANNOUNCE_EVERY: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Big enough for a long clipboard text, small enough that a peer can't exhaust memory.
+const MAX_CTL_LINE: usize = 4 << 20;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileMeta { pub name: String, pub size: u64 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "t")]
+pub enum Ctl {
+    Hello { addr: EndpointAddr },
+    Offer { id: u64, files: Vec<FileMeta> },
+    Accept { id: u64, tcp: Vec<SocketAddr>, cert_sha256: String },
+    Reject { id: u64, reason: String },
+    Clip { text: String },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Event {
+    Paired(Peer),
+    Incoming { from: String, files: Vec<FileMeta> },
+    Progress { id: u64, done: u64, total: u64 },
+    Received { from: String, path: PathBuf, size: u64 },
+    Failed { id: u64, reason: String },
+    Clip { from: String, text: String },
+}
+
+pub struct NodeConfig { pub data_dir: PathBuf, pub receive_dir: PathBuf, pub me: Peer }
+
+#[derive(Clone)]
+pub struct Node { inner: Arc<Inner> }
+
+pub(crate) struct Inner {
+    pub(crate) ep: Endpoint,
+    me: Peer,
+    #[allow(dead_code)] // used by file transfer (send_files)
+    pub(crate) receive_dir: PathBuf,
+    peers: Mutex<PairedPeers>,
+    peers_path: PathBuf,
+    addrs: Mutex<HashMap<String, EndpointAddr>>,
+    addrs_path: PathBuf,
+    pending: Mutex<Option<PendingCode>>,
+    pub(crate) events: mpsc::Sender<Event>,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        for t in self.tasks.lock().unwrap().drain(..) { t.abort(); }
+        let ep = self.ep.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() { rt.spawn(async move { ep.close().await }); }
+    }
+}
+
+impl Node {
+    pub async fn start(cfg: NodeConfig) -> Result<(Node, mpsc::Receiver<Event>)> {
+        let key = load_or_create_key(&cfg.data_dir.join("identity.key"))?;
+        let ep = bind_endpoint(key, &cfg.data_dir.join("port")).await?;
+        let (peers_path, addrs_path) = (cfg.data_dir.join("peers.json"), cfg.data_dir.join("addrs.json"));
+        let addrs = std::fs::read_to_string(&addrs_path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let (tx, rx) = mpsc::channel(1024);
+        let inner = Arc::new(Inner {
+            ep: ep.clone(), me: cfg.me, receive_dir: cfg.receive_dir,
+            peers: Mutex::new(PairedPeers::load(&peers_path)), peers_path,
+            addrs: Mutex::new(addrs), addrs_path,
+            pending: Mutex::new(None), events: tx, tasks: Mutex::new(Vec::new()),
+        });
+        let node = Node { inner: inner.clone() };
+        let accept = tokio::spawn(accept_loop(ep, Arc::downgrade(&inner)));
+        let weak = Arc::downgrade(&inner);
+        let announce = tokio::spawn(async move {
+            loop {
+                let Some(inner) = weak.upgrade() else { return };
+                Node { inner }.announce_all().await;
+                tokio::time::sleep(ANNOUNCE_EVERY).await;
+            }
+        });
+        inner.tasks.lock().unwrap().extend([accept, announce]);
+        Ok((node, rx))
+    }
+
+    /// Stops background tasks and closes the endpoint (frees the port for the next start).
+    pub async fn shutdown(&self) {
+        for t in self.inner.tasks.lock().unwrap().drain(..) { t.abort(); }
+        self.inner.ep.close().await;
+    }
+
+    pub fn id(&self) -> String { self.inner.ep.id().to_string() }
+    pub fn addr(&self) -> EndpointAddr { self.inner.ep.addr() }
+    pub fn peers(&self) -> Vec<Peer> { self.inner.peers.lock().unwrap().list().to_vec() }
+
+    pub fn forget(&self, id: &str) {
+        let mut p = self.inner.peers.lock().unwrap();
+        p.remove(id);
+        let _ = p.save(&self.inner.peers_path);
+    }
+
+    /// A fresh one-time invite (replaces any previous one) to show as a QR code.
+    pub fn invite(&self) -> PairInvite {
+        let pending = PendingCode::new(Instant::now());
+        let code = pending.code().to_string();
+        *self.inner.pending.lock().unwrap() = Some(pending);
+        PairInvite { v: 1, name: self.inner.me.name.clone(), addr: self.inner.ep.addr(), code }
+    }
+
+    /// Scans side: pair with the device that showed `invite`.
+    pub async fn join(&self, invite: &PairInvite) -> Result<Peer, String> {
+        let host = pairing::join(&self.inner.ep, invite, &self.inner.me).await?;
+        self.inner.remember_addr(&host.id, invite.addr.clone());
+        self.inner.add_peer(host.clone());
+        let node = self.clone();
+        let id = host.id.clone();
+        tokio::spawn(async move { let _ = node.send_ctl(&id, &[]).await; }); // tell the host where we are
+        Ok(host)
+    }
+
+    pub async fn send_clip(&self, peer_id: &str, text: String) -> Result<(), String> {
+        self.send_ctl(peer_id, &[Ctl::Clip { text }]).await.map(|_| ())
+    }
+
+    /// One control exchange: our `Hello`, then `msgs`; returns the peer's reply lines.
+    pub(crate) async fn send_ctl(&self, peer_id: &str, msgs: &[Ctl]) -> Result<Vec<Ctl>, String> {
+        if !self.inner.peers.lock().unwrap().contains(peer_id) { return Err("not paired with that device".into()) }
+        let addr = self.inner.addr_for(peer_id)?;
+        let conn = match timeout(CONNECT_TIMEOUT, self.inner.ep.connect(addr, CTL_ALPN)).await {
+            Ok(Ok(c)) => c,
+            // The saved address may be stale (new network, new IP): let n0 discovery find it.
+            _ => {
+                let id_only = PublicKey::from_str(peer_id).map(EndpointAddr::from).map_err(|e| format!("bad device id: {e}"))?;
+                timeout(CONNECT_TIMEOUT, self.inner.ep.connect(id_only, CTL_ALPN)).await
+                    .map_err(|_| "device not reachable".to_string())?.map_err(|e| format!("device not reachable: {e}"))?
+            }
+        };
+        let (mut s, mut r) = conn.open_bi().await.map_err(|e| e.to_string())?;
+        let mut out = String::new();
+        for m in std::iter::once(&Ctl::Hello { addr: self.inner.ep.addr() }).chain(msgs) {
+            out.push_str(&serde_json::to_string(m).map_err(|e| e.to_string())?);
+            out.push('\n');
+        }
+        s.write_all(out.as_bytes()).await.map_err(|e| e.to_string())?;
+        s.finish().map_err(|e| e.to_string())?;
+        let reply = r.read_to_end(MAX_CTL_LINE).await.map_err(|e| e.to_string())?;
+        conn.close(0u32.into(), b"");
+        Ok(reply.split(|&b| b == b'\n').filter(|l| !l.is_empty()).filter_map(|l| serde_json::from_slice(l).ok()).collect())
+    }
+
+    async fn announce_all(&self) {
+        for p in self.peers() { let _ = self.send_ctl(&p.id, &[]).await; }
+    }
+
+}
+
+impl Inner {
+    fn add_peer(&self, p: Peer) {
+        let mut peers = self.peers.lock().unwrap();
+        peers.add(p);
+        let _ = peers.save(&self.peers_path);
+    }
+
+    fn remember_addr(&self, id: &str, addr: EndpointAddr) {
+        let mut a = self.addrs.lock().unwrap();
+        if a.get(id) == Some(&addr) { return }
+        a.insert(id.to_string(), addr);
+        save_json(&self.addrs_path, &*a);
+    }
+
+    fn addr_for(&self, id: &str) -> Result<EndpointAddr, String> {
+        if let Some(a) = self.addrs.lock().unwrap().get(id) { return Ok(a.clone()) }
+        // No address yet: the id alone lets iroh look the device up via n0's discovery service.
+        PublicKey::from_str(id).map(EndpointAddr::from).map_err(|e| format!("bad device id: {e}"))
+    }
+
+    pub(crate) fn is_paired(&self, id: &str) -> bool { self.peers.lock().unwrap().contains(id) }
+}
+
+/// Binds on the port this device used last time, so the addresses its peers saved stay valid
+/// across restarts; a random port (saved for next time) if that one is taken.
+async fn bind_endpoint(key: iroh::SecretKey, port_file: &Path) -> Result<Endpoint> {
+    let alpns = vec![PAIR_ALPN.to_vec(), CTL_ALPN.to_vec()];
+    let saved: Option<u16> = std::fs::read_to_string(port_file).ok().and_then(|t| t.trim().parse().ok());
+    if let Some(port) = saved {
+        let fixed = Endpoint::builder(presets::N0).secret_key(key.clone()).alpns(alpns.clone()).clear_ip_transports()
+            .bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))
+            .and_then(|b| b.bind_addr(SocketAddr::from(([0u16; 8], port))));
+        if let Ok(b) = fixed && let Ok(ep) = b.bind().await { return Ok(ep) }
+    }
+    let ep = Endpoint::builder(presets::N0).secret_key(key).alpns(alpns).bind().await?;
+    if let Some(port) = ep.bound_sockets().iter().find(|a| a.is_ipv4()).map(|a| a.port()) {
+        if let Some(d) = port_file.parent() { let _ = std::fs::create_dir_all(d); }
+        let _ = std::fs::write(port_file, port.to_string());
+    }
+    Ok(ep)
+}
+
+fn save_json(path: &Path, v: &impl Serialize) {
+    if let Some(d) = path.parent() { let _ = std::fs::create_dir_all(d); }
+    if let Ok(t) = serde_json::to_string_pretty(v) { let _ = std::fs::write(path, t); }
+}
+
+async fn accept_loop(ep: Endpoint, inner: Weak<Inner>) {
+    while let Some(incoming) = ep.accept().await {
+        let inner = inner.clone();
+        tokio::spawn(async move {
+            let Ok(conn) = incoming.await else { return };
+            let Some(inner) = inner.upgrade() else { return };
+            let alpn = conn.alpn().to_vec();
+            if alpn == PAIR_ALPN { handle_pair(conn, &inner).await }
+            else if alpn == CTL_ALPN { handle_ctl(conn, Node { inner }).await }
+            else { conn.close(1u32.into(), b"unknown protocol") }
+        });
+    }
+}
+
+async fn handle_pair(conn: Connection, inner: &Inner) {
+    // Only while an invite is open; the code is taken out for the exchange and put back after.
+    let Some(mut pending) = inner.pending.lock().unwrap().take() else { conn.close(1u32.into(), b"no invite open"); return };
+    let me = inner.me.clone();
+    let result = pairing::answer(&conn, &mut pending, &me, Instant::now()).await;
+    *inner.pending.lock().unwrap() = Some(pending);
+    if let Ok(peer) = result {
+        inner.add_peer(peer.clone());
+        let _ = inner.events.send(Event::Paired(peer)).await;
+    }
+}
+
+async fn handle_ctl(conn: Connection, node: Node) {
+    let from = conn.remote_id().to_string();
+    if !node.inner.is_paired(&from) { conn.close(1u32.into(), b"not paired"); return }
+    let Ok((mut s, mut r)) = conn.accept_bi().await else { return };
+    let mut replies = String::new();
+    // The sender finishes its side after its messages: read all of it, then handle line by line.
+    let Ok(data) = r.read_to_end(MAX_CTL_LINE).await else { return };
+    for line in data.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+        let Ok(msg) = serde_json::from_slice::<Ctl>(line) else { break };
+        if let Some(reply) = node.on_ctl(&from, msg).await {
+            replies.push_str(&serde_json::to_string(&reply).unwrap_or_default());
+            replies.push('\n');
+        }
+    }
+    let _ = s.write_all(replies.as_bytes()).await;
+    let _ = s.finish();
+    let _ = timeout(Duration::from_secs(5), conn.closed()).await;
+}
+
+impl Node {
+    /// Handles one control message from a paired peer; returns the reply line, if any.
+    async fn on_ctl(&self, from: &str, msg: Ctl) -> Option<Ctl> {
+        match msg {
+            Ctl::Hello { addr } => { self.inner.remember_addr(from, addr); None }
+            Ctl::Clip { text } => { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; None }
+            Ctl::Offer { id, .. } => Some(Ctl::Reject { id, reason: "file transfer not supported yet".into() }),
+            Ctl::Accept { .. } | Ctl::Reject { .. } => None,
+        }
+    }
+}
