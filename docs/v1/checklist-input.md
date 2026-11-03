@@ -7,12 +7,12 @@ Stop `ctp-engine` with **Enter**; quit the app from the **tray → Quit** (never
 
 | Check | Result |
 |---|---|
-| Both hosts reconnect by themselves (`"connected":true`) | PENDING |
-| Right edge → iPad, deliberate push back → Windows | PENDING |
-| Left edge → S24+, deliberate push back → Windows | PENDING |
-| Ctrl+Alt+1 → iPad, Ctrl+Alt+2 → S24+, Ctrl+Alt+Q → Windows | PENDING |
-| Esc ×3 on a device → Windows | PENDING |
-| Shift held, iPad Bluetooth off → instant return, no stuck Shift | PENDING |
+| Both hosts reconnect by themselves (`"connected":true`) | **PASS** 2026-11-04 (pre-review build) |
+| Right edge → iPad, deliberate push back → Windows | **PASS** 2026-11-04 (pre-review build) |
+| Left edge → S24+, deliberate push back → Windows | **PASS** 2026-11-04 (pre-review build) |
+| Ctrl+Alt+1 → iPad, Ctrl+Alt+2 → S24+, Ctrl+Alt+Q → Windows | **PASS** 2026-11-04 (pre-review build) |
+| Esc ×3 on a device → Windows | **PASS** 2026-11-04 (pre-review build) |
+| Shift held, iPad Bluetooth off → instant return, no stuck Shift | **PASS** 2026-11-04 (pre-review build) |
 | Hold Shift on Windows, cross, release on the iPad, come back → Windows Shift not stuck | PENDING |
 | Hold Ctrl+Alt+1 for a second → enters once, no flicker | PENDING |
 | German layout: AltGr+7 types `{`, AltGr+Q types `@` (Windows and iPad), no switching | PENDING |
