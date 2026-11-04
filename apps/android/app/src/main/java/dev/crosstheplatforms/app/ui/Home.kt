@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +51,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -127,9 +129,10 @@ fun HoldToForget(label: String, onForget: () -> Unit, modifier: Modifier = Modif
                 awaitEachGesture {
                     awaitFirstDown()
                     held = true
-                    val up = withTimeoutOrNull(HOLD_TO_FORGET_MS) { waitForUpOrCancellation() }
+                    // true = the finger came up or the gesture was cancelled (a scroll took it); null = only the timeout.
+                    val ended = withTimeoutOrNull(HOLD_TO_FORGET_MS) { waitForUpOrCancellation(); true }
                     held = false
-                    if (up == null) { // the timeout won: still down after the full hold
+                    if (ended == null) {
                         onForget()
                         waitForUpOrCancellation()
                     }
@@ -160,6 +163,9 @@ private fun Line(left: String, right: String, rightColor: androidx.compose.ui.gr
 @Composable
 fun HomeScreen(
     pcName: String?, // null when no PC is paired
+    pcNames: List<String>, // every paired PC; a chooser shows when there are several
+    shown: Int,
+    onChoose: (Int) -> Unit,
     rows: List<TransferRow>,
     startFailed: Boolean,
     onSendFiles: () -> Unit,
@@ -188,6 +194,16 @@ fun HomeScreen(
             ) {
                 Text(if (pcName != null) displayName(pcName) else "No PC yet", style = Body.copy(fontWeight = FontWeight.SemiBold), color = p.onScreen)
                 Text(pcSub(paired, rows), style = Caption, color = p.onScreen.copy(alpha = 0.85f))
+            }
+            if (pcNames.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                pcNames.forEachIndexed { i, n ->
+                    val on = i == shown
+                    Box(
+                        Modifier.height(44.dp).clip(RoundedCornerShape(12.dp)).background(if (on) p.action else p.tray)
+                            .semantics { selected = on }.clickable(role = Role.Tab) { onChoose(i) }.padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(displayName(n), style = Body.copy(fontWeight = FontWeight.SemiBold), color = if (on) p.onAction else p.ink) }
+                }
             }
             if (moving != null) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(p.surface).padding(horizontal = 16.dp, vertical = 14.dp)) {
                 val rate = formatRate(moving.done, moving.now - moving.startedAt)

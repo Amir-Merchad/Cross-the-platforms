@@ -66,20 +66,6 @@ fun formatRate(bytes: Long, ms: Long): String {
     return if (perS >= 1e6) String.format(Locale.ROOT, "%.1f MB/s", perS / 1e6) else "${(perS / 1e3).roundToLong()} KB/s"
 }
 
-data class Line(val file: String, val who: String, val size: String, val result: String, val failed: Boolean)
-
-/** A history row in the owner's words. `peerName` is the device's display name, if it is known. */
-fun historyLine(r: Row, peerName: String?): Line {
-    val rate = formatRate(r.done, r.now - r.startedAt)
-    val result = when (r.state) {
-        RowState.FAILED -> plainError(r.reason ?: "")
-        RowState.REQUEUED -> "Waiting. It sends when Bridge opens there."
-        RowState.MOVING -> if (r.outgoing) "Sending" else "Receiving"
-        RowState.DONE -> if (r.outgoing) "Sent" + (if (rate == "—") "" else " at $rate") else "Received"
-    }
-    val who = if (r.peer.isEmpty()) "" else "${if (r.outgoing) "To" else "From"} ${displayName(peerName)}"
-    return Line(r.name, who, formatBytes(r.total), result, r.state == RowState.FAILED)
-}
 
 /**
  * The PC row's status. Reachability is not known to the phone (the hub derives it from Hello), so it reads
@@ -117,3 +103,6 @@ fun pcSub(paired: Boolean, rows: List<Row>): String {
 }
 
 fun ringName(r: Row): String = if (r.files > 1) "${r.name} and ${r.files - 1} more" else r.name
+
+/** Which PC Home shows: the chosen one if it is still paired, else the first. */
+fun chooseId(ids: List<String>, chosen: String?): String? = ids.firstOrNull { it == chosen } ?: ids.firstOrNull()

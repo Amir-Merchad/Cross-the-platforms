@@ -33,9 +33,10 @@ class MainActivity : ComponentActivity() {
         val app = App.get(this)
         val peers by app.peers.collectAsState()
         val rows by app.transfers.collectAsState()
-        val node by app.node.collectAsState()
-        val status by app.status.collectAsState()
-        val pc = App.pcs(peers).firstOrNull() // ponytail: one PC on Home; the share sheet still asks when there are several
+        val startFailed by app.startFailed.collectAsState()
+        var chosen by remember { mutableStateOf<String?>(null) }
+        val pcs = App.pcs(peers)
+        val pc = pcs.firstOrNull { it.id == chooseId(pcs.map { p -> p.id }, chosen) } // Send files, clipboard and Forget follow the PC shown
         var pairing by remember { mutableStateOf(false) }
         var pairMessage by remember { mutableStateOf<String?>(null) }
         var attempt by remember { mutableIntStateOf(0) }
@@ -68,10 +69,13 @@ class MainActivity : ComponentActivity() {
             onCancel = { pairing = false; pairMessage = null },
         ) else HomeScreen(
             pcName = pc?.name,
+            pcNames = pcs.map { it.name },
+            shown = pcs.indexOf(pc),
+            onChoose = { chosen = pcs[it].id },
             rows = rows,
-            startFailed = node == null && status.startsWith("Couldn't"),
+            startFailed = startFailed,
             onSendFiles = { pick.launch(arrayOf("*/*")) },
-            onSendClipboard = { app.sendClipboard(this) },
+            onSendClipboard = { app.sendClipboard(this, pc) },
             onPair = { pairing = true },
             onForget = { pc?.let { app.node.value?.forget(it.id); app.refreshPeers() } },
         )

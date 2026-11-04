@@ -51,3 +51,5 @@ Phone states are named as on the Mobile board. Check each in the phone's light a
 | 11 | sharePick | Pair two PCs, share files | "Send N files to", PCs as buttons, Cancel closes | |
 | 12 | Hold to forget | Tap once, then hold the button | A tap does nothing. Holding fills and forgets after about 1 second | |
 | 13 | Service, tile, boot | Reboot the phone | Notification returns, tile and receiving still work | |
+| 14 | A swipe that starts on the button does not forget | Put a finger on Hold to forget and scroll the page, or slide off the button, before 1 second | Nothing is forgotten | |
+| 15 | Several PCs | Pair two PCs | A chooser row appears on Home. Send files, Send clipboard and Forget act on the chosen PC. The tile still sends to all | |

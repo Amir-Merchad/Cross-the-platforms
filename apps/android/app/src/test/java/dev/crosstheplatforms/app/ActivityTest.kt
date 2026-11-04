@@ -75,22 +75,6 @@ class ActivityTest {
     private fun row(state: RowState = RowState.DONE, outgoing: Boolean = true, peer: String = "p", reason: String? = null) =
         Row(1, peer, outgoing, "a.txt", 1, 2_000_000, 2_000_000, 0, 1000, state, reason, 0)
 
-    @Test fun historyLineSentReceivedAndFailed() {
-        assertEquals(Line("a.txt", "To iPad Air", "2.0 MB", "Sent at 2.0 MB/s", false), historyLine(row(), "iPad Air"))
-        val got = historyLine(row(outgoing = false), "Galaxy")
-        assertEquals("From Galaxy", got.who)
-        assertEquals("Received", got.result)
-        assertEquals("Waiting. It sends when Bridge opens there.", historyLine(row(RowState.REQUEUED), "iPad Air").result)
-        val f = historyLine(row(RowState.FAILED, reason = "os error 5 at /secret/x"), "iPad Air")
-        assertTrue(f.failed)
-        assertFalse(f.result.contains("secret"))
-        assertTrue(f.result.contains("Send it again from the app you started in"))
-    }
-
-    @Test fun historyLineFailedRowWithNoPeerHasNoWho() {
-        assertEquals("", historyLine(row(RowState.FAILED, peer = "", reason = "x"), null).who)
-        assertEquals("To Unnamed device", historyLine(row(), " ").who)
-    }
 
     @Test fun statusSaysPairedAtRestAndNeverConnected() {
         assertEquals("Paired", statusLine(true, emptyList()))
@@ -142,5 +126,18 @@ class ActivityTest {
     @Test fun ringNameCountsTheOtherFiles() {
         assertEquals("a.txt", ringName(row(RowState.MOVING)))
         assertEquals("a.txt and 4 more", ringName(row(RowState.MOVING).copy(files = 5)))
+    }
+
+    @Test fun displayNameFallsBackWhenBlank() {
+        assertEquals("Unnamed device", displayName(" "))
+        assertEquals("Unnamed device", displayName(null))
+        assertEquals("Office PC", displayName(" Office PC "))
+    }
+
+    @Test fun shownPcIsTheChosenOneElseTheFirst() {
+        assertEquals("b", chooseId(listOf("a", "b"), "b"))
+        assertEquals("a", chooseId(listOf("a", "b"), "gone")) // forgotten or not chosen yet
+        assertEquals("a", chooseId(listOf("a", "b"), null))
+        assertEquals(null, chooseId(emptyList(), "a"))
     }
 }

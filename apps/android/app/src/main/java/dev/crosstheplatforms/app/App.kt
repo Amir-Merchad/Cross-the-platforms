@@ -39,7 +39,8 @@ class App : Application(), NodeEvents {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val node = MutableStateFlow<FfiNode?>(null)
     val peers = MutableStateFlow<List<FfiPeer>>(emptyList())
-    val status = MutableStateFlow("Starting…")
+    /** True once the node failed to start; the message is not kept, it can name paths. */
+    val startFailed = MutableStateFlow(false)
     private val history = MutableStateFlow<List<Row>>(emptyList())
 
     /** This session's transfers, folded from core events. Names stay in memory; they are never logged. */
@@ -69,9 +70,10 @@ class App : Application(), NodeEvents {
             val n = startNode(File(filesDir, "node").path, receiveDir.path, name, PeerKind.ANDROID, this)
             peers.value = n.peers()
             node.value = n
-            status.value = "Ready"
+            startFailed.value = false
         } catch (e: Exception) {
-            status.value = "Couldn't start: ${e.message}"
+            android.util.Log.w(TAG, "node start failed: ${e.javaClass.simpleName}")
+            startFailed.value = true
         }
     }
 
@@ -152,10 +154,10 @@ class App : Application(), NodeEvents {
     fun toast(s: String) = scope.launch(Dispatchers.Main) { Toast.makeText(this@App, s, Toast.LENGTH_SHORT).show() }
 
     /**
-     * Sends the clipboard text to every paired PC. Android only lets the foreground app read the clipboard,
+     * Sends the clipboard text to `target`, or to every paired PC when none is given (the tile). Android only lets the foreground app read the clipboard,
      * so call this from a focused activity (ClipActivity for the tile, MainActivity for the button). Never logs the text.
      */
-    fun sendClipboard(ctx: Context) {
+    fun sendClipboard(ctx: Context, target: FfiPeer? = null) {
         val text = ctx.getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
         if (text.isNullOrEmpty()) { toast("Clipboard is empty"); return }
         NodeService.start(ctx) // while still in the foreground
@@ -163,7 +165,7 @@ class App : Application(), NodeEvents {
             val t0 = System.nanoTime()
             try {
                 val node = node.filterNotNull().first()
-                val pcs = pcs(node.peers())
+                val pcs = target?.let { listOf(it) } ?: pcs(node.peers())
                 if (pcs.isEmpty()) toast("Pair with your PC first")
                 pcs.forEach { node.sendClip(it.id, text) }
                 android.util.Log.i(TAG, "clip sent to ${pcs.size} PC(s), ${text.length} chars, ${(System.nanoTime() - t0) / 1_000_000} ms")
