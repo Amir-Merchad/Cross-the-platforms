@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Mo
 import DeviceObject from "@/components/DeviceObject";
 import { useDeskMotion, type Target } from "@/components/useDeskMotion";
 import { switchTo, type Edge } from "@/lib/api";
-import { deskPlan, EDGES, edgeBar, hotkeyNumber, keyboardScreen, moveDevice, placedLine, placementChange, screenName, type Box } from "@/lib/desk";
+import { deskPlan, EDGES, edgeBar, edgeOpen, hotkeyNumber, keyboardScreen, moveDevice, placedLine, placementChange, screenName, type Box } from "@/lib/desk";
 import { deviceLook, type Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { progressPercent } from "@/lib/transfer";
@@ -57,7 +57,9 @@ export default function DeskMap({ over }: { over: string | null }) {
       e.preventDefault();
       if (!d.hostId) { say("It needs Bluetooth first."); return; }
       const monitorId = keyboardScreen(picked, d.placement, monitors);
-      if (monitorId) commit(d, { monitorId, edge });
+      if (!monitorId) return;
+      if (edgeOpen(monitors, monitorId, edge)) commit(d, { monitorId, edge });
+      else say(`Another screen sits on that side of ${screenName(monitors, monitorId)}. Pick a different edge.`);
     }
     if (e.key === "Delete" && d.placement) commit(d, null);
   };
@@ -89,7 +91,7 @@ export default function DeskMap({ over }: { over: string | null }) {
               Windows PC<div className="text-[13px] font-normal opacity-85">{screenName(monitors, id)}</div>
             </Screen>
             <div className="absolute h-3 w-[60px] rounded-b-lg bg-border" style={{ left: box.x + box.w / 2 - 30, top: box.y + box.h + 5 }} />
-            {lifted && EDGES.map((edge) => {
+            {lifted && EDGES.filter((edge) => edgeOpen(monitors, id, edge)).map((edge) => {
               const hot = near?.monitorId === id && near.edge === edge;
               const length = Math.min(edge === "Left" || edge === "Right" ? 140 : 180, along(box, edge));
               return <div key={edge} className="absolute rounded-[5px]" style={{ ...place(edgeBar(box, edge, 8, length, 4)), background: hot ? liftedDevice?.colour : "var(--edge)" }} />;

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Attachment, Monitor, Settings } from "./api";
-import { deskPlan, deviceSize, edgeBar, fileTarget, hotkeyNumber, keyboardScreen, magnet, moveDevice, nearestEdge, placedLine, placementChange, screenBoxes, slotFor } from "./desk";
+import { deskPlan, deviceSize, edgeBar, edgeOpen, fileTarget, hotkeyNumber, keyboardScreen, magnet, moveDevice, nearestEdge, placedLine, placementChange, screenBoxes, slotFor } from "./desk";
 import { forgetDevice, type Device } from "./devices";
 
 const a = (device_id: string, monitor_id: string, edge: Attachment["edge"]): Attachment => ({ device_id, monitor_id, edge });
@@ -10,8 +10,8 @@ const size = { w: 60, h: 40 };
 test("nearestEdge finds an edge within 170 and none beyond", () => {
   const right = slotFor(screens[0].box, "Right", size);
   const c = { x: right.x + 30, y: right.y + 20 };
-  expect(nearestEdge(c, size, screens)).toEqual({ monitorId: "M1", edge: "Right" });
-  expect(nearestEdge({ x: c.x + 1000, y: c.y }, size, screens)).toBeNull();
+  expect(nearestEdge(c, size, screens, [])).toEqual({ monitorId: "M1", edge: "Right" });
+  expect(nearestEdge({ x: c.x + 1000, y: c.y }, size, screens, [])).toBeNull();
 });
 
 test("moveDevice onto a taken edge swaps the two", () => {
@@ -125,4 +125,44 @@ test("keyboardScreen: the picked screen, else the device's own, else the first",
 test("placedLine uses the canvas wording", () => {
   expect(placedLine("iPad Air", "Screen 1", "Right", 1)).toBe("iPad Air sits right of Screen 1. Ctrl+Alt+1 jumps to it.");
   expect(placedLine("iPad Air", "Screen 2", "Top", 3)).toBe("iPad Air sits above Screen 2. Ctrl+Alt+3 jumps to it.");
+});
+
+const mon = (id: string, left: number, top: number, right: number, bottom: number): Monitor => ({ id, rect: { left, top, right, bottom } });
+
+test("edgeOpen: an edge fully covered by a neighbour hands the pointer over, so it is closed", () => {
+  const pair = [mon("A", 0, 0, 1000, 500), mon("B", 1000, 0, 2000, 500)];
+  expect(edgeOpen(pair, "A", "Right")).toBe(false);
+  expect(edgeOpen(pair, "B", "Left")).toBe(false);
+  expect(edgeOpen(pair, "A", "Left")).toBe(true);
+  expect(edgeOpen(pair, "A", "Top")).toBe(true);
+  const stacked = [mon("A", 0, 0, 1000, 500), mon("B", 0, 500, 1000, 1000)];
+  expect(edgeOpen(stacked, "A", "Bottom")).toBe(false);
+  expect(edgeOpen(stacked, "B", "Top")).toBe(false);
+});
+
+test("edgeOpen: a neighbour covering part of the edge leaves the rest enterable, as in layout::entry", () => {
+  const taller = [mon("A", 0, 0, 1000, 1000), mon("B", 1000, 0, 2000, 600)];
+  expect(edgeOpen(taller, "A", "Right")).toBe(true);
+  expect(edgeOpen(taller, "B", "Left")).toBe(false);
+});
+
+test("edgeOpen: two neighbours that together cover the edge close it, and a gap between them keeps it open", () => {
+  const covered = [mon("A", 0, 0, 1000, 1000), mon("B", 1000, 0, 2000, 500), mon("C", 1000, 500, 2000, 1000)];
+  expect(edgeOpen(covered, "A", "Right")).toBe(false);
+  const gap = [mon("A", 0, 0, 1000, 1000), mon("B", 1000, 0, 2000, 400), mon("C", 1000, 600, 2000, 1000)];
+  expect(edgeOpen(gap, "A", "Right")).toBe(true);
+});
+
+test("edgeOpen: a monitor that does not touch is no neighbour", () => {
+  expect(edgeOpen([mon("A", 0, 0, 1000, 500), mon("B", 1200, 0, 2000, 500)], "A", "Right")).toBe(true);
+});
+
+test("nearestEdge skips a closed edge even when its slot is the closest", () => {
+  const pair = [mon("A", 0, 0, 1000, 500), mon("B", 1000, 0, 2000, 500)];
+  const two = [{ id: "A", box: { x: 100, y: 100, w: 200, h: 100 } }, { id: "B", box: { x: 300, y: 100, w: 200, h: 100 } }];
+  const slot = slotFor(two[0].box, "Right", size);
+  const found = nearestEdge({ x: slot.x + 30, y: slot.y + 20 }, size, two, pair);
+  expect(found).not.toBeNull();
+  expect(found).not.toEqual({ monitorId: "A", edge: "Right" });
+  expect(found).not.toEqual({ monitorId: "B", edge: "Left" });
 });

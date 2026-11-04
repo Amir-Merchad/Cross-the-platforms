@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 const HOLD_MS = 900;
 
@@ -6,10 +6,14 @@ const HOLD_MS = 900;
 export default function HoldButton({ onDone, children, holding }: { onDone: () => void; children: ReactNode; holding: ReactNode }) {
   const [held, setHeld] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // State can change during the hold (a hotkey switch, say), and the hold must act on what is true when it ends.
+  const done = useRef(onDone);
+  useLayoutEffect(() => { done.current = onDone; });
 
   const start = () => {
+    clearTimeout(timer.current);
     setHeld(true);
-    timer.current = setTimeout(() => { setHeld(false); onDone(); }, HOLD_MS);
+    timer.current = setTimeout(() => { setHeld(false); done.current(); }, HOLD_MS);
   };
   const stop = () => { clearTimeout(timer.current); setHeld(false); };
   useEffect(() => () => clearTimeout(timer.current), []);

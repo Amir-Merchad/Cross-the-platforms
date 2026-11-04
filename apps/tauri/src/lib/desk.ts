@@ -1,5 +1,5 @@
 // Pure geometry and placement rules for the desk. No React, no Tauri.
-import type { Attachment, Edge, Monitor } from "./api";
+import type { Attachment, Edge, Monitor, Rect } from "./api";
 import type { Device } from "./devices";
 import type { PeerKind } from "./transfer";
 
@@ -37,12 +37,33 @@ export function slotFor(screen: Box, edge: Edge, size: Size, gap = 14): Box {
   }
 }
 
-/** The closest edge slot to `centre` within `range`, or null. */
-export function nearestEdge(centre: { x: number; y: number }, size: Size, screens: Screen[], range = 170): { monitorId: string; edge: Edge } | null {
+/**
+ * False when monitors beyond `edge` cover all of it. layout::entry gives the pointer to a neighbour wherever one
+ * abuts, so a device on a fully covered edge could never be entered. A partly covered edge still works on the rest.
+ */
+export function edgeOpen(monitors: Monitor[], id: string, edge: Edge): boolean {
+  const r = monitors.find((m) => m.id === id)?.rect;
+  if (!r) return true;
+  const upright = edge === "Left" || edge === "Right";
+  const touches = (o: Rect) => (edge === "Right" ? o.left === r.right : edge === "Left" ? o.right === r.left : edge === "Top" ? o.bottom === r.top : o.top === r.bottom);
+  const span = (o: Rect) => (upright ? [o.top, o.bottom] : [o.left, o.right]);
+  const [from, to] = span(r);
+  const covers = monitors.filter((m) => m.id !== id && touches(m.rect)).map((m) => span(m.rect)).sort((a, b) => a[0] - b[0]);
+  let reach = from;
+  for (const [start, end] of covers) {
+    if (start > reach) break;
+    reach = Math.max(reach, end);
+  }
+  return reach < to;
+}
+
+/** The closest open edge slot to `centre` within `range`, or null. */
+export function nearestEdge(centre: { x: number; y: number }, size: Size, screens: Screen[], monitors: Monitor[], range = 170): { monitorId: string; edge: Edge } | null {
   let best: { monitorId: string; edge: Edge } | null = null;
   let bestD = range;
   for (const s of screens) {
     for (const edge of EDGES) {
+      if (!edgeOpen(monitors, s.id, edge)) continue;
       const slot = slotFor(s.box, edge, size);
       const d = Math.hypot(centre.x - (slot.x + slot.w / 2), centre.y - (slot.y + slot.h / 2));
       if (d <= bestD) { bestD = d; best = { monitorId: s.id, edge }; }

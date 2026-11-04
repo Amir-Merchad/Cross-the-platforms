@@ -62,9 +62,10 @@ export function deviceLook(d: Device, active: string | null, btOff: boolean): { 
   if (d.hostId && d.hostId === active) return { sub: "In control", off: false };
   if (!d.hostId) return d.reachable ? { sub: "Files only", off: false } : { sub: "Bridge closed", off: true };
   if (btOff) return { sub: "No Bluetooth", off: true };
-  if (!d.connected) return d.reachable ? { sub: "Files only", off: false } : { sub: "Offline", off: true };
-  if (d.peerId && !d.reachable && d.waiting > 0) return { sub: "Bridge closed", off: true };
-  if (d.missingScreen) return { sub: "Screen not connected", off: false };
+  const closed = !!d.peerId && !d.reachable && d.waiting > 0;
+  if (d.missingScreen) return { sub: "Screen not connected", off: !d.connected || closed };
+  if (!d.connected) return { sub: "Offline", off: true };
+  if (closed) return { sub: "Bridge closed", off: true };
   return { sub: d.placement ? "Connected" : "Not placed", off: false };
 }
 
@@ -100,10 +101,10 @@ export function panelLines(d: Device, c: { active: string | null; btOff: boolean
   };
 }
 
-/** Mirrors tray.rs status_line, in the canvas wording. */
+/** Like tray.rs status_line in the canvas wording, but never the engine notice: those can carry raw errors and ids. */
 function restingLine(status: Status): string {
   if (status.active) return `Your keyboard and mouse are on ${displayName(status.hosts.find((h) => h.id === status.active)?.name)}.`;
-  return status.notice ?? "Your keyboard and mouse are on Windows.";
+  return status.advertising ? "Your keyboard and mouse are on Windows." : "Starting Bluetooth…";
 }
 
 /** The top bar's line when nothing has just been said. Input comes first: that is what must never surprise. */

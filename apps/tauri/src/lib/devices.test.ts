@@ -87,7 +87,7 @@ test("deviceLook for devices with files only", () => {
   expect(look(files)).toEqual({ sub: "Files only", off: false });
   expect(look(files, null, true)).toEqual({ sub: "Files only", off: false });
   expect(look({ ...files, reachable: false })).toEqual({ sub: "Bridge closed", off: true });
-  expect(look(dev({ connected: false }))).toEqual({ sub: "Files only", off: false });
+  expect(look(dev({ hostId: null, connected: false, placement: null, waiting: 2, reachable: true }))).toEqual({ sub: "Files only", off: false });
 });
 
 const clip = (o: Partial<ClipStatus> = {}): ClipStatus => ({ enabled: true, ipad: { Connected: { wifi: true } }, synced: 0, skipped_too_large: 0, notice: null, ...o });
@@ -170,4 +170,24 @@ test("idleLine", () => {
   expect(idleLine([dev()])).toBe("No files moving.");
   expect(idleLine([dev({ waiting: 3 })])).toBe("3 files wait for iPad Air. They send when Bridge opens there.");
   expect(idleLine([dev({ waiting: 1 })])).toBe("1 file waits for iPad Air. It sends when Bridge opens there.");
+});
+
+test("deviceLook: a screen that is gone is said first, and an offline device stays grey", () => {
+  const gone = { missingScreen: true };
+  expect(look(dev({ ...gone, connected: false, reachable: false }))).toEqual({ sub: "Screen not connected", off: true });
+  expect(look(dev({ ...gone, reachable: false, waiting: 3 }))).toEqual({ sub: "Screen not connected", off: true });
+  expect(look(dev({ ...gone, connected: false, reachable: true }))).toEqual({ sub: "Screen not connected", off: true });
+  expect(look(dev(gone))).toEqual({ sub: "Screen not connected", off: false });
+});
+
+test("deviceLook: a Bluetooth device reachable only for files reads Offline, because Files only means it cannot be placed", () => {
+  expect(look(dev({ connected: false, reachable: true }))).toEqual({ sub: "Offline", off: true });
+  expect(look(dev({ connected: false, reachable: true, placement: null }))).toEqual({ sub: "Offline", off: true });
+});
+
+test("deskLine never passes an engine notice through", () => {
+  const raw = "advertising failed: HRESULT(0x80070005) BluetoothLE#BluetoothLE00:11:22";
+  expect(line({ status: stat({ notice: raw }) })).toBe("Your keyboard and mouse are on Windows.");
+  expect(line({ status: stat({ notice: raw, advertising: false }) })).toBe("Starting Bluetooth…");
+  expect(line({ status: stat({ advertising: false }) })).toBe("Starting Bluetooth…");
 });

@@ -4,7 +4,7 @@ import type { Edge } from "@/lib/api";
 import { deviceSize, magnet, nearestEdge, screenName, slotFor, whereLine, type deskPlan } from "@/lib/desk";
 import type { Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
-import { step } from "@/lib/spring";
+import { step, STEP_MS, ticks } from "@/lib/spring";
 
 export type Target = { monitorId: string; edge: Edge };
 type Axis = { x: number; v: number; t: number };
@@ -18,10 +18,12 @@ const REST = 0.01;
 export const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const axis = (x: number): Axis => ({ x, v: 0, t: x });
 
-/** One spring frame. True while the axis is still moving. */
-function advance(a: Axis, k?: number, f?: number): boolean {
-  const n = step(a, a.t, k, f);
-  a.x = n.x; a.v = n.v;
+/** Runs `steps` spring steps. True while the axis is still moving. */
+function advance(a: Axis, steps: number, k?: number, f?: number): boolean {
+  for (let i = 0; i < steps; i++) {
+    const n = step(a, a.t, k, f);
+    a.x = n.x; a.v = n.v;
+  }
   if (Math.abs(a.t - a.x) >= REST || Math.abs(a.v) >= REST) return true;
   a.x = a.t; a.v = 0;
   return false;
@@ -31,25 +33,32 @@ function advance(a: Axis, k?: number, f?: number): boolean {
 function makeSprings() {
   const bodies = new Map<string, Body>();
   const els = new Map<string, HTMLElement>();
-  const m = { bodies, els, held: null as string | null, raf: 0, paint, wake, hold: (key: string | null) => { m.held = key; }, stop: () => { cancelAnimationFrame(m.raf); m.raf = 0; } };
+  const m = {
+    bodies, els, held: null as string | null, raf: 0, last: 0, carry: 0, paint, wake,
+    hold: (key: string | null) => { m.held = key; },
+    stop: () => { cancelAnimationFrame(m.raf); m.raf = 0; m.last = 0; m.carry = 0; },
+  };
 
   function paint(key: string, b: Body) {
     const el = els.get(key);
     if (el) el.style.transform = `translate(${b.x.x}px,${b.y.x}px) scale(${b.s.x})`;
   }
-  function frame() {
+  function frame(now: number) {
     m.raf = 0;
     const instant = reducedMotion();
+    // The spring runs at a fixed 60 Hz, so a 144 Hz screen settles in the same time as a 60 Hz one.
+    const { steps, carry } = ticks(m.carry, m.last ? now - m.last : STEP_MS);
+    m.last = now; m.carry = carry;
     let moving = false;
     for (const [key, b] of bodies) {
       if (instant) for (const a of [b.x, b.y, b.s]) { a.x = a.t; a.v = 0; }
       else {
         const [k, f] = key === m.held ? FOLLOW : [];
-        moving = [advance(b.x, k, f), advance(b.y, k, f), advance(b.s)].some(Boolean) || moving;
+        moving = [advance(b.x, steps, k, f), advance(b.y, steps, k, f), advance(b.s, steps)].some(Boolean) || moving;
       }
       paint(key, b);
     }
-    if (moving) wake();
+    if (moving) wake(); else { m.last = 0; m.carry = 0; }
   }
   function wake() { m.raf ||= requestAnimationFrame(frame); }
   return m;
@@ -99,7 +108,7 @@ export function useDeskMotion(stage: RefObject<HTMLDivElement | null>, plan: Ret
     }
     const size = deviceSize(d.kind);
     const pos = { x: p.x - g.ox, y: p.y - g.oy };
-    const edge = nearestEdge({ x: pos.x + size.w / 2, y: pos.y + size.h / 2 }, size, plan.screens);
+    const edge = nearestEdge({ x: pos.x + size.w / 2, y: pos.y + size.h / 2 }, size, plan.screens, monitors);
     const screen = edge && plan.screens.find((s) => s.id === edge.monitorId);
     const aim = edge && screen ? magnet(pos, slotFor(screen.box, edge.edge, size)) : pos;
     const b = springs.bodies.get(d.key)!;
