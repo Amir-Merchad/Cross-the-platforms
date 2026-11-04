@@ -127,3 +127,34 @@ async fn concurrent_transfers_with_the_same_name_never_share_a_file() { // final
     assert_eq!(std::fs::read(&p1).unwrap(), std::fs::read(&f1).unwrap(), "first transfer intact");
     assert_eq!(std::fs::read(&p2).unwrap(), std::fs::read(&f2).unwrap(), "second transfer intact");
 }
+
+#[tokio::test]
+async fn empty_file_still_reports_the_final_progress() { // base UI final review 1
+    let (src, dst) = (tempdir().unwrap(), tempdir().unwrap());
+    let f = src.path().join("empty.txt"); std::fs::write(&f, []).unwrap();
+    let l = BulkListener::bind().await.unwrap();
+    let (addrs, cert, tok) = (l.addrs(), l.cert_sha256(), l.token());
+    let dir = dst.path().to_path_buf();
+    let rx = tokio::spawn(async move { l.receive(&[meta("empty.txt", 0)], &dir, |_, _| {}).await });
+    let mut seen = Vec::new();
+    assert_eq!(send(&addrs, &cert, &tok, &[f], |d, t| seen.push((d, t))).await.unwrap(), 0);
+    assert_eq!(seen, vec![(0, 0)]);
+    assert_eq!(rx.await.unwrap().unwrap(), vec![dst.path().join("empty.txt")]);
+}
+
+#[tokio::test]
+async fn final_progress_comes_once_after_every_file() { // base UI final review 1
+    let (src, dst) = (tempdir().unwrap(), tempdir().unwrap());
+    let (a, b) = (src.path().join("a.bin"), src.path().join("b.bin"));
+    std::fs::write(&a, data(2000, 1)).unwrap();
+    std::fs::write(&b, data(3000, 2)).unwrap();
+    let l = BulkListener::bind().await.unwrap();
+    let (addrs, cert, tok) = (l.addrs(), l.cert_sha256(), l.token());
+    let dir = dst.path().to_path_buf();
+    let rx = tokio::spawn(async move { l.receive(&[meta("a.bin", 2000), meta("b.bin", 3000)], &dir, |_, _| {}).await });
+    let mut seen = Vec::new();
+    send(&addrs, &cert, &tok, &[a, b], |d, t| seen.push((d, t))).await.unwrap();
+    rx.await.unwrap().unwrap();
+    assert_eq!(seen.last(), Some(&(5000, 5000)));
+    assert_eq!(seen.iter().filter(|(d, t)| d == t).count(), 1);
+}

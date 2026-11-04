@@ -44,9 +44,10 @@ class ActivityTest {
         assertEquals(RowState.FAILED, r[0].state)
     }
 
-    @Test fun aLateFailedCannotFlipAFinishedRow() {
-        val r = run(started(true), Ev.Progress(1, 100, 100), Ev.Failed(1, "late"))
-        assertEquals(RowState.DONE, r[0].state)
+    @Test fun aReceiverFailingAfterTheLastByteIsNeverDone() {
+        // Core sends the final progress only after the receiver confirms, so a failure always finds the row moving.
+        val r = run(started(true), Ev.Progress(1, 90, 100), Ev.Failed(1, "receiver reported a checksum mismatch"))
+        assertEquals(RowState.FAILED, r[0].state)
     }
 
     @Test fun outgoingWithTotalZeroEndsDoneOnProgress() {

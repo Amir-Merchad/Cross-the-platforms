@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bridge_core::{identity::{Peer, PeerKind}, node::{CTL_ALPN, Event, Node, NodeConfig, SendOutcome}, outbox::Outbox};
+use bridge_core::{identity::{Peer, PeerKind, load_or_create_key}, node::{CTL_ALPN, Ctl, Event, Node, NodeConfig, SendOutcome}, outbox::Outbox};
 use tempfile::TempDir;
 use tokio::{sync::mpsc::Receiver, time::timeout};
 
@@ -264,4 +264,65 @@ async fn batch_stays_queued_when_the_stream_is_cut_mid_transfer() { // final rev
     let (_ipad3, mut irx3) = restart(&di, "S24+", PeerKind::Ipad).await;
     let got = received(&mut irx3, 1).await;
     assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
+}
+
+#[tokio::test]
+async fn empty_file_send_ends_with_a_final_progress() { // base UI final review 1
+    let ((a, mut arx, _da), (b, mut brx, _db)) = paired().await;
+    let src = tempfile::tempdir().unwrap();
+    let p = write(src.path(), "empty.txt", 0, 0);
+    assert_eq!(b.send_files(&a.id(), vec![p]).await.unwrap(), 0);
+    wait_for(&mut brx, |e| matches!(e, Event::Progress { done: 0, total: 0, .. })).await;
+    received(&mut arx, 1).await;
+}
+
+/// Stands in for a paired device: takes a whole file of `size` bytes over the iroh fallback, then reports a bad checksum.
+async fn refusing_receiver(key: iroh::SecretKey, sender: iroh::EndpointAddr, size: usize) -> iroh::Endpoint {
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).secret_key(key).alpns(vec![CTL_ALPN.to_vec(), b"ctp/bulk/1".to_vec()]).bind().await.unwrap();
+    // Say where we are, as a restarted device would.
+    let c = ep.connect(sender, CTL_ALPN).await.unwrap();
+    let (mut s, mut r) = c.open_bi().await.unwrap();
+    s.write_all(format!("{}\n", serde_json::to_string(&Ctl::Hello { addr: ep.addr() }).unwrap()).as_bytes()).await.unwrap();
+    s.finish().unwrap();
+    r.read_to_end(1024).await.unwrap();
+    let listening = ep.clone();
+    tokio::spawn(async move {
+        while let Some(incoming) = listening.accept().await {
+            tokio::spawn(async move {
+                let conn = incoming.await.unwrap();
+                let (mut s, mut r) = conn.accept_bi().await.unwrap();
+                if conn.alpn().to_vec() == CTL_ALPN {
+                    let lines = r.read_to_end(1 << 20).await.unwrap();
+                    for l in lines.split(|&b| b == b'\n') {
+                        if let Ok(Ctl::Offer { id, .. }) = serde_json::from_slice(l) {
+                            // No TCP address, so the sender goes straight to the iroh fallback.
+                            let accept = Ctl::Accept { id, tcp: Vec::new(), cert_sha256: String::new(), token: "0".repeat(32) };
+                            s.write_all(format!("{}\n", serde_json::to_string(&accept).unwrap()).as_bytes()).await.unwrap();
+                        }
+                    }
+                } else {
+                    // Offer id, token, size, the file, its hash.
+                    r.read_exact(&mut vec![0u8; 8 + 32 + 8 + size + 32]).await.unwrap();
+                    s.write_all(&[0]).await.unwrap();
+                }
+                let _ = s.finish();
+                conn.closed().await;
+            });
+        }
+    });
+    ep
+}
+
+#[tokio::test]
+async fn receiver_failure_after_the_last_byte_is_failed_not_sent() { // base UI final review 1
+    let ((a, _arx, da), (b, mut brx, _db)) = paired().await;
+    let id = a.id();
+    a.shutdown().await;
+    let key = load_or_create_key(&da.path().join("data").join("identity.key")).unwrap();
+    let _ep = refusing_receiver(key, b.addr(), 3000).await;
+    let src = tempfile::tempdir().unwrap();
+    let p = write(src.path(), "notes.pdf", 3000, 4);
+    assert!(b.send_files(&id, vec![p]).await.unwrap_err().contains("checksum"));
+    let e = wait_for(&mut brx, |e| matches!(e, Event::Failed { .. }) || matches!(e, Event::Progress { done, total, .. } if done == total)).await;
+    assert!(matches!(e, Event::Failed { .. }), "{e:?}");
 }

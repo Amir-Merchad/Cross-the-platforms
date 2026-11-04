@@ -190,7 +190,7 @@ pub(crate) async fn send_on<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, token:
             idle(s.write_all(&buf[..n])).await?;
             left -= n as u64;
             done += n as u64;
-            progress(done, total);
+            if done < total { progress(done, total) } // the last one waits for the receiver's word
         }
         idle(s.write_all(h.finalize().as_slice())).await?;
         idle(s.flush()).await?;
@@ -198,6 +198,7 @@ pub(crate) async fn send_on<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, token:
         idle(s.read_exact(&mut ok)).await?;
         if ok[0] != 1 { bail!("receiver reported a checksum mismatch") }
     }
+    progress(total, total);
     let _ = s.shutdown().await;
     Ok(total)
 }

@@ -58,8 +58,9 @@ final class ActivityLogTests: XCTestCase {
         XCTAssertEqual(r[0].state, .waiting)
     }
 
-    func testALateFailedCannotFlipAFinishedRow() {
-        XCTAssertEqual(run(started(true), .progress(id: 1, done: 100, total: 100), .failed(id: 1, reason: "late"))[0].state, .done)
+    func testAReceiverFailingAfterTheLastByteIsNeverDone() {
+        // Core sends the final progress only after the receiver confirms, so a failure always finds the row moving.
+        XCTAssertEqual(run(started(true), .progress(id: 1, done: 90, total: 100), .failed(id: 1, reason: "receiver reported a checksum mismatch"))[0].state, .waiting)
     }
 
     func testOutgoingWithTotalZeroEndsDoneOnProgress() {
