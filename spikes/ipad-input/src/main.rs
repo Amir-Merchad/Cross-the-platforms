@@ -3,7 +3,9 @@
 //! HID use mirror idevice's `tools/src/coredevice_stream.rs` and `tools/src/hid.rs`.
 //!
 //!   ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]
-//!   ipad-input <shot|dump|probe ...|mousekeys ...> [--usb]   see probe.rs; screenshots land in SHOTS
+//!   ipad-input <demo [tag]|shot [name]|dump|home|ids|bytes [value]|raw <hex>...|probe <set>> [--usb]
+//!   ipad-input diff <a.png> <b.png>
+//! `demo` is the pointer proof: see probe.rs and docs/spikes/ipad-pointer.md.
 //!
 //! Wi-Fi unless `--usb`; no silent fallback, because Wi-Fi is the question. The pairing record path is
 //! handed to the library only: never read or print it here.
@@ -623,7 +625,7 @@ impl Session {
         Ok(())
     }
 
-    /// Nothing here can see the iPad's screen: the owner's eyes are the result, so stages are lettered.
+    /// Stages from before report IDs were understood: every one sends ID 1, which cannot move anything.
     async fn pointer(&mut self) -> Res {
         countdown("watch the iPad for a round pointer; stages are 3 s apart").await?;
         let list = self.surfaces().await?;
@@ -777,7 +779,7 @@ async fn run() -> ExitCode {
     args.retain(|a| a != "--usb");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "diff" { return probe::diff_cmd(&args[1..]) }
-    if !["check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "mousekeys", "home", "ids", "raw", "bytes", "demo"].contains(&cmd) {
+    if !["check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo"].contains(&cmd) {
         eprintln!("usage: ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]");
         return ExitCode::from(2);
     }
@@ -805,7 +807,7 @@ async fn run() -> ExitCode {
         "touch" => session.touch().await,
         "scroll" => session.scroll().await,
         "latency" => session.latency(args.get(1).map(String::as_str).unwrap_or("uhid")).await,
-        "shot" | "dump" | "probe" | "mousekeys" | "home" | "ids" | "raw" | "bytes" | "demo" => session.run_probe(&args).await,
+        "shot" | "dump" | "probe" | "home" | "ids" | "raw" | "bytes" | "demo" => session.run_probe(&args).await,
         _ => session.pointer().await,
     };
     session.finish().await;

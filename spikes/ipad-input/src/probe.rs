@@ -396,38 +396,23 @@ impl Session {
         raw.send_object(send_request(id, r05(dx, dy, buttons)), false).await.map_err(|e| format!("report: {e:?}"))
     }
 
-    /// Waits for the lagging log to go quiet and returns the last position in it.
-    async fn settle(&mut self, trace: &mut Vec<String>) -> Result<Option<(f64, f64)>, String> {
-        let (mut last, mut quiet) = (None, 0);
-        for _ in 0..30 {
-            pause(200).await?;
-            let log = take_log();
-            match positions(&log).last() {
-                Some(p) => { last = Some((p.0, p.1)); quiet = 0 }
-                None => quiet += 1,
-            }
-            trace.extend(log.into_iter().filter(|l| l.contains("[backboardd]")));
-            if last.is_some() && quiet >= 5 { break }
-        }
-        Ok(last)
-    }
-
-    /// From the top-left corner, a known count of steady reports. The log lags and misses too much
-    /// to steer by, so it only verifies. Coordinates are landscape pixels, 2732 x 2048.
+    /// From the bottom-left corner, a known count of steady reports. The log lags and misses too much
+    /// to steer by, so it only verifies. Not the top edge: that pulls down Notification Centre.
+    /// Coordinates are landscape pixels, 2732 x 2048.
     /// ponytail: open loop at one speed; a real driver would just send the user's mouse deltas.
-    async fn goto(&mut self, id: u64, target: (f64, f64), trace: &mut Vec<String>) -> Result<(f64, f64), String> {
+    async fn goto(&mut self, id: u64, target: (f64, f64)) -> Res {
         const PX_PER_REPORT: f64 = 18.0; // At 16 units a report, measured.
         for _ in 0..220 {
-            self.pointer_report(id, -100, -100, 0).await?;
+            self.pointer_report(id, -100, 100, 0).await?;
             sleep(Duration::from_millis(8)).await;
         }
-        for (n, dx, dy) in [(target.0, 16, 0), (target.1, 0, 16)] {
+        for (n, dx, dy) in [(target.0, 16, 0), (2048.0 - target.1, 0, -16)] {
             for _ in 0..(n / PX_PER_REPORT).round() as usize {
                 self.pointer_report(id, dx, dy, 0).await?;
                 sleep(Duration::from_millis(8)).await;
             }
         }
-        self.settle(trace).await?.ok_or_else(|| format!("no position logged on the way to {target:?}"))
+        Ok(())
     }
 
     /// Moves the pointer both ways across the screen, hovers an icon and clicks it. Proof is
@@ -439,12 +424,15 @@ impl Session {
         pause(1200).await?;
         take_log();
         let mut trace = vec![];
-        for p in [(600.0, 400.0), (2200.0, 1500.0), (1366.0, 1024.0), target] {
-            let t = Instant::now();
-            let at = self.goto(id, p, &mut trace).await?;
-            println!("  asked for {p:?}, pointer at {at:?} in {:?}", t.elapsed());
+        let mut last = base.clone();
+        for (i, p) in [(600.0, 1500.0), (2000.0, 1500.0), (1000.0, 900.0)].into_iter().enumerate() {
+            self.goto(id, p).await?;
+            let shot = self.shot(&format!("{tag}-waypoint{i}")).await?;
+            say_diff(&format!("waypoint {i} {p:?} vs previous"), &last, &shot);
+            last = shot;
         }
-        pause(600).await?;
+        self.goto(id, target).await?;
+        pause(500).await?;
         let hover = self.shot(&format!("{tag}-1hover")).await?;
         say_diff("hover vs home", &base, &hover);
         self.pointer_report(id, 0, 0, 1).await?;
@@ -504,7 +492,7 @@ impl Session {
             "shot" => self.shot(args.get(1).map_or("shot", |s| s.as_str())).await.map(|_| ()),
             "dump" => self.dump().await,
             "probe" => self.stages(args.get(1).map_or("", |s| s.as_str())).await,
-            other => Err(format!("{other}: not built yet")),
+            other => Err(format!("unknown command {other}")),
         }
     }
 }
