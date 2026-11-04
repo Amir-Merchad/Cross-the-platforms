@@ -2,7 +2,7 @@
 
 2026-11-04, iPad Air 13" M2, iPadOS 27.2, disk image 27A5228h, idevice 0.1.68. Tool: `spikes/ipad-input`.
 
-**Verdict: GO over USB. Not tested over Wi-Fi.** A virtual mouse moved the real iPad pointer corner to corner, hovered, and its click opened Files. No Bluetooth was involved.
+**Verdict: GO over USB and Wi-Fi.** A virtual mouse moved the real iPad pointer corner to corner, hovered, and its click opened Files, on both links. Touch and the virtual keyboard also work over Wi-Fi. No Bluetooth was involved. Wi-Fi was not tested with the USB cable pulled out; see [Wi-Fi](#wi-fi).
 
 ## The report
 
@@ -59,7 +59,47 @@ Any other ID logs `No gesture for report ID`. The daemon links gestures for abso
 | 3c Virtual trackpad | Not sent | | Not needed |
 | 3e Other Indigo events | Not sent beyond stage D | `dtuhidd` routes Indigo vendor events to `avpCustom` and has no Indigo pointer event | Not needed |
 | 3f AssistiveTouch Mouse Keys | Not sent | | Not needed; no `mousekeys` command was built |
-| Wi-Fi tunnel | `demo wifi` | `iPad not found on Wi-Fi` twice, iPad awake; PC on Ethernet at 192.168.1.4 | **Not tested**: the Bonjour lookup found nothing, so no report was sent. Cause unknown |
+| Wi-Fi tunnel | `check`, `demo wifi`, `typed`, `latency pointer` | Below | **Pass** with a new pairing record |
+
+## Wi-Fi
+
+2026-11-04, PC Wi-Fi 192.168.1.3, iPad 192.168.1.5, USB cable left in for the log.
+
+**Why pair verify failed.** `early eof` was the second failure, not the first. `remotepairingdeviced` logged, for the record in `rp-pairing.plist`:
+
+```
+Found paired peer matching query
+### PairVerify server bad signature: -146/0xFFFFFF6E
+```
+
+So the iPad holds a different public key for that identifier than the record has. `RemotePairingClient::connect` then falls back to pair setup on the same socket. The Wi-Fi handshake says `allowsPairSetup: false`, so the iPad closes the connection, and that is the eof. Running `attempt_pair_verify` and `validate_pairing` separately shows the real error, `PairVerifyFailed`.
+
+**Why the key differs.** `RpPairingFile::generate` makes the identifier a v3 UUID of the host name, so every pairing as `cross-the-platforms` is peer `17372F0B`, whose key was set by the first pairing. Nov 3 worked because that record was the first. Later pairings under the same name, such as Bridge's Pair over USB at 23:30, get a fresh key and report success, but that key does not verify. Inferred from the log and the code: pairing twice under one name was not run as a controlled test, because each try costs a Trust tap and another peer on the iPad. The handshake itself is the same as Nov 3 in `ipad-clip`.
+
+**Fix in the spike.** `ipad-input rppair` pairs over USB as `cross-the-platforms-input`, a new identifier, into `rp-pairing-spike.plist`. It refuses to overwrite a record. The iPad showed Trust This Computer once and it was tapped. The spike prefers that file when it exists. Verify then reached `PairVerify server done`. Bridge still uses `rp-pairing.plist`, so **Bridge's own Wi-Fi is still broken**, and it falls back to USB (`wifi=false`).
+
+| Check over Wi-Fi | Evidence | Result |
+|---|---|---|
+| `check` | Tunnel up, 5 surfaces, 1229 media packets in 3 s | **Pass** |
+| Motion | `demo wifi`: 755 `backboardd` positions, x 1 to 1963, y 111 to 2046, pointer in the waypoint shots | **Pass** |
+| Click | `button number:1 down:YES`, then `NO`; Files opened, 3.1 M px changed; Home returned afterwards | **Pass** |
+| Touch | `typed`: a drag opened Today View, then Spotlight. Touch axes are portrait: landscape down is touch X | **Pass** |
+| Keyboard | `typed`: `hello bridge` appears in Spotlight (virtual keyboard route only) | **Pass** |
+| Cleanup | After the runs: 5 surfaces, virtual services gone, stream stopped, Home | **Pass** |
+
+**Is it really Wi-Fi?** During a session the process had one link to the iPad, TCP 192.168.1.3 to 192.168.1.5:63478. The Wi-Fi adapter moved 27 MB in and 4.4 MB out over about 20 s and the Ethernet counters did not change. Input goes through that tunnel, and `check` and `latency` do not open usbmux at all. USB only read the system log. Not proven by unplugging: nobody could pull the cable during this run.
+
+**Latency**, `latency pointer`, 200 reports then 100 round trips, display stream running. The round trip is `connectedServices` to the HID daemon and back.
+
+| Link | Send median | Round trip min | Median | p95 | Max |
+|---|---|---|---|---|---|
+| Wi-Fi, TCP_NODELAY | 0.18 ms | 4.1 ms | 8.1 ms | 11.0 ms | 17.5 ms |
+| Wi-Fi, Nagle on | 0.18 ms | 5.3 ms | 8.0 ms | 15.4 ms | 26.5 ms |
+| USB | 0.18 ms | 2.8 ms | 5.3 ms | 7.6 ms | 28.5 ms |
+
+One run each, so the p95 and max gaps are weak. `ping` beside it ranged from 3 to 92 ms, so expect worse spikes than 100 samples show. Latency to the screen is still not measured: the log has whole-second timestamps here.
+
+**Discovery.** The multicast browse still finds nothing on this PC, cause unknown (Hyper-V and VMware adapters are suspected, not shown). The spike now asks `ipad-last-ip.txt`, beside the record, with a unicast mDNS query to port 5353, and browses only if that fails. All runs without `IPAD_ADDR` found the iPad this way. The first run on a PC with no saved address still needs `IPAD_ADDR` or a working browse.
 
 ## Evidence
 
@@ -69,6 +109,8 @@ Local only, not in the repo, because the full shots show personal notifications,
 - `C:\dev\_ref\tmp\pointer\shots\demo-1hover.png`, `demo-waypoint0.png` to `demo-waypoint2.png`: pointer at each destination.
 - `C:\dev\_ref\tmp\pointer\demo-waypoint1-crop.png`: crop of the pointer over an icon, no personal content.
 - `C:\dev\_ref\tmp\pointer\demo-trace.log`, `corner-to-corner-trace.log`, `first-motion.log`: `backboardd` position lines.
+- `C:\dev\_ref\tmp\pointer\wifi-first.log`: full iPad log around the bad signature. `wifi-rppair.log`: the new pairing. `wifi-second.log`: verify passing.
+- `C:\dev\_ref\tmp\pointer\wifi-trace.log`, `shots\wifi-*.png`, `shots\wifi2-typed.png`: Wi-Fi demo and typing.
 
 ## Costs and limits
 
@@ -77,7 +119,10 @@ Local only, not in the repo, because the full shots show personal notifications,
 - Reports sent after a long idle can be lost or unlogged at first. Seen several times, cause not established.
 - Touching the top edge pulls down Notification Centre, as a real mouse would.
 - Only one service, one speed and click tested. Scroll, right click and drag are untested. Latency to the screen was not measured.
+- Wi-Fi was not tested with the iPad unplugged, on battery, or after it slept.
 
 ## To reproduce
 
 With Apple Devices open and the iPad unlocked on USB: `cargo run -p ipad-input -- demo mytag --usb`. It opens Files, then presses Home.
+
+Over Wi-Fi, once: `cargo run -p ipad-input -- rppair` over USB and tap Trust. Then `IPAD_ADDR=<ip>:<port> cargo run -p ipad-input -- demo mytag`, with the port from the `_remotepairing._tcp` SRV record. Later runs do not need `IPAD_ADDR`. Without USB the demo still runs, but the log tap fails, so only screenshots are left as proof.

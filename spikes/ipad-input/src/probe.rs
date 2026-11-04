@@ -93,6 +93,71 @@ pub async fn logtap() -> Res {
     }
 }
 
+/// One Wi-Fi pair verify, step by step, beside the iPad's own log (needs USB for the log). The record
+/// path goes to the library only. Full log to wifi-<tag>.log, pairing lines printed.
+pub async fn wifidiag(dir: &Path, record: &str, tag: &str) -> Res {
+    tokio::spawn(async { if let Err(e) = logtap().await { println!("log tap failed: {e}") } });
+    pause(2500).await?;
+    let addr: SocketAddr = std::env::var("IPAD_ADDR").map_err(|_| "set IPAD_ADDR")?.parse().map_err(|e| format!("IPAD_ADDR: {e}"))?;
+    let mut rpf = RpPairingFile::read_from_file(dir.join(record)).await.map_err(|e| format!("pairing record: {e:?}"))?;
+    take_log();
+    let t = Instant::now();
+    let stream = tokio::net::TcpStream::connect(addr).await.map_err(|e| format!("connect: {e}"))?;
+    println!("{:?} tcp connected from {:?}", t.elapsed(), stream.local_addr());
+    let mut rpc = RemotePairingClient::new(RpPairingSocket::new(stream), HOST_NAME);
+    match timeout(Duration::from_secs(15), rpc.attempt_pair_verify()).await {
+        Ok(Ok(v)) => {
+            println!("{:?} handshake ok: {}", t.elapsed(), short(v, 1200));
+            match timeout(Duration::from_secs(15), rpc.validate_pairing(&mut rpf)).await {
+                Ok(r) => println!("{:?} validate_pairing: {r:?}", t.elapsed()),
+                Err(_) => println!("{:?} validate_pairing: timed out", t.elapsed()),
+            }
+        }
+        Ok(Err(e)) => println!("{:?} handshake failed: {e:?}", t.elapsed()),
+        Err(_) => println!("{:?} handshake timed out", t.elapsed()),
+    }
+    pause(5000).await?;
+    let log = take_log();
+    let path = format!("C:/dev/_ref/tmp/pointer/wifi-{tag}.log");
+    let _ = std::fs::write(&path, log.join("
+"));
+    println!("{} log lines to {path}", log.len());
+    let hit = |l: &&String| { let l = l.to_lowercase(); ["remotepairing", "remoted", "coredevice", "rppairing", "pair verify", "pairverify"].iter().any(|w| l.contains(w)) };
+    for l in log.iter().filter(hit).take(150) { println!("{}", l.chars().take(260).collect::<String>()); }
+    Ok(())
+}
+
+/// Over USB: pairs under a new identifier into `file`, never touching rp-pairing.plist. The identifier
+/// is a hash of the host name, and pairing again under a known one leaves the iPad holding the old key.
+pub async fn rppair(dir: &Path, file: &str, host: &str) -> Res {
+    let path = dir.join(file);
+    if path.exists() || file == RECORD { return Err(format!("refusing to overwrite {file}")) }
+    tokio::spawn(async { if let Err(e) = logtap().await { println!("log tap failed: {e}") } });
+    pause(2500).await?;
+    take_log();
+    let (mut adapter, handshake) = connect_usb().await?;
+    let port = handshake.services.get("com.apple.internal.dt.coredevice.untrusted.tunnelservice").ok_or("untrusted tunnel service not found")?.port;
+    let stream = adapter.connect(port).await.map_err(|e| format!("tunnel service connect: {e}"))?;
+    let mut conn = RemoteXpcClient::new(stream).await.map_err(|e| format!("xpc: {e:?}"))?;
+    conn.do_handshake().await.map_err(|e| format!("xpc handshake: {e:?}"))?;
+    let _ = conn.recv_root().await;
+    let mut rpf = RpPairingFile::generate(host);
+    let mut rpc = RemotePairingClient::new(conn, host);
+    println!("pairing as {host}, confirm on the iPad if asked");
+    let r = timeout(Duration::from_secs(60), rpc.connect(&mut rpf, async || "000000".to_string())).await;
+    match &r {
+        Ok(Ok(())) => { rpf.write_to_file(&path).await.map_err(|e| format!("write: {e:?}"))?; println!("paired, wrote {}", path.display()) }
+        Ok(Err(e)) => println!("pairing failed: {e:?}"),
+        Err(_) => println!("pairing timed out"),
+    }
+    pause(3000).await?;
+    let log = take_log();
+    let _ = std::fs::write("C:/dev/_ref/tmp/pointer/wifi-rppair.log", log.join("
+"));
+    for l in log.iter().filter(|l| l.contains("[remotepairingd") && !l.contains("nw_") && !l.contains("SecItem") && !l.contains("agent")).take(70) { println!("{}", l.chars().take(220).collect::<String>()); }
+    Ok(())
+}
+
 /// (report id, ok|fail|none) per report the daemon logged, in order.
 fn verdicts_of(log: &[String]) -> Vec<(u8, &'static str)> {
     let mut out: Vec<(u8, &'static str)> = vec![];
@@ -391,7 +456,7 @@ impl Session {
         Ok(())
     }
 
-    async fn pointer_report(&mut self, id: u64, dx: i8, dy: i8, buttons: u8) -> Res {
+    pub async fn pointer_report(&mut self, id: u64, dx: i8, dy: i8, buttons: u8) -> Res {
         let raw = self.raw.as_mut().ok_or("no client")?;
         raw.send_object(send_request(id, r05(dx, dy, buttons)), false).await.map_err(|e| format!("report: {e:?}"))
     }
@@ -456,6 +521,21 @@ impl Session {
         Ok(())
     }
 
+    /// Pulls down Spotlight by touch (touch axes are portrait, so landscape down is X) and types into
+    /// it with the virtual keyboard, so nothing is kept.
+    async fn typed(&mut self, tag: &str) -> Res {
+        self.home().await?;
+        self.hid.drag(42000, CENTRE, 20000, CENTRE, 20, 16).await.map_err(|e| format!("swipe: {e:?}"))?;
+        pause(1500).await?;
+        let open = self.shot(&format!("{tag}-spotlight")).await?;
+        self.type_uhid(GREETING).await?;
+        pause(1500).await?;
+        let typed = self.shot(&format!("{tag}-typed")).await?;
+        say_diff("typed vs spotlight", &open, &typed);
+        self.home().await?;
+        self.home().await
+    }
+
     /// Report 05, 19 bytes: one byte at a time set to `value`, the rest zero, then zeros to release.
     async fn bytes(&mut self, value: u8) -> Res {
         let id = self.create(&Spec::default()).await?;
@@ -485,6 +565,7 @@ impl Session {
         pause(800).await?;
         match args[0].as_str() {
             "home" => self.home().await,
+            "typed" => self.typed(args.get(1).map_or("typed", |s| s.as_str())).await,
             "ids" => self.ids().await,
             "raw" => self.raw_reports(&args[1..]).await,
             "demo" => self.demo((1980.0, 1898.0), args.get(1).map_or("demo", |s| s.as_str())).await,

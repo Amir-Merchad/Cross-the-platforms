@@ -2,8 +2,10 @@
 //! iPad app? Throwaway. Tunnel code copied from `platform/windows/src/ipad.rs`; the stream start and
 //! HID use mirror idevice's `tools/src/coredevice_stream.rs` and `tools/src/hid.rs`.
 //!
-//!   ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]
-//!   ipad-input <demo [tag]|shot [name]|dump|home|ids|bytes [value]|raw <hex>...|probe <set>> [--usb]
+//!   ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch|pointer]|pointer> [--usb]
+//!   ipad-input rppair [file] [host]       over USB: own pairing, never overwrites a record
+//!   ipad-input wifidiag <record> [tag]    Wi-Fi verify step by step beside the iPad log (USB for the log)
+//!   ipad-input <demo [tag]|typed [tag]|shot [name]|dump|home|ids|bytes [value]|raw <hex>...|probe <set>> [--usb]
 //!   ipad-input diff <a.png> <b.png>
 //! `demo` is the pointer proof: see probe.rs and docs/spikes/ipad-pointer.md.
 //!
@@ -50,6 +52,9 @@ type Res = Result<(), String>;
 
 const HOST_NAME: &str = "cross-the-platforms";
 const RECORD: &str = "rp-pairing.plist";
+/// Own pairing, so a fresh identifier and never rp-pairing.plist. Preferred when present.
+const SPIKE_RECORD: &str = "rp-pairing-spike.plist";
+const SPIKE_HOST: &str = "cross-the-platforms-input";
 const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
 /// What Device Hub sends for screen sharing. idevice notes the device's own, larger mask breaks it.
@@ -286,7 +291,7 @@ fn pump(udp: UdpSocketHandle, video_ssrc: Option<u32>, rtp: Arc<AtomicU64>) -> J
 impl Session {
     async fn open(dir: &Path, usb: bool) -> Result<Session, String> {
         for attempt in 0..2 {
-            let (mut adapter, mut handshake) = if usb { connect_usb().await? } else { connect_wifi(&dir.join(RECORD)).await? };
+            let (mut adapter, mut handshake) = if usb { connect_usb().await? } else { connect_wifi(&dir.join(if dir.join(SPIKE_RECORD).exists() { SPIKE_RECORD } else { RECORD })).await? };
             println!("tunnel up over {}", if usb { "USB" } else { "Wi-Fi" });
             match DisplayServiceClient::<Io>::connect_rsd(&mut adapter, &mut handshake).await {
                 Ok(display) => return Session::start(adapter, handshake, display).await,
@@ -528,11 +533,22 @@ impl Session {
                 }
                 self.hid.send_touchscreen(TOUCHSCREEN_STATE_RELEASE, x, CENTRE, None).await.map_err(|e| format!("touch release: {e:?}"))?;
             }
-            other => return Err(format!("latency takes uhid, indigo or touch, not {other}")),
+            "pointer" => {
+                let id = self.create(&probe::Spec::default()).await?;
+                pause(1200).await?;
+                for i in 0..EVENTS * 4 {
+                    let t = Instant::now();
+                    self.pointer_report(id, if i % 2 == 0 { 4 } else { -4 }, 0, 0).await?;
+                    times.push(t.elapsed());
+                    pause(8).await?;
+                }
+                self.remove_mouse().await;
+            }
+            other => return Err(format!("latency takes uhid, indigo, touch or pointer, not {other}")),
         }
         print_times("send (leaves this PC, not arrival on the iPad)", &mut times);
-        let mut trips = Vec::with_capacity(20);
-        for _ in 0..20 {
+        let mut trips = Vec::with_capacity(100);
+        for _ in 0..100 {
             pause(20).await?;
             let t = Instant::now();
             self.surfaces().await?;
@@ -741,21 +757,83 @@ async fn discover() -> Result<SocketAddr, String> {
     }).await.map_err(|e| e.to_string())?
 }
 
+/// One owner name in a DNS message and the offset after it. Follows compression pointers.
+fn dns_name(m: &[u8], mut i: usize) -> Option<(String, usize)> {
+    let (mut name, mut end, mut hops) = (String::new(), None, 0);
+    loop {
+        let len = *m.get(i)? as usize;
+        if len == 0 { return Some((name, end.unwrap_or(i + 1))) }
+        if len & 0xC0 == 0xC0 {
+            end.get_or_insert(i + 2);
+            hops += 1;
+            if hops > 16 { return None }
+            i = (len & 0x3F) << 8 | *m.get(i + 1)? as usize;
+        } else {
+            name.push_str(&String::from_utf8_lossy(m.get(i + 1..i + 1 + len)?));
+            name.push('.');
+            i += 1 + len;
+        }
+    }
+}
+
+/// The port in the first `_remotepairing._tcp` SRV record of a DNS reply.
+fn remotepairing_port(m: &[u8]) -> Option<u16> {
+    let word = |at: usize| Some(u16::from_be_bytes([*m.get(at)?, *m.get(at + 1)?]));
+    let mut i = 12;
+    for _ in 0..word(4)? { i = dns_name(m, i)?.1 + 4 }
+    for _ in 0..word(6)? as u32 + word(8)? as u32 + word(10)? as u32 {
+        let (name, at) = dns_name(m, i)?;
+        let rdata = at + 10;
+        if word(at)? == 33 && name.contains("_remotepairing._tcp") { return word(rdata + 4) }
+        i = rdata + word(at + 8)? as usize;
+    }
+    None
+}
+
+/// Multicast browsing finds nothing on this PC, but the iPad still answers a query sent straight to
+/// its address.
+/// ponytail: needs one earlier success to know the address; multicast remains the first-run route.
+async fn unicast_lookup(ip: std::net::IpAddr) -> Option<SocketAddr> {
+    let mut q = vec![0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    for label in ["_remotepairing", "_tcp", "local"] { q.push(label.len() as u8); q.extend_from_slice(label.as_bytes()) }
+    q.extend_from_slice(&[0, 0, 12, 0, 1]); // Root, PTR, IN.
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.ok()?;
+    let mut buf = [0u8; 4096];
+    for _ in 0..3 {
+        socket.send_to(&q, (ip, 5353)).await.ok()?;
+        if let Ok(Ok((n, _))) = timeout(Duration::from_millis(500), socket.recv_from(&mut buf)).await
+            && let Some(port) = remotepairing_port(&buf[..n]) { return Some(SocketAddr::new(ip, port)) }
+    }
+    None
+}
+
+/// `IPAD_ADDR`, then the last address that worked, then a multicast browse.
+async fn locate(last_ip: &Path) -> Result<SocketAddr, String> {
+    if let Some(a) = std::env::var("IPAD_ADDR").ok().and_then(|a| a.parse().ok()) { return Ok(a) }
+    if let Some(ip) = std::fs::read_to_string(last_ip).ok().and_then(|s| s.trim().parse().ok())
+        && let Some(a) = unicast_lookup(ip).await { return Ok(a) }
+    discover().await
+}
+
 async fn connect_wifi(record: &Path) -> Result<(AdapterHandle, RsdHandshake), String> {
     let mut rpf = RpPairingFile::read_from_file(record).await.map_err(|e| format!("pairing record: {e:?}"))?;
     println!("looking for the iPad on Wi-Fi");
-    let addr = match std::env::var("IPAD_ADDR").ok().and_then(|a| a.parse().ok()) { Some(a) => a, None => discover().await? };
+    let last_ip = record.with_file_name("ipad-last-ip.txt");
+    let addr = locate(&last_ip).await?;
     println!("found it at {addr}");
     let stream = tokio::net::TcpStream::connect(addr).await.map_err(|e| format!("connect: {e}"))?;
     let mut rpc = RemotePairingClient::new(RpPairingSocket::new(stream), HOST_NAME);
     rpc.connect(&mut rpf, async || "000000".to_string()).await.map_err(|e| format!("pair verify: {e:?}"))?;
     let tunnel_port = rpc.create_tcp_listener().await.map_err(|e| format!("tunnel listener: {e:?}"))?;
     let tunnel_stream = tokio::net::TcpStream::connect(SocketAddr::new(addr.ip(), tunnel_port)).await.map_err(|e| format!("tunnel connect: {e}"))?;
+    // Each report is a small write; Nagle would hold it behind the previous unacknowledged one.
+    tunnel_stream.set_nodelay(std::env::var_os("NAGLE").is_none()).map_err(|e| format!("nodelay: {e}"))?;
     let keepalive = socket2::TcpKeepalive::new().with_time(KEEPALIVE_IDLE).with_interval(KEEPALIVE_INTERVAL);
     socket2::SockRef::from(&tunnel_stream).set_tcp_keepalive(&keepalive).map_err(|e| format!("keepalive: {e}"))?;
     let tunnel = connect_tls_psk_tunnel_native(tunnel_stream, rpc.encryption_key()).await.map_err(|e| format!("TLS-PSK tunnel: {e:?}"))?;
     let client_ip: std::net::IpAddr = tunnel.info.client_address.parse().map_err(|e| format!("{e}"))?;
     let server_ip: std::net::IpAddr = tunnel.info.server_address.parse().map_err(|e| format!("{e}"))?;
+    let _ = std::fs::write(&last_ip, addr.ip().to_string());
     let (mtu, rsd_port) = (tunnel.info.mtu as usize, tunnel.info.server_rsd_port);
     let mut adapter = idevice::tcp::adapter::Adapter::new(Box::new(tunnel.into_inner()), client_ip, server_ip);
     adapter.set_mss(mtu.min(8192) - 60);
@@ -779,7 +857,7 @@ async fn run() -> ExitCode {
     args.retain(|a| a != "--usb");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "diff" { return probe::diff_cmd(&args[1..]) }
-    if !["check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo"].contains(&cmd) {
+    if !["wifidiag", "rppair", "check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo", "typed"].contains(&cmd) {
         eprintln!("usage: ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]");
         return ExitCode::from(2);
     }
@@ -796,6 +874,17 @@ async fn run() -> ExitCode {
         }
     });
 
+    if cmd == "rppair" {
+        let r = probe::rppair(&dir, args.get(1).map_or(SPIKE_RECORD, |s| s.as_str()), args.get(2).map_or(SPIKE_HOST, |s| s.as_str())).await;
+        println!("{r:?}");
+        std::process::exit(0);
+    }
+    if cmd == "wifidiag" {
+        let r = probe::wifidiag(&dir, args.get(1).map_or(RECORD, |s| s.as_str()), args.get(2).map_or("diag", |s| s.as_str())).await;
+        println!("{r:?}");
+        std::process::exit(0); // The log tap task has no stop.
+    }
+
     let mut session = match timeout(Duration::from_secs(90), Session::open(&dir, usb)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => { eprintln!("FAILED: {e}"); return ExitCode::FAILURE }
@@ -807,7 +896,7 @@ async fn run() -> ExitCode {
         "touch" => session.touch().await,
         "scroll" => session.scroll().await,
         "latency" => session.latency(args.get(1).map(String::as_str).unwrap_or("uhid")).await,
-        "shot" | "dump" | "probe" | "home" | "ids" | "raw" | "bytes" | "demo" => session.run_probe(&args).await,
+        "shot" | "dump" | "probe" | "home" | "ids" | "raw" | "bytes" | "demo" | "typed" => session.run_probe(&args).await,
         _ => session.pointer().await,
     };
     session.finish().await;
@@ -821,6 +910,18 @@ async fn run() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn srv_port_from_a_compressed_reply() {
+        // 1 question, 1 answer, 2 additional. The mobdev SRV comes first to prove the name filter.
+        let mut m = vec![0, 0, 0x84, 0, 0, 1, 0, 1, 0, 0, 0, 2];
+        m.extend_from_slice(b"\x0e_remotepairing\x04_tcp\x05local\0\0\x0c\0\x01"); // Name at 12.
+        m.extend_from_slice(&[0xC0, 12, 0, 12, 0, 1, 0, 0, 0, 9, 0, 2, 0xC0, 12]); // PTR answer.
+        m.extend_from_slice(b"\x0e_apple-mobdev2\x04_tcp\x05local\0\0\x21\0\x01\0\0\0\x09\0\x08\0\0\0\0\x7e\xf2\xc0\x0c");
+        m.extend_from_slice(&[1, b'i', 0xC0, 12, 0, 33, 0, 1, 0, 0, 0, 9, 0, 8, 0, 0, 0, 0, 0xC0, 0, 0xC0, 12]);
+        assert_eq!(remotepairing_port(&m), Some(49152));
+        assert_eq!(remotepairing_port(&m[..40]), None);
+    }
 
     #[test]
     fn key_usages_and_mouse_reports() {
