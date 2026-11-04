@@ -70,6 +70,49 @@ fn say_diff(label: &str, a: &str, b: &str) {
     }
 }
 
+/// iPad system log lines from the HID daemon, the one oracle that says what became of a report.
+pub static LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn take_log() -> Vec<String> { std::mem::take(&mut *LOG.lock().unwrap()) }
+
+pub async fn logtap() -> Res {
+    use idevice::{os_trace_relay::OsTraceRelayClient, IdeviceService};
+    let mut mux = UsbmuxdConnection::default().await.map_err(|e| format!("usbmuxd: {e:?}"))?;
+    let dev = mux.get_devices().await.map_err(|e| format!("devices: {e:?}"))?.into_iter().next().ok_or("no iPad")?;
+    let provider = dev.to_provider(UsbmuxdAddr::from_env_var().map_err(|e| format!("addr: {e:?}"))?, HOST_NAME);
+    let client = OsTraceRelayClient::connect(&provider).await.map_err(|e| format!("os trace: {e:?}"))?;
+    let mut relay = client.start_trace(None).await.map_err(|e| format!("start trace: {e:?}"))?;
+    println!("log tap running");
+    let all = std::env::var_os("LOGALL").is_some();
+    loop {
+        let Ok(l) = relay.next().await else { println!("log tap ended"); return Ok(()) };
+        if all || l.filename.contains("dtuhidd") || l.image_name.contains("dtuhidd") {
+            LOG.lock().unwrap().push(format!("{} [{}] {}", l.timestamp.format("%H:%M:%S%.3f"), l.filename.rsplit('/').next().unwrap_or(""), l.message));
+        }
+    }
+}
+
+/// (report id, ok|fail|none) per report the daemon logged, in order.
+fn verdicts_of(log: &[String]) -> Vec<(u8, &'static str)> {
+    let mut out: Vec<(u8, &'static str)> = vec![];
+    for l in log {
+        if let Some((_, n)) = l.rsplit_once("report type identifier ") {
+            if let Ok(n) = n.trim().parse::<u8>() { out.push((n, "ok")) }
+        } else if l.contains("Failed to decode") {
+            if let Some(last) = out.last_mut() { last.1 = "fail" }
+        } else if l.contains("No gesture for report") {
+            if let Some(last) = out.last_mut() { last.1 = "none" }
+        }
+    }
+    out
+}
+
+fn verdicts(log: &[String]) -> Vec<(u8, &'static str)> {
+    let _ = std::fs::write(r"C:\dev\_ref	mp\pointer\ids.log", log.join("
+"));
+    verdicts_of(log)
+}
+
 /// What a virtual service claims to be. `extra` goes into the codable storage as `{tag: value}`.
 #[derive(Clone)]
 pub struct Spec {
@@ -255,8 +298,80 @@ impl Session {
         }
     }
 
+    /// Home button, as idevice's hid tool presses it.
+    pub async fn home(&mut self) -> Res {
+        self.indigo.send_button(0x0C, 0x40, ButtonState::Down).await.map_err(|e| format!("home: {e:?}"))?;
+        sleep(Duration::from_millis(80)).await;
+        self.indigo.send_button(0x0C, 0x40, ButtonState::Up).await.map_err(|e| format!("home: {e:?}"))?;
+        pause(1200).await
+    }
+
+    /// For each report ID and length, zero-filled so nothing acts: does the daemon decode it?
+    async fn ids(&mut self) -> Res {
+        let id = self.create(&Spec::default()).await?;
+        pause(1000).await?;
+        let mut sent = vec![];
+        let raw = self.raw.as_mut().ok_or("no client")?;
+        for rid in 1..=255u16 { sent.push((rid as u8, 24usize)); let mut r = vec![0u8; 24]; r[0] = rid as u8; raw.send_object(send_request(id, r), false).await.map_err(|e| format!("report: {e:?}"))?; pause(15).await?; }
+        pause(2500).await?;
+        let verdicts = verdicts(&take_log());
+        let known: Vec<u8> = verdicts.iter().filter(|(_, v)| *v != "none").map(|(i, _)| *i).collect();
+        println!("  ids with a gesture ({}): {:02X?}", known.len(), known);
+        let mut ok: std::collections::BTreeMap<u8, Vec<usize>> = Default::default();
+        for rid in known {
+            for len in 1..=72usize {
+                let raw = self.raw.as_mut().ok_or("no client")?;
+                let mut r = vec![0u8; len];
+                r[0] = rid;
+                raw.send_object(send_request(id, r), false).await.map_err(|e| format!("report: {e:?}"))?;
+                pause(25).await?;
+                // A verdict for this exact send, in order: logs arrive late, so wait for the line.
+                let mut got = None;
+                for _ in 0..40 {
+                    let v = verdicts_of(&take_log());
+                    if let Some(x) = v.into_iter().next_back() { got = Some(x); break }
+                    pause(25).await?;
+                }
+                if got.is_some_and(|(_, v)| v == "ok") { ok.entry(rid).or_default().push(len) }
+            }
+            println!("  id {rid:02X}: decodes at lengths {:?}", ok.get(&rid));
+        }
+        Ok(())
+    }
+
+    /// `raw <hex>...`: sends each report 30 times, 8 ms apart, on a virtual mouse, and prints what the
+    /// daemon said. All log lines go to raw.log.
+    async fn raw_reports(&mut self, reports: &[String]) -> Res {
+        let id = self.create(&Spec::default()).await?;
+        pause(1200).await?;
+        let mut all = take_log();
+        for hex in reports {
+            let bytes: Vec<u8> = (0..hex.len() / 2).map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+            println!("-- {hex}");
+            let raw = self.raw.as_mut().ok_or("no client")?;
+            for _ in 0..30 {
+                raw.send_object(send_request(id, bytes.clone()), false).await.map_err(|e| format!("report: {e:?}"))?;
+                sleep(Duration::from_millis(8)).await;
+            }
+            pause(1500).await?;
+            let log = take_log();
+            let mut seen = std::collections::BTreeMap::<String, u32>::new();
+            for l in log.iter().filter(|l| !l.contains("] [0x")) { *seen.entry(l.split_once(' ').map_or(l.as_str(), |x| x.1).chars().take(170).collect()).or_default() += 1; }
+            for (l, n) in seen.iter().take(25) { println!("  {n}x {l}"); }
+            all.extend(log);
+        }
+        let _ = std::fs::write(r"C:\dev\_ref	mp\pointeraw.log", all.join("
+"));
+        Ok(())
+    }
+
     pub async fn run_probe(&mut self, args: &[String]) -> Res {
+        tokio::spawn(async { if let Err(e) = logtap().await { println!("log tap failed: {e}") } });
+        pause(800).await?;
         match args[0].as_str() {
+            "home" => self.home().await,
+            "ids" => self.ids().await,
+            "raw" => self.raw_reports(&args[1..]).await,
             "shot" => self.shot(args.get(1).map_or("shot", |s| s.as_str())).await.map(|_| ()),
             "dump" => self.dump().await,
             "probe" => self.stages(args.get(1).map_or("", |s| s.as_str())).await,
@@ -277,6 +392,12 @@ mod tests {
         b[(2 * 4 + 3) * 3 + 2] = 200;
         assert_eq!(changed(4, &a, &b, 24), Change { pixels: 2, bbox: Some((1, 1, 3, 2)) });
         assert_eq!(changed(4, &a, &a, 24).pixels, 0);
+    }
+
+    #[test]
+    fn log_verdicts() {
+        let log = ["x report type identifier 1", "y Failed to decode report", "x report type identifier 2", "x report type identifier 9", "No gesture for report ID 9"].map(String::from);
+        assert_eq!(verdicts_of(&log), [(1, "fail"), (2, "ok"), (9, "none")]);
     }
 
     #[test]
