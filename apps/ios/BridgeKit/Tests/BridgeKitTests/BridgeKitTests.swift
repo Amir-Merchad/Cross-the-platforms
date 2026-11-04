@@ -80,8 +80,9 @@ final class OutgoingQueueTests: XCTestCase {
         try age(second, by: 100)
         let b = q.batches()
         XCTAssertEqual(b.count, 2)
-        XCTAssertTrue(b[0][0].path.hasPrefix(first.path))
-        XCTAssertTrue(b[1][0].path.hasPrefix(second.path))
+        func batchName(_ f: URL) -> String { f.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent }
+        XCTAssertEqual(batchName(b[0][0]), first.lastPathComponent)
+        XCTAssertEqual(batchName(b[1][0]), second.lastPathComponent)
     }
 
     func testRemoveDropsTheWholeBatch() throws {

@@ -44,17 +44,21 @@ public struct OutgoingQueue {
         }
     }
 
-    /// `file` is one of the URLs from `batches()`; drops its whole batch.
+    /// `file` is one of the URLs from `batches()`; drops its whole batch. Ignores anything outside `root`.
     public func remove(batchOf file: URL) throws {
-        try FileManager.default.removeItem(at: file.deletingLastPathComponent().deletingLastPathComponent())
+        let batch = file.deletingLastPathComponent().deletingLastPathComponent()
+        guard batch.deletingLastPathComponent().resolvingSymlinksInPath().path == root.resolvingSymlinksInPath().path else { return }
+        try FileManager.default.removeItem(at: batch)
     }
 
-    /// Deletes batches left half-copied by a crash.
-    public func sweepIncomplete() {
+    /// Deletes batches left half-copied by a crash. Folders newer than `olderThan` may still be mid-copy (share extension) and are kept.
+    public func sweepIncomplete(olderThan: TimeInterval = 3600) {
         let fm = FileManager.default
-        for u in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [])) ?? []
+        let cutoff = Date(timeIntervalSinceNow: -olderThan)
+        for u in (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey], options: [])) ?? []
         where u.lastPathComponent.hasPrefix(".incoming-") {
-            try? fm.removeItem(at: u)
+            let made = (try? u.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+            if made < cutoff { try? fm.removeItem(at: u) }
         }
     }
 }

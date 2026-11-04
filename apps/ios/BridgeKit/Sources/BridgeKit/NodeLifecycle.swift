@@ -31,8 +31,9 @@ public struct NodeLifecycle {
         return pending == 0 && inBackground && running ? shutDown() : []
     }
 
+    /// No transfer id is known, so a failure counts as one file; a stale count only holds the node until background time expires.
     public mutating func transferFailed() -> [LifecycleAction] {
-        pending = 0
+        pending = max(0, pending - 1)
         return inBackground && running ? shutDown() : []
     }
 
