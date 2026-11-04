@@ -53,7 +53,7 @@ const BLUETOOTH_GRACE_MS = 15000;
 
 export type Hub = {
   settings: Settings; update: (fn: (s: Settings) => Settings) => void;
-  status: Status | null; clip: ClipStatus | null; monitors: Monitor[]; peers: Peer[]; reachable: string[]; waiting: Record<string, number>;
+  status: Status | null; clip: ClipStatus | null; monitors: Monitor[]; peers: Peer[]; loaded: boolean; reachable: string[]; waiting: Record<string, number>;
   devices: Device[]; rows: Row[]; say: (text: string) => void; statusLine: string; btOff: boolean; refreshPeers: () => Promise<void>;
   tab: Tab; setTab: (t: Tab) => void; addOpts: AddOpts; openAdd: (o?: AddOpts) => void; selected: string | null; select: (key: string | null) => void; current: Device | null;
 };
@@ -71,6 +71,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
   const [clip, setClip] = useState<ClipStatus | null>(null);
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
+  const [peersLoaded, setPeersLoaded] = useState(false);
   const [reachable, setReachable] = useState<string[]>([]);
   const [waiting, setWaiting] = useState<Record<string, number>>({});
   const [rows, setRows] = useState<Row[]>([]);
@@ -91,7 +92,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
 
   const update = useCallback((fn: (s: Settings) => Settings) => { store.current?.update(fn); }, []);
   const openAdd = useCallback((o: AddOpts = { kind: "ipad" }) => { setAddOpts(o); setTab("add"); }, []);
-  const refreshPeers = useCallback(() => pairedPeers().then(setPeers), []);
+  const refreshPeers = useCallback(() => pairedPeers().then((p) => { setPeers(p); setPeersLoaded(true); }), []);
 
   useEffect(() => {
     getSettings().then((s) => { store.current = makeStore(s, saveSettings, setSettings, () => say("That did not save, so it went back. Try again.")); setSettings(s); });
@@ -130,17 +131,19 @@ export function HubProvider({ children }: { children: ReactNode }) {
 
   // Identical names link by themselves. Once written the link exists, so this finds nothing and does not loop.
   const hosts = status?.hosts;
+  const tried = useRef(new Set<string>()); // a failed save reverts settings; do not retry the same host forever
   useEffect(() => {
-    if (!settings || !hosts) return;
-    const found = nameLinks(hosts, peers, settings.device_links);
+    if (!settings || !hosts || !peersLoaded) return;
+    const found = Object.fromEntries(Object.entries(nameLinks(hosts, peers, settings.device_links)).filter(([h]) => !tried.current.has(h)));
+    Object.keys(found).forEach((h) => tried.current.add(h));
     if (Object.keys(found).length) update((s) => ({ ...s, device_links: { ...found, ...s.device_links } }));
-  }, [settings, hosts, peers, update]);
+  }, [settings, hosts, peers, peersLoaded, update]);
 
   const devices = useMemo(() => (settings ? buildDevices(status, peers, settings, reachable, waiting, monitors) : []), [status, peers, settings, reachable, waiting, monitors]);
 
   if (!settings) return null;
   const current = devices.find((d) => d.key === selected) ?? devices[0] ?? null;
   const statusLine = said || deskLine(status, rows, devices, current, btOff);
-  const hub: Hub = { settings, update, status, clip, monitors, peers, reachable, waiting, devices, rows, say, statusLine, btOff, refreshPeers, tab, setTab, addOpts, openAdd, selected, select, current };
+  const hub: Hub = { settings, update, status, clip, monitors, peers, loaded: peersLoaded && status !== null, reachable, waiting, devices, rows, say, statusLine, btOff, refreshPeers, tab, setTab, addOpts, openAdd, selected, select, current };
   return <Ctx.Provider value={hub}>{children}</Ctx.Provider>;
 }

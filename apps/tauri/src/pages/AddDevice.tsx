@@ -23,7 +23,13 @@ const FILES_TEXT: Record<AddKind, string> = {
 
 type Qr = { img: string; code: string; until: number };
 
+/** Waits for the device lists, so the snapshot of what exists already is complete. */
 export default function AddDevice() {
+  const { loaded } = useHub();
+  return loaded ? <Guide /> : <p role="status" className="text-muted-foreground">Looking for your devices…</p>;
+}
+
+function Guide() {
   const { status, peers, clip, settings, devices, addOpts, update, say, select, setTab } = useHub();
   const [kind, setKind] = useState<AddKind>(addOpts.kind);
   const [skipped, setSkipped] = useState<number[]>([]);
@@ -71,7 +77,7 @@ export default function AddDevice() {
   }, [step, triedCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickKind = (k: AddKind) => { setKind(k); setSkipped([]); setQr(null); setTriedCode(false); };
-  const skip = () => setSkipped((s) => [...s, step]);
+  const skip = () => { if (step === 1) setQr(null); setSkipped((s) => [...s, step]); };
   const left = qr ? Math.max(0, Math.round((qr.until - now) / 1000)) : 0;
   const expired = !!qr && left === 0;
   const notice = kind === "ipad" ? clipNotice(clip?.notice ?? null) : null;
@@ -82,7 +88,7 @@ export default function AddDevice() {
 
   const card = (i: number) => {
     const current = i === step;
-    const tag = i < step ? (seenAt[i] ? "Done" : "Skipped") : current ? (i === 0 ? `Waiting for the ${kind === "ipad" ? "iPad" : "phone"}` : expired ? "Expired" : "") : "Next";
+    const tag = i < step ? (seenAt[i] ? "Done" : "Skipped") : current ? (i === 0 ? `Waiting for the ${kind === "ipad" ? "iPad" : "phone"}` : i === 1 && expired ? "Expired" : "") : "Next";
     return (
       <section key={i} className={cn("flex-none rounded-[18px] border-2 bg-card px-4 py-3.5", current ? "border-primary" : "border-border")}>
         <div className="flex items-center justify-between gap-3">

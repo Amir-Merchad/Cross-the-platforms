@@ -43,7 +43,8 @@ describe("nameLinks", () => {
     expect(nameLinks([h("a", "iPad")], [peer("p", "iPad")], { a: "p" })).toEqual({});
     expect(nameLinks([h("b", "iPad")], [peer("p", "iPad")], { a: "p" })).toEqual({});
   });
-  it("gives one peer to only one host", () => expect(Object.keys(nameLinks([h("a", "X"), h("b", "X")], [peer("p", "X")], {}))).toHaveLength(1));
+  it("does not guess between two hosts with the same name", () => expect(nameLinks([h("a", "X"), h("b", "X")], [peer("p", "X")], {})).toEqual({}));
+  it("still links a unique host beside a duplicated one", () => expect(nameLinks([h("a", "X"), h("b", "X"), h("c", "Y")], [peer("p", "X"), peer("q", "Y")], {})).toEqual({ c: "q" }));
 });
 
 describe("linkChoices", () => {

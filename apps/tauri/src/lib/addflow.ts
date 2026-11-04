@@ -30,13 +30,14 @@ export function newLink(
   return host && peer && links[host] !== peer ? { host, peer } : null;
 }
 
-/** Links for unlinked hosts whose name is identical to one unlinked peer. Empty once they are written. */
+/** Links for unlinked hosts whose name is identical to exactly one unlinked peer, when no other unlinked host shares that name. */
 export function nameLinks(hosts: { id: string; name: string | null }[], peers: Peer[], links: Record<string, string>): Record<string, string> {
   const free = peers.filter((p) => !Object.values(links).includes(p.id));
+  const open = hosts.filter((h) => !links[h.id]);
   const out: Record<string, string> = {};
-  for (const h of hosts) {
-    if (links[h.id]) continue;
-    const id = linkByName(h.name, free.filter((p) => !Object.values(out).includes(p.id)));
+  for (const h of open) {
+    if (open.filter((o) => o.name === h.name).length > 1) continue;
+    const id = linkByName(h.name, free);
     if (id) out[h.id] = id;
   }
   return out;
