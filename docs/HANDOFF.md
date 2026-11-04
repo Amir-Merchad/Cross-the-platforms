@@ -1,4 +1,4 @@
-# Handoff — where the work stands (2026-11-03, late)
+# Handoff — where the work stands (2026-11-04)
 
 Read this first. Then, as needed: `docs/specs/2026-11-02-device-bridge-design.md` (the vision; §4 apps, §7 clipboard,
 §8 transfer, §9 platform limits), `docs/spikes/results.md` (measured facts), the plans in `docs/superpowers/plans/`,
@@ -20,17 +20,18 @@ matters), no Mac, free Apple ID, uses it daily while studying. No merge / PR / p
 | Files PC → phone ≥ 80 MB/s; phone → PC (disk-limited, see §6) | ✅ |
 | Phone share sheet → PC; Explorer "Send to → Bridge – <phone>" → phone | ✅ |
 | Clipboard PC → phone (automatic) and phone → PC (Quick Settings tile, 52 ms) | ✅ |
+| iPad app Bridge: pair, files both ways, share sheet, queue while closed (SideStore sideload) | ✅ `docs/v1/checklist-ipad.md`, overall owner report; 7-day re-sign (row 13) still to check |
 | Logs contain no file names / clipboard text / keys | ✅ |
 
 ## 3. Branches (all stacked; nothing merged into `main` yet)
 ```
-main ── v1/windows-hub-input (04c6a13, pushed) ── v1/clipboard (2b73b7b, pushed) ── v1/transfer (c60b197+, pushed)
+main ── v1/windows-hub-input (04c6a13, pushed) ── v1/clipboard (2b73b7b, pushed) ── v1/transfer (pushed) ── v1/ios (pushed)
 ```
-- **`v1/transfer`** is the newest and contains everything. It lives in the worktree
+- **`v1/ios`** is the newest and contains everything. It lives in the worktree
   `C:\dev\Cross-the-platforms\.claude\worktrees\ctp-windows-hub-input-bug-b2c51e`. Pushed to `origin`.
 - `main` = foundation + spikes (PR #1, merged by the owner).
 - To finish v1 cleanly: open PRs in order `v1/windows-hub-input → main`, then `v1/clipboard`, then `v1/transfer` (each
-  based on the previous), or one PR of `v1/transfer → main` with all ~50 commits. Owner decides.
+  based on the previous), then `v1/ios`, or one PR of `v1/ios → main` with all commits. Owner decides.
 
 ## 4. Build, run, install
 Repo layout: `core/` (bridge-core: hid, edge, layout, settings, router, keyqueue, clipboard, names, identity, pairing, node,
@@ -95,14 +96,13 @@ Owner skipped the open device checks, so these stay **untested**: rows 2, 3, 4, 
 Older deferred minors (clipboard plan): connect loop runs while sync is off; tray check can disagree if save fails; watcher
 failure not in status; wrong DDI remounts forever; parallel Pair clicks / notice never clears; size check after decode.
 
-### 7.3 Plan 4 — iPad Swift app: plan written, `docs/superpowers/plans/2026-11-04-v1-ipad-app.md` (awaiting owner review; branch `v1/ios`)
-From the spec + spikes: Swift app using the same UniFFI core (`start_node(..., kind: PeerKind::Ipad, ...)`, already exposed in
-`core/src/ffi.rs`); pair by scanning the PC's QR; receive into Files while the app is open (iOS gives no always-on background);
-share extension "Send to PC"; LocalSend-protocol fallback was suggested for when the app isn't open; **no Mac**: build on GitHub
-Actions macOS (see `.github/workflows/ios-spike.yml`, spike in `spikes/ios-app`), install via iloader → **SideStore 0.7.0**
-(free Apple ID ⇒ re-sign every 7 days; plain SideStore, no LiveContainer, so share extensions work). iPad clipboard already
-works without an app (idevice over Wi-Fi), so the iPad app is about files. iPad→PC over iroh was 16 MB/s in the spike — the
-TLS-TCP path should fix that; measure.
+### 7.3 Plan 4 — iPad Swift app — DONE (owner sideloaded and ran the checklist 2026-11-04)
+Plan: `docs/superpowers/plans/2026-11-04-v1-ipad-app.md`. Code in `apps/ios/`, build on GitHub Actions (`ios` workflow, artifact
+`Bridge-ipa`, kept 3 days), install via iloader → SideStore 0.7.0 (free Apple ID ⇒ re-sign every 7 days). Still open:
+- Checklist row 13: confirm data and pairing survive the first real re-sign. Rows 4 and 5 have no MB/s recorded, so the iPad→PC speed is unmeasured.
+- Rulings and deferred minors: `docs/v1/ipad-deferred.md`.
+- `ios-spike` CI has failed since `v1/transfer`: `spikes/ios-app` calls `startReceiver` and `sendFileFfi`, which the core no longer exposes. Not an app bug.
+- Run `apps/android/build-rust.ps1` before the next Android build; the local bindings are stale.
 
 ### 7.4 Plan 5 — Tauri mobile flavours (spec §4: "the Tauri app with shadcn on all devices")
 Same React UI on Android/iPad as a settings/companion app, sharing `apps/tauri/src`. Decide with the owner how it coexists with
