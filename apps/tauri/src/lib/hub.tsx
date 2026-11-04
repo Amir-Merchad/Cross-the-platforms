@@ -5,7 +5,7 @@ import {
   type ClipStatus, type Monitor, type Settings, type Status,
 } from "./api";
 import { applyEvent, type Row } from "./activity";
-import { buildDevices, displayName, type Device } from "./devices";
+import { buildDevices, deskLine, type Device } from "./devices";
 import { onTransfer, pairedPeers, queuedFiles, type Peer } from "./transfer";
 
 export type Tab = "desk" | "transfers" | "clipboard" | "settings";
@@ -43,18 +43,14 @@ export function makeStore(initial: Settings, save: (s: Settings) => Promise<void
 export const resolveDark = (appearance: string, systemDark: boolean): boolean =>
   appearance === "light" ? false : appearance === "dark" ? true : systemDark;
 
-/** Mirrors tray.rs status_line, in the canvas wording. */
-export function derivedLine(status: Status | null): string {
-  if (!status) return "";
-  if (status.active) return `Your keyboard and mouse are on ${displayName(status.hosts.find((h) => h.id === status.active)?.name)}.`;
-  return status.notice ?? "Your keyboard and mouse are on Windows.";
-}
+/** Advertising takes up to 12 s to start and blips on restart, so only a longer gap counts as Bluetooth being off. */
+const BLUETOOTH_GRACE_MS = 15000;
 
 export type Hub = {
   settings: Settings; update: (fn: (s: Settings) => Settings) => void;
   status: Status | null; clip: ClipStatus | null; monitors: Monitor[]; peers: Peer[]; reachable: string[]; waiting: Record<string, number>;
-  devices: Device[]; rows: Row[]; say: (text: string) => void; statusLine: string;
-  tab: Tab; setTab: (t: Tab) => void; selected: string | null; select: (key: string | null) => void;
+  devices: Device[]; rows: Row[]; say: (text: string) => void; statusLine: string; btOff: boolean; refreshPeers: () => Promise<void>;
+  tab: Tab; setTab: (t: Tab) => void; selected: string | null; select: (key: string | null) => void; current: Device | null;
 };
 
 const Ctx = createContext<Hub | null>(null);
@@ -76,6 +72,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
   const [said, setSaid] = useState("");
   const [tab, setTab] = useState<Tab>("desk");
   const [selected, select] = useState<string | null>(null);
+  const [graceOver, setGraceOver] = useState(false);
 
   const store = useRef<ReturnType<typeof makeStore> | null>(null);
   const sayTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -87,22 +84,32 @@ export function HubProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const update = useCallback((fn: (s: Settings) => Settings) => { store.current?.update(fn); }, []);
+  const refreshPeers = useCallback(() => pairedPeers().then(setPeers), []);
 
   useEffect(() => {
-    getSettings().then((s) => { store.current = makeStore(s, saveSettings, setSettings, (e) => say(`Could not save: ${String(e)}`)); setSettings(s); });
+    getSettings().then((s) => { store.current = makeStore(s, saveSettings, setSettings, () => say("That did not save, so it went back. Try again.")); setSettings(s); });
     getStatus().then(setStatus);
     getClipStatus().then(setClip);
     listMonitors().then(setMonitors);
     const offs = [onStatus(setStatus), onClipStatus(setClip), onTransfer((e) => {
       setRows((r) => applyEvent(r, e, Date.now()));
-      if (e.type === "Paired") pairedPeers().then(setPeers);
+      if (e.type === "Paired") refreshPeers();
+      if (e.type === "Queued") setWaiting((w) => ({ ...w, [e.peer]: e.files }));
     })];
-    const poll = () => { pairedPeers().then(setPeers); reachablePeers().then(setReachable); queuedFiles().then(setWaiting); };
+    const poll = () => { refreshPeers(); reachablePeers().then(setReachable); queuedFiles().then(setWaiting); };
     poll();
     const fast = setInterval(() => listMonitors().then(setMonitors), 3000);
     const slow = setInterval(poll, 5000);
     return () => { offs.forEach((o) => o.then((f) => f())); clearInterval(fast); clearInterval(slow); clearTimeout(sayTimer.current); };
-  }, [say]);
+  }, [say, refreshPeers]);
+
+  const advertising = status?.advertising;
+  useEffect(() => {
+    if (advertising !== false) return;
+    const t = setTimeout(() => setGraceOver(true), BLUETOOTH_GRACE_MS);
+    return () => { clearTimeout(t); setGraceOver(false); };
+  }, [advertising]);
+  const btOff = advertising === false && graceOver;
 
   const appearance = settings?.appearance;
   useEffect(() => {
@@ -117,6 +124,8 @@ export function HubProvider({ children }: { children: ReactNode }) {
   const devices = useMemo(() => (settings ? buildDevices(status, peers, settings, reachable, waiting, monitors) : []), [status, peers, settings, reachable, waiting, monitors]);
 
   if (!settings) return null;
-  const hub: Hub = { settings, update, status, clip, monitors, peers, reachable, waiting, devices, rows, say, statusLine: said || derivedLine(status), tab, setTab, selected, select };
+  const current = devices.find((d) => d.key === selected) ?? devices[0] ?? null;
+  const statusLine = said || deskLine(status, rows, devices, current, btOff);
+  const hub: Hub = { settings, update, status, clip, monitors, peers, reachable, waiting, devices, rows, say, statusLine, btOff, refreshPeers, tab, setTab, selected, select, current };
   return <Ctx.Provider value={hub}>{children}</Ctx.Provider>;
 }

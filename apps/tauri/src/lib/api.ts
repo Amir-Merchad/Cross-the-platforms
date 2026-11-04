@@ -32,6 +32,7 @@ export const reachablePeers = () => invoke<string[]>("reachable_peers");
 export const getStatus = () => invoke<Status>("get_status");
 export const listMonitors = () => invoke<Monitor[]>("list_monitors");
 export const switchTo = (deviceId: string | null) => invoke<void>("switch_to", { deviceId });
+export const openBluetoothSettings = () => invoke<void>("open_bluetooth_settings");
 export const onStatus = (cb: (s: Status) => void): Promise<UnlistenFn> => listen<Status>("status", (e) => cb(e.payload));
 
 export type IpadStatus = "NotPaired" | "Connecting" | { Connected: { wifi: boolean } } | { Unavailable: string };
@@ -42,4 +43,3 @@ export const setClipboardSync = (on: boolean) => invoke<void>("set_clipboard_syn
 export const pairIpad = () => invoke<void>("pair_ipad");
 export const onClipStatus = (cb: (s: ClipStatus) => void): Promise<UnlistenFn> => listen<ClipStatus>("clip-status", (e) => cb(e.payload));
 
-export const hostName = (s: Status | null, id: string) => s?.hosts.find((h) => h.id === id)?.name ?? id;

@@ -42,6 +42,8 @@
     --color-success: var(--success);
     --color-screen: var(--screen);
     --color-lip: var(--lip);
+    --color-warn: var(--warn);
+    --color-warn-foreground: var(--warn-foreground);
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -79,6 +81,10 @@
     --screen: #1C2836;
     --success: #0B7A55;
     --lip: #D79A00;
+    --off: #B6C2D1;
+    --edge: #C3CEDC;
+    --warn: #FFF1CC;
+    --warn-foreground: #6B4A00;
     --sidebar: #FFFFFF;
     --sidebar-foreground: #14202E;
     --sidebar-primary: #FFC531;
@@ -117,6 +123,10 @@
     --screen: #2A3644;
     --success: #5FD3A8;
     --lip: #D79A00;
+    --off: #4A5666;
+    --edge: #3B4757;
+    --warn: #3B2F14;
+    --warn-foreground: #FFD978;
     --sidebar: #1B232D;
     --sidebar-foreground: #EEF3F8;
     --sidebar-primary: #FFC531;

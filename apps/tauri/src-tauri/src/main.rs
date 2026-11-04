@@ -65,7 +65,7 @@ fn main() {
             commands::get_settings, commands::save_settings, commands::get_status, commands::list_monitors, commands::switch_to,
             commands::get_clip_status, commands::set_clipboard_sync, commands::pair_ipad, commands::reachable_peers,
             commands::pair_invite, commands::paired_peers, commands::forget_peer, commands::queued_files, commands::send_files,
-            commands::receive_dir, commands::set_receive_dir, commands::open_receive_dir
+            commands::receive_dir, commands::set_receive_dir, commands::open_receive_dir, commands::open_bluetooth_settings
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

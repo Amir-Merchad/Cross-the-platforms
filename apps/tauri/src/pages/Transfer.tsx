@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import QRCode from "qrcode";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,7 +23,6 @@ export default function Transfer() {
   const [got, setGot] = useState<Got[]>([]);
   const [waiting, setWaiting] = useState<Record<string, number>>({});
   const [dir, setDir] = useState("");
-  const [over, setOver] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fail = (e: unknown) => setError(String(e));
 
@@ -41,22 +39,8 @@ export default function Transfer() {
       if (e.type === "Failed") setLive((l) => ({ ...l, [e.id]: { ...(l[e.id] ?? { done: 0, total: 0, started: Date.now(), now: Date.now() }), failed: e.reason } }));
       if (e.type === "Received") setGot((g) => [{ name: fileName(e.path), size: e.size }, ...g].slice(0, 20));
     });
-    // Files dropped on a device card go to that device.
-    const offDrop = getCurrentWebview().onDragDropEvent((ev) => {
-      const p = ev.payload;
-      const peerAt = (x: number, y: number) => {
-        const el = document.elementFromPoint(x / window.devicePixelRatio, y / window.devicePixelRatio)?.closest("[data-peer]");
-        return el?.getAttribute("data-peer") ?? null;
-      };
-      if (p.type === "over") setOver(peerAt(p.position.x, p.position.y));
-      else if (p.type === "drop") {
-        const id = peerAt(p.position.x, p.position.y);
-        setOver(null);
-        if (id && p.paths.length) sendFiles(id, p.paths).catch(fail);
-      } else setOver(null);
-    });
     const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => { off.then((f) => f()); offDrop.then((f) => f()); clearInterval(t); };
+    return () => { off.then((f) => f()); clearInterval(t); };
   }, []);
 
   const showQr = async () => {
@@ -81,13 +65,12 @@ export default function Transfer() {
       <Card>
         <CardHeader>
           <CardTitle>Paired devices</CardTitle>
-          <CardDescription>Drop files on a device, or use "Send to" in Explorer. Files arrive in its Bridge folder.</CardDescription>
+          <CardDescription>Drop files on a device on the Desk, or use "Send to" in Explorer. Files arrive in its Bridge folder.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {peers.length === 0 && <p className="text-sm text-muted-foreground">No devices yet. Pair your phone below.</p>}
           {peers.map((p) => (
-            <div key={p.id} data-peer={p.id}
-              className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${over === p.id ? "border-primary bg-primary/5" : "border-dashed"}`}>
+            <div key={p.id} className="flex items-center justify-between rounded-lg border border-dashed p-3">
               <div className="flex items-center gap-2 text-sm">
                 <span className="font-medium">{p.name}</span>
                 <Badge variant="secondary">{p.kind === "Ipad" ? "iPad" : p.kind}</Badge>

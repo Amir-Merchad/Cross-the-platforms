@@ -1,10 +1,13 @@
 // Pure geometry and placement rules for the desk. No React, no Tauri.
 import type { Attachment, Edge, Monitor } from "./api";
+import type { Device } from "./devices";
+import type { PeerKind } from "./transfer";
 
 export type Box = { x: number; y: number; w: number; h: number };
 type Size = { w: number; h: number };
-type Screen = { id: string; box: Box };
-const EDGES: Edge[] = ["Left", "Right", "Top", "Bottom"];
+type Point = { x: number; y: number };
+export type Screen = { id: string; box: Box };
+export const EDGES: Edge[] = ["Left", "Right", "Top", "Bottom"];
 
 /** Monitors drawn to scale, fitted into `area` and centred. */
 export function screenBoxes(monitors: Monitor[], area: Size): Screen[] {
@@ -72,3 +75,77 @@ export function hotkeyNumber(attachments: Attachment[], id: string): number | nu
   const i = attachments.findIndex((a) => a.device_id === id);
   return i < 0 ? null : i + 1;
 }
+
+/** null when the device in control has lost its place: return input to Windows before saving. */
+export function placementChange(activeHostId: string | null, next: Attachment[]): null | undefined {
+  return activeHostId && !next.some((a) => a.device_id === activeHostId) ? null : undefined;
+}
+
+/** The device nearest to `at`, measured to its edge, within `range`. */
+export function fileTarget(at: Point, rects: { key: string; left: number; top: number; right: number; bottom: number }[], range = 34): string | null {
+  let best: string | null = null;
+  let bestD = range;
+  for (const r of rects) {
+    const d = Math.hypot(Math.max(r.left - at.x, 0, at.x - r.right), Math.max(r.top - at.y, 0, at.y - r.bottom));
+    if (d <= bestD) { bestD = d; best = r.key; }
+  }
+  return best;
+}
+
+export const deviceSize = (kind: PeerKind | null): Size => (kind === "Android" ? { w: 84, h: 150 } : { w: 150, h: 112 });
+
+const ROOM = { side: 170, top: 170, bottom: 200 }; // around the screens, so a device fits on every outer edge
+const TRAY = { inset: 12, h: 184, minW: 190, maxW: 290, left: 18, right: 12, bottom: 6, gap: 8 };
+
+/** Screens, the tray and where every device rests, for a map of size `stage`. */
+export function deskPlan(devices: Pick<Device, "key" | "kind" | "placement">[], monitors: Monitor[], stage: Size): { screens: Screen[]; tray: Box; homes: Map<string, Point> } {
+  const area = { w: Math.max(stage.w - 2 * ROOM.side, 1), h: Math.max(stage.h - ROOM.top - ROOM.bottom, 1) };
+  const screens = screenBoxes(monitors, area).map((s) => ({ ...s, box: { ...s.box, x: s.box.x + ROOM.side, y: s.box.y + ROOM.top } }));
+  const homes = new Map<string, Point>();
+  const loose: { key: string; size: Size }[] = [];
+  for (const d of devices) {
+    const size = deviceSize(d.kind);
+    const screen = screens.find((s) => s.id === d.placement?.monitor_id);
+    if (!screen) { loose.push({ key: d.key, size }); continue; }
+    const { x, y } = slotFor(screen.box, d.placement!.edge, size);
+    homes.set(d.key, { x, y });
+  }
+  // ponytail: past two or three devices the tray overlaps them; make it scroll if people keep that many unplaced.
+  const advance = loose.reduce((n, l) => n + l.size.w + TRAY.gap, 0);
+  const last = loose.at(-1)?.size.w ?? 0;
+  const need = TRAY.left + advance - TRAY.gap + TRAY.right;
+  const w = Math.min(Math.max(need, TRAY.minW), TRAY.maxW);
+  const tray = { x: TRAY.inset, y: stage.h - TRAY.inset - TRAY.h, w, h: TRAY.h };
+  const squeeze = need > w ? (w - TRAY.left - TRAY.right - last) / (advance - last - TRAY.gap) : 1;
+  let x = tray.x + TRAY.left;
+  for (const l of loose) {
+    homes.set(l.key, { x, y: tray.y + TRAY.h - TRAY.bottom - l.size.h });
+    x += (l.size.w + TRAY.gap) * squeeze;
+  }
+  return { screens, tray, homes };
+}
+
+/** A bar `thick` by `length`, `off` px outside `edge` of `screen` and centred along it. */
+export function edgeBar(screen: Box, edge: Edge, thick: number, length: number, off: number): Box {
+  const x = screen.x + (screen.w - length) / 2;
+  const y = screen.y + (screen.h - length) / 2;
+  switch (edge) {
+    case "Left": return { x: screen.x - off - thick, y, w: thick, h: length };
+    case "Right": return { x: screen.x + screen.w + off, y, w: thick, h: length };
+    case "Top": return { x, y: screen.y - off - thick, w: length, h: thick };
+    case "Bottom": return { x, y: screen.y + screen.h + off, w: length, h: thick };
+  }
+}
+
+/** The screen arrow keys place on: the picked one, else the device's own, else the first. */
+export function keyboardScreen(picked: string | null, placement: Attachment | null, monitors: Monitor[]): string | null {
+  const live = (id?: string | null) => monitors.some((m) => m.id === id);
+  if (live(picked)) return picked;
+  return live(placement?.monitor_id) ? placement!.monitor_id : monitors[0]?.id ?? null;
+}
+
+const WORDS: Record<Edge, string> = { Right: "right of", Left: "left of", Top: "above", Bottom: "below" };
+
+export const screenName = (monitors: Monitor[], id: string) => `Screen ${monitors.findIndex((m) => m.id === id) + 1}`;
+export const whereLine = (edge: Edge, screen: string) => `${WORDS[edge]} ${screen}`;
+export const placedLine = (name: string, screen: string, edge: Edge, hotkey: number) => `${name} sits ${whereLine(edge, screen)}. Ctrl+Alt+${hotkey} jumps to it.`;

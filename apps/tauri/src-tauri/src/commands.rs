@@ -109,6 +109,11 @@ pub fn open_receive_dir(state: State<AppState>) -> Result<(), String> {
     std::process::Command::new("explorer.exe").arg(&dir).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn open_bluetooth_settings() -> Result<(), String> {
+    std::process::Command::new("explorer.exe").arg("ms-settings:bluetooth").spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Saves the toggle, tells the clipboard service and refreshes the tray check mark.
 pub fn set_clipboard_sync_now(app: &AppHandle, on: bool) -> Result<(), String> {
     let state = app.state::<AppState>();
