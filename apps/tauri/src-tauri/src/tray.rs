@@ -14,7 +14,7 @@ pub const TRAY_ID: &str = "main";
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(app.default_window_icon().cloned().expect("bundle icon"))
-        .tooltip("Bridge")
+        .tooltip(format!("Bridge: {}", status_line(&Status::default())))
         .menu(&build_menu(app, &Status::default())?)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
@@ -31,7 +31,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 pub fn refresh(app: &AppHandle, status: &Status) {
     if let (Some(tray), Ok(menu)) = (app.tray_by_id(TRAY_ID), build_menu(app, status)) {
         let _ = tray.set_menu(Some(menu));
-        let _ = tray.set_tooltip(Some(status_line(status)));
+        let _ = tray.set_tooltip(Some(format!("Bridge: {}", status_line(status))));
     }
 }
 

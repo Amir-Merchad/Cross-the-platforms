@@ -20,6 +20,25 @@ export function makeSaver(save: (s: Settings) => Promise<void>): (s: Settings) =
   };
 }
 
+/**
+ * Settings that apply at once and save in order. After a failure, state goes back to the last saved value
+ * only once no save is pending, so a later save that already includes the failed edit is not undone.
+ */
+export function makeStore(initial: Settings, save: (s: Settings) => Promise<void>, onChange: (s: Settings) => void, onError: (e: unknown) => void) {
+  const queue = makeSaver(save);
+  let current = initial, lastSaved = initial, pending = 0, lastError: unknown;
+  const update = (fn: (s: Settings) => Settings): Promise<void> => {
+    current = fn(current);
+    const next = current;
+    onChange(next);
+    pending++;
+    return queue(next).then(() => { lastSaved = next; }, (e) => { lastError = e; }).then(() => {
+      if (--pending === 0 && current !== lastSaved) { current = lastSaved; onChange(lastSaved); onError(lastError); }
+    });
+  };
+  return { update, current: () => current };
+}
+
 /** Anything but "light" and "dark" follows the system. */
 export const resolveDark = (appearance: string, systemDark: boolean): boolean =>
   appearance === "light" ? false : appearance === "dark" ? true : systemDark;
@@ -58,8 +77,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
   const [tab, setTab] = useState<Tab>("desk");
   const [selected, select] = useState<string | null>(null);
 
-  const current = useRef<Settings | null>(null);
-  const lastSaved = useRef<Settings | null>(null);
+  const store = useRef<ReturnType<typeof makeStore> | null>(null);
   const sayTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const say = useCallback((text: string) => {
@@ -68,20 +86,10 @@ export function HubProvider({ children }: { children: ReactNode }) {
     sayTimer.current = setTimeout(() => setSaid(""), 8000);
   }, []);
 
-  const saver = useRef(makeSaver(saveSettings));
-  const update = useCallback((fn: (s: Settings) => Settings) => {
-    if (!current.current) return;
-    const next = fn(current.current);
-    current.current = next;
-    setSettings(next);
-    saver.current(next).then(
-      () => { lastSaved.current = next; },
-      (e) => { current.current = lastSaved.current; setSettings(lastSaved.current); say(`Could not save: ${String(e)}`); },
-    );
-  }, [say]);
+  const update = useCallback((fn: (s: Settings) => Settings) => { store.current?.update(fn); }, []);
 
   useEffect(() => {
-    getSettings().then((s) => { current.current = lastSaved.current = s; setSettings(s); });
+    getSettings().then((s) => { store.current = makeStore(s, saveSettings, setSettings, (e) => say(`Could not save: ${String(e)}`)); setSettings(s); });
     getStatus().then(setStatus);
     getClipStatus().then(setClip);
     listMonitors().then(setMonitors);
@@ -94,7 +102,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
     const fast = setInterval(() => listMonitors().then(setMonitors), 3000);
     const slow = setInterval(poll, 5000);
     return () => { offs.forEach((o) => o.then((f) => f())); clearInterval(fast); clearInterval(slow); clearTimeout(sayTimer.current); };
-  }, []);
+  }, [say]);
 
   const appearance = settings?.appearance;
   useEffect(() => {
