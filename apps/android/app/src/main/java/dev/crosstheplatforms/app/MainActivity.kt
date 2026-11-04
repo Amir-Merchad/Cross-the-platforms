@@ -1,91 +1,79 @@
 package dev.crosstheplatforms.app
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import dev.crosstheplatforms.app.ui.BridgeTheme
+import dev.crosstheplatforms.app.ui.HomeScreen
+import dev.crosstheplatforms.app.ui.PairScreen
 import kotlinx.coroutines.launch
-import uniffi.bridge_core.FfiPeer
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         NodeService.start(this)
-        setContent { MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) { Surface { Screen() } } }
+        setContent { BridgeTheme { Screen() } }
     }
 
     @Composable
     private fun Screen() {
         val app = App.get(this)
         val peers by app.peers.collectAsState()
+        val rows by app.transfers.collectAsState()
+        val node by app.node.collectAsState()
         val status by app.status.collectAsState()
-        var message by remember { mutableStateOf<String?>(null) }
-        var sendTo by remember { mutableStateOf<FfiPeer?>(null) }
+        val pc = App.pcs(peers).firstOrNull() // ponytail: one PC on Home; the share sheet still asks when there are several
+        var pairing by remember { mutableStateOf(false) }
+        var pairMessage by remember { mutableStateOf<String?>(null) }
+        var attempt by remember { mutableIntStateOf(0) }
 
-        val scan = rememberLauncherForActivityResult(ScanContract()) { r ->
-            val text = r.contents ?: return@rememberLauncherForActivityResult
-            message = "Pairing…"
-            app.scope.launch {
-                message = try { "Paired with ${app.awaitNode(this@MainActivity).join(text).name}".also { app.refreshPeers() } }
-                catch (e: Exception) { "Pairing failed: ${e.message}" }
-            }
-        }
         val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-            val pc = sendTo ?: return@rememberLauncherForActivityResult
-            if (uris.isNotEmpty()) { message = "Sending ${uris.size} file(s) to ${pc.name}…"; app.sendInBackground(pc, uris) }
+            if (pc != null && uris.isNotEmpty()) app.sendInBackground(pc, uris)
         }
-
-        Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Bridge", style = MaterialTheme.typography.headlineMedium)
-            Text(status, style = MaterialTheme.typography.bodySmall)
-            if (peers.isEmpty()) Text("Not paired yet. On the PC open Cross the Platforms → Transfer → Show pairing code, then scan it.")
-            peers.forEach { p ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(16.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(p.name, style = MaterialTheme.typography.titleMedium)
-                        Row {
-                            TextButton({ app.node.value?.forget(p.id); app.refreshPeers() }) { Text("Forget") }
-                            Button({ sendTo = p; pick.launch(arrayOf("*/*")) }) { Text("Send files") }
-                        }
-                    }
+        fun join(code: String) {
+            pairMessage = "Pairing…"
+            app.scope.launch {
+                try {
+                    app.awaitNode(this@MainActivity).join(code)
+                    app.refreshPeers()
+                    pairing = false
+                    pairMessage = null
+                } catch (e: Exception) {
+                    pairMessage = "That code did not work. Show a new one on the PC and try again."
+                    attempt++
                 }
             }
-            OutlinedButton({
-                scan.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("Scan the code on your PC").setBeepEnabled(false).setOrientationLocked(false))
-            }) { Text("Pair with PC") }
-            Text("Files from the PC land in Download/Bridge. To send your clipboard, add the \"Send clipboard to PC\" Quick Settings tile.", style = MaterialTheme.typography.bodySmall)
-            message?.let { Text(it) }
         }
+
+        BackHandler(pairing) { pairing = false; pairMessage = null }
+        if (pairing) PairScreen(
+            pairMessage, attempt, onCode = ::join,
+            onPaste = {
+                val code = getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()
+                if (code.isNullOrBlank()) pairMessage = "Copy the code on the PC first, then press Paste code." else join(code.trim())
+            },
+            onCancel = { pairing = false; pairMessage = null },
+        ) else HomeScreen(
+            pcName = pc?.name,
+            rows = rows,
+            startFailed = node == null && status.startsWith("Couldn't"),
+            onSendFiles = { pick.launch(arrayOf("*/*")) },
+            onSendClipboard = { app.sendClipboard(this) },
+            onPair = { pairing = true },
+            onForget = { pc?.let { app.node.value?.forget(it.id); app.refreshPeers() } },
+        )
     }
 }

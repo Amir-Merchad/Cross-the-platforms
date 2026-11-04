@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.CAMERA" />
 
     <application android:name=".App" android:label="Bridge" android:icon="@android:drawable/ic_menu_share"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.Bridge">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -20,7 +20,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".ShareActivity" android:exported="true" android:label="Bridge"
-            android:theme="@android:style/Theme.Material.Dialog" android:excludeFromRecents="true">
+            android:excludeFromRecents="true">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -32,9 +32,6 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
-        <!-- ZXing's scanner is landscape-locked by default; let it follow the phone. -->
-        <activity android:name="com.journeyapps.barcodescanner.CaptureActivity"
-            android:screenOrientation="fullSensor" tools:replace="screenOrientation" />
         <activity android:name=".ClipActivity" android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true" />
         <service android:name=".NodeService" android:exported="false" android:foregroundServiceType="connectedDevice" />

@@ -31,3 +31,23 @@ Fill in **Result** (PASS, or FAIL with a note). Compare with the Claude Design c
 | 23 | Explorer Send to | Right-click a file, Send to, Bridge | Shows in Transfers | |
 | 24 | Reduced motion | Windows: turn Animation effects off | Everything still works, with no movement | |
 | 25 | Quit | Tray, Quit | Exits cleanly, input back on Windows | |
+
+## Android
+
+Phone states are named as on the Mobile board. Check each in the phone's light and dark mode.
+
+| # | State or case | How | Expected | Result |
+|---|---|---|---|---|
+| 1 | notPaired | Forget the PC (or fresh install), open Bridge | Top reads "Not paired", card "No PC yet", primary "Pair with PC", short instruction. No Recent, no Send clipboard | |
+| 2 | pair | Press Pair with PC | Camera in an amber-bordered square, "Point the camera at the code on your PC". Scanning a code from Add a device pairs and returns Home | |
+| 3 | pairNoCamera | Deny the camera, or revoke it in Settings | "The camera is off for Bridge", Paste code works with a copied code. A bad code says it did not work and the scanner re-arms | |
+| 4 | home | Open Bridge when paired | Top reads "Paired" (never "Connected"), card shows the PC and "Ready", Send files amber, Send clipboard grey, Recent, Received files, Sharing from other apps | |
+| 5 | Look | Compare with the Mobile board | Rubik, amber `#FFC531` with dark text and a 3 px lip, follows the system light or dark | |
+| 6 | sending | Send a large file with Send files | PC card "Receiving your files", progress card with name, rate, bar, "You can leave Bridge, sending keeps going." Row moves to Recent as "Sent, size" | |
+| 7 | receiving | Send a large file from the PC | PC card "Sending to you", progress card, then "Received, size" in Recent | |
+| 8 | failed | Turn the PC off or close Bridge there, then send | Top reads "PC not reachable", card "Looking for your PC", warning says to send it again from the app you started in. No Send again button. Next good send returns to "Paired" | |
+| 9 | Send clipboard | Copy text, press Send clipboard | Text arrives on the PC. Tile still works too | |
+| 10 | shareWaiting | Share 5 photos from Gallery to Bridge | Screen stays open while copying ("5 files are ready. Sending to ... now."), then closes, files arrive | |
+| 11 | sharePick | Pair two PCs, share files | "Send N files to", PCs as buttons, Cancel closes | |
+| 12 | Hold to forget | Tap once, then hold the button | A tap does nothing. Holding fills and forgets after about 1 second | |
+| 13 | Service, tile, boot | Reboot the phone | Notification returns, tile and receiving still work | |

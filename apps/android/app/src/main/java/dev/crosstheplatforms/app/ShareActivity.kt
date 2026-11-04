@@ -5,17 +5,9 @@ import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import dev.crosstheplatforms.app.ui.BridgeTheme
+import dev.crosstheplatforms.app.ui.SharePick
+import dev.crosstheplatforms.app.ui.SharePreparing
 import kotlinx.coroutines.launch
 import uniffi.bridge_core.FfiPeer
 
@@ -30,11 +22,11 @@ class ShareActivity : ComponentActivity() {
         val send = { pc: FfiPeer ->
             if (uris.isNotEmpty()) {
                 // Stay open until the files are copied: the share grant ends when this activity does.
-                setContent { MaterialTheme { Text("Preparing ${uris.size} file(s)…", Modifier.padding(24.dp)) } }
+                setContent { BridgeTheme { SharePreparing(uris.size, pc.name) } }
                 app.sendInBackground(pc, uris) { finish() }
             } else {
                 app.scope.launch {
-                    try { app.node.value?.sendClip(pc.id, text!!); app.toast("Text sent to ${pc.name}") } catch (e: Exception) { app.toast("Send failed: ${e.message}") }
+                    try { app.node.value?.sendClip(pc.id, text!!); app.toast("Text sent to ${pc.name}") } catch (e: Exception) { app.toast("Text did not send. Open Bridge on the PC and try again.") }
                 }
                 finish()
             }
@@ -47,12 +39,11 @@ class ShareActivity : ComponentActivity() {
                     0 -> { app.toast("Pair with your PC first (open Bridge)"); finish() }
                     1 -> send(pcs[0])
                     else -> setContent {
-                        MaterialTheme {
-                            val peers by app.peers.collectAsState()
-                            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("Send to", style = MaterialTheme.typography.titleMedium)
-                                App.pcs(peers).forEach { pc -> Button({ send(pc) }, Modifier.fillMaxWidth()) { Text(pc.name) } }
-                            }
+                        BridgeTheme {
+                            SharePick(
+                                if (uris.isEmpty()) "text" else if (uris.size == 1) "1 file" else "${uris.size} files",
+                                pcs.map { it.name }, { send(pcs[it]) }, { finish() },
+                            )
                         }
                     }
                 }

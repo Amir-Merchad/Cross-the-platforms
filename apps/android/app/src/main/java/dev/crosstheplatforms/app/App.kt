@@ -18,6 +18,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -38,6 +40,10 @@ class App : Application(), NodeEvents {
     val node = MutableStateFlow<FfiNode?>(null)
     val peers = MutableStateFlow<List<FfiPeer>>(emptyList())
     val status = MutableStateFlow("Starting…")
+    private val history = MutableStateFlow<List<Row>>(emptyList())
+
+    /** This session's transfers, folded from core events. Names stay in memory; they are never logged. */
+    val transfers: StateFlow<List<Row>> = history
     private val starting = Mutex()
 
     override fun onCreate() {
@@ -78,18 +84,28 @@ class App : Application(), NodeEvents {
     fun refreshPeers() { node.value?.let { peers.value = it.peers() } }
 
     override fun onEvent(e: FfiEvent) {
+        toHistory(e)?.let { ev -> history.update { applyEvent(it, ev, System.currentTimeMillis()) } }
         when (e) {
             is FfiEvent.Paired -> refreshPeers()
             is FfiEvent.Incoming -> notifyFiles("Receiving ${e.files.size} file(s)…", ongoing = true)
             is FfiEvent.Received -> notifyFiles("Received ${formatBytes(e.size.toLong())} — Download/Bridge", ongoing = false)
-            is FfiEvent.Failed -> notifyFiles("Transfer failed: ${e.reason}", ongoing = false)
-            is FfiEvent.Progress -> {}
-            is FfiEvent.Queued, is FfiEvent.Started, is FfiEvent.Requeued -> {}
+            is FfiEvent.Failed -> notifyFiles("Transfer failed. ${plainError(e.reason)}", ongoing = false)
+            is FfiEvent.Progress, is FfiEvent.Started, is FfiEvent.Requeued -> {}
+            is FfiEvent.Queued -> {}
             // Writing the clipboard is allowed in the background (reading isn't).
             is FfiEvent.Clip -> scope.launch(Dispatchers.Main) {
                 getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bridge", e.text))
             }
         }
+    }
+
+    private fun toHistory(e: FfiEvent): Ev? = when (e) {
+        is FfiEvent.Started -> Ev.Started(e.id.toLong(), e.peer, e.outgoing, e.name, e.files.toInt(), e.total.toLong())
+        is FfiEvent.Progress -> Ev.Progress(e.id.toLong(), e.done.toLong(), e.total.toLong())
+        is FfiEvent.Received -> Ev.Received(e.from)
+        is FfiEvent.Requeued -> Ev.Requeued(e.id.toLong())
+        is FfiEvent.Failed -> Ev.Failed(e.id.toLong(), e.reason)
+        else -> null
     }
 
     private fun notifyFiles(text: String, ongoing: Boolean) {
@@ -126,14 +142,38 @@ class App : Application(), NodeEvents {
             val s = (System.nanoTime() - t0) / 1e9
             toast("Sent ${formatBytes(bytes)} to ${peer.name} (%.0f MB/s)".format(bytes / 1e6 / s))
         } catch (e: Exception) {
-            android.util.Log.w(TAG, "send files failed: ${e.message}")
-            toast("Send failed: ${e.message}")
+            android.util.Log.w(TAG, "send files failed: ${e.javaClass.simpleName}") // the message can carry file names
+            toast(plainError(e.message ?: ""))
         } finally {
             withContext(Dispatchers.IO) { root.deleteRecursively() }
         }
     }
 
     fun toast(s: String) = scope.launch(Dispatchers.Main) { Toast.makeText(this@App, s, Toast.LENGTH_SHORT).show() }
+
+    /**
+     * Sends the clipboard text to every paired PC. Android only lets the foreground app read the clipboard,
+     * so call this from a focused activity (ClipActivity for the tile, MainActivity for the button). Never logs the text.
+     */
+    fun sendClipboard(ctx: Context) {
+        val text = ctx.getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
+        if (text.isNullOrEmpty()) { toast("Clipboard is empty"); return }
+        NodeService.start(ctx) // while still in the foreground
+        scope.launch {
+            val t0 = System.nanoTime()
+            try {
+                val node = node.filterNotNull().first()
+                val pcs = pcs(node.peers())
+                if (pcs.isEmpty()) toast("Pair with your PC first")
+                pcs.forEach { node.sendClip(it.id, text) }
+                android.util.Log.i(TAG, "clip sent to ${pcs.size} PC(s), ${text.length} chars, ${(System.nanoTime() - t0) / 1_000_000} ms")
+                if (pcs.isNotEmpty()) toast("Clipboard sent")
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "clip send failed after ${(System.nanoTime() - t0) / 1_000_000} ms: ${e.javaClass.simpleName}")
+                toast("Clipboard did not send. Open Bridge on the PC and try again.")
+            }
+        }
+    }
 
     companion object {
         const val TAG = "Bridge"
@@ -143,12 +183,6 @@ class App : Application(), NodeEvents {
         const val NOTE_SERVICE = 1
         const val NOTE_FILES = 2
         fun get(ctx: Context) = ctx.applicationContext as App
-        fun formatBytes(n: Long): String = when {
-            n >= 1_000_000_000 -> "%.2f GB".format(n / 1e9)
-            n >= 1_000_000 -> "%.1f MB".format(n / 1e6)
-            n >= 1_000 -> "${n / 1000} KB"
-            else -> "$n B"
-        }
         fun pcs(peers: List<FfiPeer>) = peers.filter { it.kind == PeerKind.WINDOWS }
     }
 }
