@@ -15,6 +15,7 @@ targets:
     platform: iOS
     sources:
       - Sources
+      - Resources
       - Generated/bridge_core.swift
     dependencies:
       - package: BridgeKit
@@ -32,6 +33,7 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
+        UIAppFonts: [Rubik.ttf]
         NSLocalNetworkUsageDescription: Receive and send files from your other devices.
         NSCameraUsageDescription: Scan the pairing code on your PC.
         CFBundleDocumentTypes:

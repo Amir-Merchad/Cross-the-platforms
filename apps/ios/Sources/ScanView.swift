@@ -7,26 +7,48 @@ import BridgeKit
 struct PairSheet: View {
     @ObservedObject var m: Model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.palette) private var p
     @State private var available = false
+    @State private var busy = false
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             if available {
                 ScanView { code in join(code) }
+                    .frame(maxWidth: 440).aspectRatio(1, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
+                    .overlay(RoundedRectangle(cornerRadius: 22).stroke(p.action, lineWidth: 3))
+                Text("Point the camera at the code on your PC").font(.rHeading).foregroundStyle(p.ink).multilineTextAlignment(.center)
             } else {
-                Text("Camera unavailable. Copy the code on your PC, then paste it.").padding()
+                Text("The camera is off for Bridge").font(.rHeading).foregroundStyle(p.ink).multilineTextAlignment(.center)
+                Text("On the PC, press Copy code and get it to this device. Your clipboard sync can carry it. Then paste it here.")
+                    .foregroundStyle(p.muted).multilineTextAlignment(.center).frame(maxWidth: 440)
             }
-            Button("Paste code") { join(UIPasteboard.general.string ?? "") }.padding(.bottom)
+            if let n = m.notice {
+                Text(n).font(.rBodyStrong).foregroundStyle(p.warnInk).multilineTextAlignment(.center)
+            }
+            Button("Paste code") { join(UIPasteboard.general.string ?? "") }
+                .buttonStyle(LipButtonStyle()).frame(maxWidth: 280)
+            Button("Cancel") { dismiss() }.font(.rBodyStrong.weight(.medium)).foregroundStyle(p.muted).frame(minHeight: 44)
         }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(p.bg.ignoresSafeArea())
         .task {
+            m.notice = nil
             _ = await AVCaptureDevice.requestAccess(for: .video)
             available = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
         }
     }
 
     private func join(_ code: String) {
-        guard isPairInvite(code) else { m.status = "That is not a pairing code"; return }
-        Task { await m.join(code); dismiss() }
+        guard !busy else { return }
+        guard isPairInvite(code) else { m.notice = "That is not a pairing code"; return }
+        busy = true
+        Task {
+            if await m.join(code) { dismiss() }
+            busy = false
+        }
     }
 }
 
