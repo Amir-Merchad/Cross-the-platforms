@@ -84,7 +84,7 @@ class App : Application(), NodeEvents {
             is FfiEvent.Received -> notifyFiles("Received ${formatBytes(e.size.toLong())} — Download/Bridge", ongoing = false)
             is FfiEvent.Failed -> notifyFiles("Transfer failed: ${e.reason}", ongoing = false)
             is FfiEvent.Progress -> {}
-            is FfiEvent.Queued -> {}
+            is FfiEvent.Queued, is FfiEvent.Started, is FfiEvent.Requeued -> {}
             // Writing the clipboard is allowed in the background (reading isn't).
             is FfiEvent.Clip -> scope.launch(Dispatchers.Main) {
                 getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bridge", e.text))

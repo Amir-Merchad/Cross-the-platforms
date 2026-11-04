@@ -111,7 +111,7 @@ import BridgeKit
         case .failed(_, let reason):
             run(life.transferFailed())
             status = "Failed: \(reason)"
-        case .progress, .clip, .queued: break
+        case .progress, .clip, .queued, .started, .requeued: break
         }
     }
 

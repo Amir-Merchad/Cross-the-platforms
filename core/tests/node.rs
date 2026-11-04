@@ -221,6 +221,19 @@ async fn batch_stays_queued_when_the_ipad_goes_away_mid_flush() { // Review Focu
 }
 
 #[tokio::test]
+async fn started_names_the_files_on_both_sides() {
+    let ((a, mut arx, _da), (b, mut brx, _db)) = paired().await;
+    let src = tempfile::tempdir().unwrap();
+    let (f1, f2) = (write(src.path(), "one.bin", 300, 1), write(src.path(), "two.bin", 500, 2));
+    a.send_files(&b.id(), vec![f1.clone(), f2.clone()]).await.unwrap();
+    let Event::Started { id, peer, outgoing, name, files, total, paths } = wait_for(&mut arx, |e| matches!(e, Event::Started { .. })).await else { unreachable!() };
+    assert_eq!((peer, outgoing, name.as_str(), files, total, paths), (b.id(), true, "one.bin", 2, 800, vec![f1, f2]));
+    let rid = id;
+    let Event::Started { id, peer, outgoing, name, files, total, paths } = wait_for(&mut brx, |e| matches!(e, Event::Started { .. })).await else { unreachable!() };
+    assert_eq!((id, peer, outgoing, name.as_str(), files, total, paths.len()), (rid, a.id(), false, "one.bin", 2, 800, 0));
+}
+
+#[tokio::test]
 async fn batch_stays_queued_when_the_stream_is_cut_mid_transfer() { // final review I1
     let ((pc, mut pcrx, dp), (ipad, _irx, di)) = paired_with(PeerKind::Ipad).await;
     let ipad_id = ipad.id();
@@ -233,6 +246,9 @@ async fn batch_stays_queued_when_the_stream_is_cut_mid_transfer() { // final rev
     std::fs::write(&blocker, b"x").unwrap();
     let cfg = NodeConfig { data_dir: di.path().join("data"), receive_dir: blocker.join("in"), me: Peer { id: String::new(), name: "S24+".into(), kind: PeerKind::Ipad } };
     let (ipad2, _irx2) = Node::start(cfg).await.unwrap();
+    // The flush ran, its attempt stopped, and the batch stayed queued.
+    let Event::Started { id, .. } = wait_for(&mut pcrx, |e| matches!(e, Event::Started { .. })).await else { unreachable!() };
+    wait_for(&mut pcrx, |e| *e == Event::Requeued { id }).await;
     assert!(timeout(Duration::from_millis(1500), async { loop { if let Some(Event::Failed { .. }) = pcrx.recv().await { return } } }).await.is_err(), "a cut stream is not a failure");
     assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&ipad_id), 1, "still on disk");
     ipad2.shutdown().await;

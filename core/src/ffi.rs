@@ -41,6 +41,8 @@ pub enum FfiEvent {
     Failed { id: u64, reason: String },
     Clip { from: String, text: String },
     Queued { peer: String, files: u64 },
+    Started { id: u64, peer: String, outgoing: bool, name: String, files: u64, total: u64 },
+    Requeued { id: u64 },
 }
 
 impl From<Event> for FfiEvent {
@@ -53,6 +55,8 @@ impl From<Event> for FfiEvent {
             Event::Failed { id, reason } => FfiEvent::Failed { id, reason },
             Event::Clip { from, text } => FfiEvent::Clip { from, text },
             Event::Queued { peer, files } => FfiEvent::Queued { peer, files: files as u64 },
+            Event::Started { id, peer, outgoing, name, files, total, .. } => FfiEvent::Started { id, peer, outgoing, name, files: files as u64, total },
+            Event::Requeued { id } => FfiEvent::Requeued { id },
         }
     }
 }

@@ -68,6 +68,10 @@ pub enum Event {
     /// Files currently waiting on this device for an unreachable iPad; sent every time the count
     /// changes, `files: 0` once the last batch has left.
     Queued { peer: String, files: usize },
+    /// A transfer begins, on either side. `name` is the first file; `paths` is empty on receive.
+    Started { id: u64, peer: String, outgoing: bool, name: String, files: usize, total: u64, paths: Vec<PathBuf> },
+    /// A flush attempt stopped and its batch stays queued.
+    Requeued { id: u64 },
 }
 
 pub enum SendOutcome { Sent(u64), Queued }
@@ -222,7 +226,10 @@ impl Node {
                 // ponytail: only errors that repeat pop the batch; anything else (cut stream, stall, unreachable)
                 // stays queued for the next Hello, so an unknown permanent error retries on each Hello while
                 // Bridge is open; a retry cap is the upgrade path. A half-landed batch arrives again as `a (1).pdf`.
-                if ![CANT_READ, ONLY_FILES, DECLINED].iter().any(|p| reason.starts_with(p)) { break }
+                if ![CANT_READ, ONLY_FILES, DECLINED].iter().any(|p| reason.starts_with(p)) {
+                    let _ = self.inner.events.send(Event::Requeued { id }).await;
+                    break;
+                }
                 let _ = self.inner.events.send(Event::Failed { id, reason }).await;
             }
             let left = {
@@ -242,6 +249,8 @@ impl Node {
             if !m.is_file() { return Err(ONLY_FILES.into()) }
             files.push(FileMeta { name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), size: m.len() });
         }
+        let started = Event::Started { id, peer: peer_id.to_string(), outgoing: true, name: files.first().map(|f| f.name.clone()).unwrap_or_default(), files: files.len(), total: files.iter().map(|f| f.size).sum(), paths: paths.clone() };
+        let _ = self.inner.events.send(started).await;
         let replies = self.send_ctl(peer_id, &[Ctl::Offer { id, files }]).await?;
         let (tcp, cert, token) = match replies.into_iter().find_map(|c| match c {
             Ctl::Accept { id: i, tcp, cert_sha256, token } if i == id => Some(Ok((tcp, cert_sha256, token))),
@@ -439,6 +448,8 @@ impl Node {
         let (tx, rx) = oneshot::channel();
         self.inner.waiting.lock().unwrap().insert(id, (from.to_string(), tx));
         let _ = self.inner.events.send(Event::Incoming { from: from.to_string(), files: files.clone() }).await;
+        let started = Event::Started { id, peer: from.to_string(), outgoing: false, name: files.first().map(|f| f.name.clone()).unwrap_or_default(), files: files.len(), total: files.iter().map(|f| f.size).sum(), paths: Vec::new() };
+        let _ = self.inner.events.send(started).await;
         tokio::spawn(self.clone().receive_files(from.to_string(), id, files, l, token.clone(), rx));
         Ctl::Accept { id, tcp, cert_sha256, token }
     }
