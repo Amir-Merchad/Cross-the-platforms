@@ -6,7 +6,7 @@ Fill in **Result** (PASS, or FAIL with a note). Compare with the Claude Design c
 
 | # | State or case | How | Expected | Result |
 |---|---|---|---|---|
-| 1 | Look | Open Bridge from the tray | Matches the Desk board, in the system's light or dark mode | |
+| 1 | Look | Open Bridge from the tray | Matches the Desk board, in the system's light or dark mode | PASS (owner: "it looks amazing") |
 | 2 | Appearance | Settings: try Light, Dark, System | Changes at once and survives a restart | |
 | 3 | Link existing devices | Select each device on the Desk | Asks "Is this also your ...?" unless the names match. After choosing, one device shows all three rows | |
 | 4 | Drag and place | Drag a device toward a screen edge | Edges light, it pulls in, settles, status line confirms | |
