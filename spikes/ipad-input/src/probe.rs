@@ -108,8 +108,7 @@ fn verdicts_of(log: &[String]) -> Vec<(u8, &'static str)> {
 }
 
 fn verdicts(log: &[String]) -> Vec<(u8, &'static str)> {
-    let _ = std::fs::write(r"C:\dev\_ref	mp\pointer\ids.log", log.join("
-"));
+    let _ = std::fs::write("C:/dev/_ref/tmp/pointer/ids.log", log.join("\n"));
     verdicts_of(log)
 }
 
@@ -356,12 +355,11 @@ impl Session {
             pause(1500).await?;
             let log = take_log();
             let mut seen = std::collections::BTreeMap::<String, u32>::new();
-            for l in log.iter().filter(|l| !l.contains("] [0x")) { *seen.entry(l.split_once(' ').map_or(l.as_str(), |x| x.1).chars().take(170).collect()).or_default() += 1; }
+            for l in log.iter().filter(|l| !l.contains("] [0x") && l.contains("[dtuhidd]")) { *seen.entry(l.split_once(' ').map_or(l.as_str(), |x| x.1).chars().take(170).collect()).or_default() += 1; }
             for (l, n) in seen.iter().take(25) { println!("  {n}x {l}"); }
             all.extend(log);
         }
-        let _ = std::fs::write(r"C:\dev\_ref	mp\pointeraw.log", all.join("
-"));
+        let _ = std::fs::write("C:/dev/_ref/tmp/pointer/raw.log", all.join("\n"));
         Ok(())
     }
 
