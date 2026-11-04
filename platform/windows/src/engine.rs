@@ -10,6 +10,7 @@ use std::{
 
 use bridge_core::{
     keyqueue::KeyQueue,
+    names::display_name,
     router::{Action, Input, Router},
     settings::Settings,
 };
@@ -37,6 +38,17 @@ pub struct Status {
     pub hosts: Vec<HostStatus>,
     pub active: Option<String>,
     pub notice: Option<String>,
+}
+
+/// The tray's one line about what is happening.
+pub fn status_line(s: &Status) -> String {
+    let name = |id: &str| display_name(s.hosts.iter().find(|h| h.id == id).and_then(|h| h.name.as_deref()));
+    match (&s.active, &s.notice) {
+        (Some(id), _) => format!("Controlling {}", name(id)),
+        (None, Some(n)) => n.clone(),
+        (None, None) if !s.advertising => "Starting Bluetooth…".into(),
+        (None, None) => format!("{} device(s) connected", s.hosts.iter().filter(|h| h.connected).count()),
+    }
 }
 
 /// `%APPDATA%\CrossThePlatforms\settings.json`
@@ -182,7 +194,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                 Command::SwitchTo(None) => actions.extend(router.on_input(Input::Hotkey(0), now_ms(), &is_up)),
                 Command::SwitchTo(Some(id)) => match settings.attachments.iter().position(|a| a.device_id == id) {
                     Some(i) => actions.extend(router.on_input(Input::Hotkey(i as u8 + 1), now_ms(), &is_up)),
-                    None => status.notice = Some(format!("{id} is not placed in the layout yet")),
+                    None => status.notice = Some(format!("{} is not placed yet", display_name(names.get(&id).and_then(|n| n.as_deref())))),
                 },
             }
         }
@@ -237,7 +249,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     // Keep order: once something is queued for this host, queue behind it.
                     if keys.pending(&host) > 0 || !peripheral.send_keyboard(&host, report) {
                         keys.push(&host, report, now_ms());
-                        status.notice = Some(format!("Keyboard on {} is still connecting…", names.get(&host).cloned().flatten().unwrap_or_else(|| host.clone())));
+                        status.notice = Some(format!("Keyboard on {} is still connecting…", display_name(names.get(&host).and_then(|n| n.as_deref()))));
                     }
                 }
                 Action::PlaceCursor(x, y) => unsafe { let _ = SetCursorPos(x, y); },
@@ -265,4 +277,20 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     }
     drop(watcher); // joins the watcher, releasing its handle on the peripheral
     drop(peripheral);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host(name: Option<&str>) -> HostStatus {
+        HostStatus { id: "AA:BB".into(), name: name.map(Into::into), connected: true, interval_ms: 0, notify_avg_ms: 0.0, notify_max_ms: 0.0 }
+    }
+    fn line(name: Option<&str>) -> String { status_line(&Status { advertising: true, hosts: vec![host(name)], active: Some("AA:BB".into()), notice: None }) }
+
+    #[test] fn status_line_never_shows_a_raw_id_or_a_blank_name() {
+        assert_eq!(line(Some("iPad Air")), "Controlling iPad Air");
+        assert_eq!(line(None), "Controlling Unnamed device");
+        assert_eq!(line(Some(" ")), "Controlling Unnamed device");
+    }
 }

@@ -115,7 +115,7 @@ impl Router {
         let Some(a) = self.settings.attachments.get(n as usize - 1).cloned() else {
             return vec![Action::Notice(format!("no device on hotkey {n}"))];
         };
-        if !connected(&a.device_id) { return vec![Action::Notice(format!("{} is not connected", a.device_id))] }
+        if !connected(&a.device_id) { return vec![Action::Notice("That device is not connected".into())] }
         let mut out = if self.remote.is_some() { self.leave() } else { Vec::new() };
         out.extend(self.enter(a, false, now_ms));
         out
@@ -252,7 +252,7 @@ mod tests {
         let mut r = r();
         let a = r.on_input(Input::Hotkey(1), 0, &down);
         assert!(!a.contains(&Action::Suppress(true)));
-        assert!(matches!(a.as_slice(), [Action::Notice(_)]));
+        assert_eq!(a, vec![Action::Notice("That device is not connected".into())]); // never the raw id
         assert_eq!(r.active(), None);
     }
     #[test] fn escape_leaves_with_suppress_false_first() {

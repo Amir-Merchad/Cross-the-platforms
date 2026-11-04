@@ -16,14 +16,8 @@ use crate::AppState;
 pub fn get_settings(state: State<AppState>) -> Settings { state.settings.lock().unwrap().clone() }
 
 #[tauri::command]
-pub fn save_settings(app: AppHandle, state: State<AppState>, mut settings: Settings) -> Result<(), String> {
-    // The clipboard toggle is owned by `set_clipboard_sync` (tray + Clipboard tab): an older draft can't undo it.
-    {
-        let current = state.settings.lock().unwrap();
-        settings.clipboard_sync = current.clipboard_sync;
-        // Same for the receive folder, owned by its own command: autosave can carry an older copy.
-        settings.receive_dir = current.receive_dir.clone();
-    }
+pub fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<(), String> {
+    let settings = settings.keeping_owned(&state.settings.lock().unwrap());
     settings.save(&settings_path())?;
     let autostart = app.autolaunch();
     let _ = if settings.start_with_windows { autostart.enable() } else { autostart.disable() };

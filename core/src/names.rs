@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 const RESERVED: &[&str] = &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
     "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];
 
+/// What a device is called on screen: never its raw id.
+pub fn display_name(name: Option<&str>) -> String { name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or("Unnamed device").to_string() }
+
 /// `<path>.part`: where a file is written until its size and hash check out.
 pub fn part_path(p: &Path) -> PathBuf { p.with_file_name(format!("{}.part", p.file_name().unwrap_or_default().to_string_lossy())) }
 
@@ -31,6 +34,11 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test] fn blank_or_missing_names_read_unnamed_device() {
+        assert_eq!(display_name(None), "Unnamed device");
+        assert_eq!(display_name(Some("  ")), "Unnamed device");
+        assert_eq!(display_name(Some(" iPad Air ")), "iPad Air");
+    }
     #[test] fn strips_traversal() { let d = tempdir().unwrap(); assert_eq!(safe_name(d.path(), "../../evil.txt"), d.path().join("evil.txt")); }
     #[test] fn strips_windows_path() { let d = tempdir().unwrap(); assert_eq!(safe_name(d.path(), r"C:\Windows\x.pdf"), d.path().join("x.pdf")); }
     #[test] fn reserved_name() { let d = tempdir().unwrap(); assert_eq!(safe_name(d.path(), "con.txt"), d.path().join("_con.txt")); }

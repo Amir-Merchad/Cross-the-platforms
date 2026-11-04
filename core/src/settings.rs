@@ -45,6 +45,11 @@ impl Default for Settings {
 const DEFAULT_WIDTH: f64 = 1366.0;
 
 impl Settings {
+    /// An autosaved draft, minus what its own commands own: an older copy can't undo the clipboard toggle or the receive folder.
+    pub fn keeping_owned(self, current: &Settings) -> Settings {
+        Settings { clipboard_sync: current.clipboard_sync, receive_dir: current.receive_dir.clone(), ..self }
+    }
+
     pub fn calibration_for(&self, id: &str) -> Calibration { self.calibration.get(id).cloned().unwrap_or_default() }
     pub fn width_for(&self, id: &str) -> f64 { self.remote_width.get(id).copied().unwrap_or(DEFAULT_WIDTH) }
 
@@ -94,6 +99,14 @@ mod tests {
     use crate::layout::{Attachment, Edge};
     use tempfile::tempdir;
 
+    #[test] fn autosave_cannot_undo_the_clipboard_toggle_or_the_receive_folder() {
+        let current = Settings { clipboard_sync: false, receive_dir: Some("D:/in".into()), ..Settings::default() };
+        let draft = Settings { clipboard_sync: true, receive_dir: None, appearance: "dark".into(), ..Settings::default() };
+        let saved = draft.keeping_owned(&current);
+        assert!(!saved.clipboard_sync);
+        assert_eq!(saved.receive_dir.as_deref(), Some("D:/in"));
+        assert_eq!(saved.appearance, "dark");
+    }
     #[test] fn missing_file_gives_defaults() { let d = tempdir().unwrap(); assert_eq!(Settings::load(&d.path().join("s.json")), Settings::default()); }
     #[test] fn round_trip() {
         let d = tempdir().unwrap(); let p = d.path().join("s.json");

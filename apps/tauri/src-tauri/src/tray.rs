@@ -1,6 +1,7 @@
 //! Tray icon and menu: status, switch per connected device, back to Windows, settings, quit.
 
-use ctp_windows::engine::{Command, Status};
+use bridge_core::names::display_name;
+use ctp_windows::engine::{Command, Status, status_line};
 use tauri::{
     AppHandle, Manager,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -35,22 +36,12 @@ pub fn refresh(app: &AppHandle, status: &Status) {
     }
 }
 
-fn status_line(s: &Status) -> String {
-    let name = |id: &str| s.hosts.iter().find(|h| h.id == id).and_then(|h| h.name.clone()).unwrap_or_else(|| id.to_string());
-    match (&s.active, &s.notice) {
-        (Some(id), _) => format!("Controlling {}", name(id)),
-        (None, Some(n)) => n.clone(),
-        (None, None) if !s.advertising => "Starting Bluetooth…".into(),
-        (None, None) => format!("{} device(s) connected", s.hosts.iter().filter(|h| h.connected).count()),
-    }
-}
-
 fn build_menu(app: &AppHandle, s: &Status) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
     menu.append(&MenuItem::with_id(app, "status", status_line(s), false, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     for h in s.hosts.iter().filter(|h| h.connected) {
-        let label = format!("Switch to {}", h.name.clone().unwrap_or_else(|| h.id.clone()));
+        let label = format!("Switch to {}", display_name(h.name.as_deref()));
         menu.append(&MenuItem::with_id(app, format!("switch:{}", h.id), label, s.active.as_ref() != Some(&h.id), None::<&str>)?)?;
     }
     menu.append(&MenuItem::with_id(app, "back", "Back to Windows", s.active.is_some(), None::<&str>)?)?;
