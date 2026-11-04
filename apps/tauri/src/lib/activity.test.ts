@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { TransferEvent } from "./transfer";
-import { applyEvent, plainError, type Row } from "./activity";
+import { applyEvent, historyLine, plainError, waitingLine, type Row } from "./activity";
 
 const run = (evs: TransferEvent[]) => evs.reduce<Row[]>((r, e, i) => applyEvent(r, e, 1000 + i), []);
 const started = (outgoing: boolean, files = 2): TransferEvent => ({ type: "Started", id: 1, peer: "p", outgoing, name: "a.txt", files, total: 100, paths: ["C:/a.txt"] });
@@ -48,4 +48,24 @@ test("outgoing with total 0 ends done on Progress", () => {
 test("a late Failed cannot flip a finished row", () => {
   const r = run([started(true), { type: "Progress", id: 1, done: 100, total: 100 }, { type: "Failed", id: 1, reason: "late" }]);
   expect(r[0].state).toBe("done");
+});
+
+const row = (o: Partial<Row>): Row => ({ id: 1, peer: "p", outgoing: true, name: "a.txt", files: 1, total: 2_000_000, done: 2_000_000, startedAt: 0, now: 1000, paths: [], state: "done", received: 0, ...o });
+
+test("historyLine: sent, received and failed rows", () => {
+  expect(historyLine(row({}), "iPad Air", true)).toEqual({ file: "a.txt", who: "To iPad Air", size: "2.0 MB", result: "Sent at 2.0 MB/s", failed: false });
+  expect(historyLine(row({ outgoing: false }), "Galaxy", false)).toMatchObject({ who: "From Galaxy", result: "Received", failed: false });
+  expect(historyLine(row({ state: "requeued" }), "iPad Air", true).result).toBe("Waiting. It sends when Bridge opens there.");
+  const f = historyLine(row({ state: "failed", reason: "os error 5 at C:/secret/x" }), "iPad Air", true);
+  expect(f).toMatchObject({ result: "That did not finish. Send it again.", failed: true });
+  expect(historyLine(row({ state: "failed", reason: "peer not reachable" }), "iPad Air", false).result).toBe("Not reachable right now. Open Bridge on the other device, then send again.");
+});
+
+test("historyLine: a failed row with no peer has no who", () => {
+  expect(historyLine(row({ peer: "", state: "failed", reason: "x" }), undefined, false).who).toBe("");
+});
+
+test("waitingLine", () => {
+  expect(waitingLine(1, "iPad Air")).toEqual(["1 file waiting for iPad Air", "It sends when Bridge opens there."]);
+  expect(waitingLine(2, "iPad Air")).toEqual(["2 files waiting for iPad Air", "They send when Bridge opens there."]);
 });

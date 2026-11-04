@@ -1,38 +1,53 @@
-import { useState } from "react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { pairIpad, setClipboardSync, type ClipStatus } from "@/lib/api";
-import { ipadLine } from "@/lib/clip";
+import { pairIpad, setClipboardSync } from "@/lib/api";
+import { ipadLine, needsRepair } from "@/lib/clip";
+import { useHub } from "@/lib/hub";
+import { RAISED, cn } from "@/lib/utils";
 
-export default function Clipboard({ clip }: { clip: ClipStatus | null }) {
-  const [error, setError] = useState<string | null>(null);
-  const connected = clip?.ipad != null && typeof clip.ipad === "object" && "Connected" in clip.ipad;
-  const toggle = (on: boolean) => setClipboardSync(on).then(() => setError(null), (e) => setError(String(e)));
+const CARD = "flex-none rounded-[20px] bg-card";
+const ROW = "flex min-h-16 items-center justify-between gap-3 border-t border-border first:border-t-0";
+
+export default function Clipboard() {
+  const { clip, devices, say } = useHub();
+  const on = clip?.enabled ?? false;
+  const repair = on && needsRepair(clip?.ipad ?? null);
+  const ipad = devices.find((d) => d.kind === "Ipad");
+  const others = devices.filter((d) => d.peerId && d.kind !== "Ipad");
+  const toggle = (next: boolean) => setClipboardSync(next).catch(() => say("Could not change clipboard sync. Try again."));
+  const pair = () => pairIpad().catch(() => say("Could not pair over USB. Plug the iPad in and try again."));
 
   return (
-    <Card className="mt-2">
-      <CardHeader>
-        <CardTitle>Clipboard</CardTitle>
-        <CardDescription>Copy on Windows, paste on the iPad, and back. Text and images. Contents are never logged.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <label className="flex items-center gap-3 text-sm">
-          <Switch checked={clip?.enabled ?? false} onCheckedChange={toggle} disabled={!clip} />
-          Sync clipboard
-        </label>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-muted-foreground">iPad</span>
-          <Badge variant={connected ? "default" : "secondary"}>{ipadLine(clip?.ipad ?? null)}</Badge>
-          <Button size="sm" variant="outline" onClick={() => pairIpad().catch((e) => setError(String(e)))}>Pair iPad (USB)</Button>
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto text-[15px] data-[hidden]:hidden">
+      <label className={`${CARD} flex items-center justify-between gap-3 px-5 py-[18px]`}>
+        <span>
+          <span className="block text-xl font-semibold">Sync clipboard</span>
+          <span className="block text-muted-foreground">Copy on one device, paste on another. Contents are never logged.</span>
+        </span>
+        <Switch size="lg" checked={on} disabled={!clip} onCheckedChange={toggle} />
+      </label>
+      <section className={`${CARD} px-5 py-1.5`}>
+        <div className={ROW}>
+          <div><div className="font-medium">{ipad?.name ?? "iPad"}</div><div className="text-[13px] text-muted-foreground">Text and images, both ways</div></div>
+          <span className="flex items-center gap-3">
+            <span className={cn(repair ? "text-destructive" : "text-muted-foreground")}>{on ? ipadLine(clip?.ipad ?? null) : "Sync off"}</span>
+            <Button variant={repair ? "default" : "secondary"} className={RAISED} onClick={pair}>Pair over USB</Button>
+          </span>
         </div>
-        <p className="text-sm tabular-nums text-muted-foreground">
-          Synced {clip?.synced ?? 0} · Skipped (too large) {clip?.skipped_too_large ?? 0}
-        </p>
-        {(error ?? clip?.notice) && <Alert><AlertDescription>{error ?? clip?.notice}</AlertDescription></Alert>}
-      </CardContent>
-    </Card>
+        {others.map((d) => (
+          <div key={d.key} className={ROW}>
+            <div>
+              <div className="font-medium">{d.name}</div>
+              <div className="text-[13px] text-muted-foreground">{d.kind === "Android" ? "Text only. From the phone, use Bridge or its Quick Settings tile." : "Text only"}</div>
+            </div>
+            <span className="text-muted-foreground">{!on ? "Sync off" : d.reachable ? "Connected" : "Not connected"}</span>
+          </div>
+        ))}
+      </section>
+      <section className={`${CARD} flex gap-12 px-5 py-3.5`}>
+        <span>Synced since start <strong className="font-semibold tabular-nums">{clip?.synced ?? 0}</strong></span>
+        <span>Skipped, too large <strong className="font-semibold tabular-nums">{clip?.skipped_too_large ?? 0}</strong></span>
+      </section>
+    </div>
   );
 }

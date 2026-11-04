@@ -1,5 +1,6 @@
 // In-memory transfer history for the session, folded from core events. No React.
-import type { TransferEvent } from "./transfer";
+import { displayName } from "./devices";
+import { formatBytes, formatRate, type TransferEvent } from "./transfer";
 
 export type Row = {
   id: number; peer: string; outgoing: boolean; name: string; files: number; total: number; done: number;
@@ -41,3 +42,18 @@ export function plainError(reason: string, canQueue: boolean): string {
     return canQueue ? "Not reachable right now. It is queued and goes when Bridge opens there." : "Not reachable right now. Open Bridge on the other device, then send again.";
   return "That did not finish. Send it again.";
 }
+
+/** A history row in the owner's words. `peerName` is the device's display name, if it is known. */
+export function historyLine(r: Row, peerName: string | undefined, canQueue: boolean) {
+  const rate = formatRate(r.done, r.now - r.startedAt);
+  const failed = r.state === "failed";
+  const result = failed ? plainError(r.reason ?? "", canQueue)
+    : r.state === "requeued" ? "Waiting. It sends when Bridge opens there."
+    : r.state === "moving" ? (r.outgoing ? "Sending" : "Receiving")
+    : r.outgoing ? `Sent${rate === "—" ? "" : ` at ${rate}`}` : "Received";
+  return { file: r.name, who: r.peer ? `${r.outgoing ? "To" : "From"} ${displayName(peerName)}` : "", size: formatBytes(r.total), result, failed };
+}
+
+/** The Transfers page's line for files waiting on a device that has Bridge closed: [what, when]. */
+export const waitingLine = (files: number, name: string): [string, string] =>
+  files === 1 ? [`1 file waiting for ${name}`, "It sends when Bridge opens there."] : [`${files} files waiting for ${name}`, "They send when Bridge opens there."];

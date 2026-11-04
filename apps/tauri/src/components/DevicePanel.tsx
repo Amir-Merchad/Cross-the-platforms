@@ -14,7 +14,7 @@ const COLOUR_NAMES = ["Orange", "Green", "Blue", "Pink", "Yellow"];
 type TuneProps = { label: string; value: number; show: (v: number) => string; min: number; max: number; step: number; onCommit: (v: number) => void };
 
 /** Moves freely while dragged and saves on release. */
-function Tune({ label, value, show, min, max, step, onCommit }: TuneProps) {
+export function Tune({ label, value, show, min, max, step, onCommit }: TuneProps) {
   const id = useId();
   const [draft, setDraft] = useState<number | null>(null);
   const one = (v: number | readonly number[]) => (typeof v === "number" ? v : v[0]);

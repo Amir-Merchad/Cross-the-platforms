@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHub, type Tab } from "@/lib/hub";
+import { RAISED } from "@/lib/utils";
 
 const TABS: [Tab, string][] = [["desk", "Desk"], ["transfers", "Transfers"], ["clipboard", "Clipboard"], ["settings", "Settings"]];
 
@@ -16,7 +17,7 @@ export default function TopBar() {
         ))}
       </TabsList>
       <p role="status" className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{statusLine}</p>
-      <Button variant="secondary" className="h-[38px] rounded-[11px] px-3.5 font-semibold shadow-[0_3px_0_var(--border)] active:translate-y-[3px] active:shadow-none" onClick={() => setTab("desk")}>Add a device</Button>
+      <Button variant="secondary" className={RAISED} onClick={() => setTab("desk")}>Add a device</Button>
     </header>
   );
 }
