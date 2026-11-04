@@ -126,4 +126,9 @@ final class NodeLifecycleTests: XCTestCase {
         var l = NodeLifecycle(); _ = l.foreground(); l.transferStarted(files: 1); _ = l.background()
         XCTAssertEqual(l.foreground(), [.endBackgroundTime])
     }
+    func testRepeatedBackgroundBeginsOnce() {
+        var l = NodeLifecycle(); _ = l.foreground(); l.transferStarted(files: 1)
+        XCTAssertEqual(l.background(), [.beginBackgroundTime])
+        XCTAssertEqual(l.background(), [])
+    }
 }
