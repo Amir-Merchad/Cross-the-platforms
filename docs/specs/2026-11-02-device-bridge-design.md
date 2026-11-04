@@ -47,9 +47,9 @@ v1.5 placement is Claude's call; owner may reorder. v2 starts only when v1 works
 
 ## 4. Apps and architecture (owner's decision, structure is Claude's call)
 
-The owner wants three apps and to be free to install either flavour on each device:
+One app per platform (changed 2026-11-04; it was two apps per mobile device). The Tauri mobile flavours are dropped: native apps are needed anyway for background services and share extensions, so a second UI per device only doubled the work and the testing.
 
-1. **Tauri + shadcn/ui app** — runs on Windows, Android and iPad (Tauri v2 mobile). On Windows it is the only app and the hub.
+1. **Tauri + shadcn/ui app** — Windows only. It is the hub.
 2. **Native Kotlin app** for Android.
 3. **Native Swift app** for iPad.
 
@@ -58,7 +58,7 @@ To keep this buildable, **all shared logic lives once in a Rust core** that ever
 ```text
 core/ (Rust)  — protocol, pairing, device keys, iroh transport, transfer,
                 clipboard engine, LocalSend adapter, input event model
-   ├─ used directly by  apps/tauri   (Windows, Android, iPad; shadcn UI)
+   ├─ used directly by  apps/tauri   (Windows; shadcn UI)
    ├─ via UniFFI   →    apps/android (Kotlin, native UI)
    └─ via UniFFI   →    apps/ios     (Swift, native UI)
 platform/     — per-OS pieces that can't be shared:
@@ -67,12 +67,11 @@ platform/     — per-OS pieces that can't be shared:
    ios:     share extension, Files integration, (v1.5) ReplayKit broadcast extension
 ```
 
-- The Tauri mobile builds reuse the same native platform code as Tauri plugins (Kotlin/Swift), so each platform feature is written once per OS.
 - Any flavour talks to any other: one versioned wire protocol in `core/`.
-- **Build order (Claude's call):** Windows Tauri app first (it's the hub), then native Kotlin and Swift (background services and share extensions are native anyway), then Tauri mobile flavours as a thin UI over the same core and plugins.
+- **Build order (Claude's call):** Windows Tauri app first (it's the hub), then native Kotlin and Swift (background services and share extensions are native anyway), the Tauri mobile flavours were planned last and then dropped.
 
 ### No-Mac iPad builds
-- Both iPad flavours (Swift and Tauri) build on a **GitHub-hosted macOS runner**, producing an unsigned `.ipa`; install from Windows with **iloader → SideStore 0.7.0+** (older SideStore sign-in is broken since Apple's 2026 change) and a free Apple account (7-day re-signing, 3 sideloaded apps max: SideStore + the two iPad flavours). Plain SideStore, not LiveContainer, so share extensions and Files integration work. AltStore PAL (EU) doesn't apply: it needs Apple-notarized apps. *(Updated 2026-11-04 from spikes.)*
+- The Swift iPad app builds on a **GitHub-hosted macOS runner**, producing an unsigned `.ipa`; install from Windows with **iloader → SideStore 0.7.0+** (older SideStore sign-in is broken since Apple's 2026 change) and a free Apple account (7-day re-signing, 3 sideloaded apps max). Plain SideStore, not LiveContainer, so share extensions and Files integration work. AltStore PAL (EU) doesn't apply: it needs Apple-notarized apps. *(Updated 2026-11-04 from spikes.)*
 - Swift UI work can't be previewed on Windows; each UI check is a CI build + sideload. Keep iOS UI simple and push logic into `core/`, which is testable on Windows.
 - **Make the repo public:** standard GitHub runners are free for public repos; private repos burn included minutes and macOS minutes count at a high multiplier.
 

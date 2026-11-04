@@ -22,16 +22,17 @@ matters), no Mac, free Apple ID, uses it daily while studying. No merge / PR / p
 | Clipboard PC → phone (automatic) and phone → PC (Quick Settings tile, 52 ms) | ✅ |
 | iPad app Bridge: pair, files both ways, share sheet, queue while closed (SideStore sideload) | ✅ `docs/v1/checklist-ipad.md`, overall owner report; 7-day re-sign (row 13) still to check |
 | Logs contain no file names / clipboard text / keys | ✅ |
+| Base UI (Windows hub, Android, iPad: Rubik, amber, light/dark, Desk board, pages Devices / Transfers / Clipboard / Settings) | Built on `v1/ui`. **Not yet verified on devices:** Windows rows 2 to 25 of `docs/v1/checklist-ui.md` (only row 1 has a result), all Android rows, all iPad rows |
 
 ## 3. Branches (all stacked; nothing merged into `main` yet)
 ```
-main ── v1/windows-hub-input (04c6a13, pushed) ── v1/clipboard (2b73b7b, pushed) ── v1/transfer (pushed) ── v1/ios (pushed)
+main ── v1/windows-hub-input (04c6a13, pushed) ── v1/clipboard (2b73b7b, pushed) ── v1/transfer (pushed) ── v1/ios (pushed) ── v1/ui (pushed)
 ```
-- **`v1/ios`** is the newest and contains everything. It lives in the worktree
+- **`v1/ui`** is the newest and contains everything (base UI on all three apps). It lives in the worktree
   `C:\dev\Cross-the-platforms\.claude\worktrees\ctp-windows-hub-input-bug-b2c51e`. Pushed to `origin`.
 - `main` = foundation + spikes (PR #1, merged by the owner).
 - To finish v1 cleanly: open PRs in order `v1/windows-hub-input → main`, then `v1/clipboard`, then `v1/transfer` (each
-  based on the previous), then `v1/ios`, or one PR of `v1/ios → main` with all commits. Owner decides.
+  based on the previous), then `v1/ios`, then `v1/ui`, or one PR of `v1/ui → main` with all commits. Owner decides.
 
 ## 4. Build, run, install
 Repo layout: `core/` (bridge-core: hid, edge, layout, settings, router, keyqueue, clipboard, names, identity, pairing, node,
@@ -74,7 +75,7 @@ build from the new place and start it once so autostart follows.
 - **Phone → PC big files are limited by the laptop SSD, not the code:** Kingston NV2 1 TB, DRAM-less, 94 % full (51 GB free).
   Raw writes: 3 GB/s for ~0.5 GB, then 10–37 MB/s with 10–20 s stalls in any folder. Free 150–200 GB and run
   "Defragment and Optimize Drives → C: → Optimize" (TRIM); or point Transfer → Change… at a faster drive.
-- **iPad clipboard after iPad/laptop restarts** can fail with `pair verify … early eof`; fix = Clipboard tab → **Pair iPad (USB)**
+- **iPad clipboard after iPad/laptop restarts** can fail with `pair verify … early eof`; fix = Clipboard page → **Pair over USB**
   (done 2026-11-03, worked). Worth automating detection: after N pair-verify failures, show "Re-pair over USB" in the status.
 - Old spike app `dev.crosstheplatforms.spike` ("CTP Spike", tile "Send clipboard") is still on the phone and confuses the tile
   choice — uninstall it: `adb uninstall dev.crosstheplatforms.spike`. Bridge's tile is **"Send clipboard to PC"**.

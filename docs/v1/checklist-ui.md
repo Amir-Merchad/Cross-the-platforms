@@ -2,6 +2,8 @@
 
 Fill in **Result** (PASS, or FAIL with a note). Compare with the Claude Design canvas "Bridge UI redesign".
 
+**Status:** Windows row 1 is the only Windows row with a result so far. Windows rows 2 to 25, all Android rows and all iPad rows are not yet run on devices.
+
 ## Windows hub
 
 | # | State or case | How | Expected | Result |
@@ -53,3 +55,20 @@ Phone states are named as on the Mobile board. Check each in the phone's light a
 | 13 | Service, tile, boot | Reboot the phone | Notification returns, tile and receiving still work | |
 | 14 | A swipe that starts on the button does not forget | Put a finger on Hold to forget and scroll the page, or slide off the button, before 1 second | Nothing is forgotten | |
 | 15 | Several PCs | Pair two PCs | A chooser row appears on Home. Send files, Send clipboard and Forget act on the chosen PC. The tile still sends to all | |
+
+## iPad
+
+Same state names as the Mobile board. Check each in the iPad's light and dark mode.
+
+| # | State or case | How | Expected | Result |
+|---|---|---|---|---|
+| 1 | home | Open Bridge when paired | Top reads "Paired", PC card shows "Ready", Send files, Send clipboard, Recent, Sharing from other apps | |
+| 2 | sending | Send a large file | PC card "Receiving your files", progress card with name, rate and bar. Row moves to Recent as "Sent, size" | |
+| 3 | receiving | Send a large file from the PC | PC card "Sending to you", progress card, then "Received, size" in Recent | |
+| 4 | notPaired | Fresh install or forget the PC | Top reads "Not paired", card "No PC yet", primary "Pair with PC". No Recent, no Send clipboard | |
+| 5 | pair | Press Pair with PC | Camera square with the instruction. Scanning a code from Add a device pairs and returns Home | |
+| 6 | pairNoCamera | Deny or revoke the camera | Camera-off message, Paste code works, a bad code says it did not work | |
+| 7 | failed | Close Bridge on the PC, then send | Top reads "PC not reachable", plain warning, next good send returns to "Paired" | |
+| 8 | Fonts | Look at headings, body and buttons | Rubik shows, with visibly different weights | |
+| 9 | Hold to forget, short press | Tap once, or scroll the page starting on the button | Nothing is forgotten. Holding fully forgets | |
+| 10 | Several PCs | Pair two PCs, if available | PC chooser appears. Send files, Send clipboard and Forget act on the chosen PC | |

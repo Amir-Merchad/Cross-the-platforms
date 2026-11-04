@@ -1,7 +1,7 @@
 # v1 acceptance — iPad app (Bridge)
 
 Devices: Windows laptop (hub, `ctp-app.exe`), iPad Air (`Bridge` app). Same Wi-Fi.
-Fill in **Result** (PASS / FAIL + note). Speeds in MB/s as shown in the Transfer tab.
+Fill in **Result** (PASS / FAIL + note). Speeds in MB/s as shown in the Progress card.
 
 ## Install
 
@@ -30,7 +30,7 @@ Fill in **Result** (PASS / FAIL + note). Speeds in MB/s as shown in the Transfer
 | 12 | iPad clipboard sync with Bridge paired | With Bridge paired, copy text on iPad, then on PC, paste each into the other | Clipboard sync still works both ways | PASS (owner) |
 | 13 | App survives 7-day re-sign | After re-signing with iloader, open Bridge | Data and pairing kept; transfers still work | Not run: needs a real 7-day re-sign |
 | 14 | Logs have no file names | Read `%APPDATA%\CrossThePlatforms\engine.log` on PC | Sizes/counts only. No file names, no clipboard text | PASS (owner) |
-| 15 | Share folder status | Open Bridge on iPad and read the share folder line | Shows `Share folder: ready`. If it shows `unavailable (<bundle id>)`, write that text in Result | PASS (owner) |
+| 15 | Sharing from other apps status | Open Bridge on iPad and read the "Sharing from other apps" line | Shows `Sharing from other apps: Ready`. If it shows `unavailable (<bundle id>)`, write that text in Result | PASS (owner) |
 | 16 | Camera prompt on first Pair | Fresh install or reset camera permission. First Pair with PC | Camera permission prompt appears | PASS (owner) |
 | 17 | Live Photo in share set | Share a Live Photo from Photos to Bridge | Arrives as a still, full size (not a thumbnail) | PASS (owner) |
 | 18 | iCloud Drive file not downloaded | In Files, pick an iCloud Drive file that is not on the device and send it to PC | Sends successfully | PASS (owner) |
