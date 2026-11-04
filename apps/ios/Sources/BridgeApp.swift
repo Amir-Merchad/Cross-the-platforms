@@ -2,7 +2,9 @@ import SwiftUI
 
 @main
 struct BridgeApp: App {
+    @StateObject private var model = Model()
+
     var body: some Scene {
-        WindowGroup { Text("Bridge") }
+        WindowGroup { ContentView(m: model).onOpenURL { model.send([$0]) } }
     }
 }

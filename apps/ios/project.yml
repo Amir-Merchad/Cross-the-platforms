@@ -2,6 +2,9 @@ name: Bridge
 options:
   deploymentTarget:
     iOS: "17.0"
+packages:
+  BridgeKit:
+    path: BridgeKit
 targets:
   Bridge:
     type: application
@@ -10,6 +13,7 @@ targets:
       - Sources
       - Generated/bridge_core.swift
     dependencies:
+      - package: BridgeKit
       - framework: BridgeCore.xcframework
         embed: false
       - sdk: Security.framework
@@ -23,6 +27,11 @@ targets:
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Receive and send files from your other devices.
+        NSCameraUsageDescription: Scan the pairing code on your PC.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Files
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.item]
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.crosstheplatforms.bridge
       CODE_SIGNING_ALLOWED: "NO"
