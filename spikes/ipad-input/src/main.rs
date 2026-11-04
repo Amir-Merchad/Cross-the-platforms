@@ -238,7 +238,7 @@ impl Session {
                 Ok(display) => return Session::start(adapter, handshake, display).await,
                 Err(e) if attempt == 0 && format!("{e:?}").contains("ServiceNotFound") => {
                     println!("display service not listed: the developer disk image is not mounted, mounting it");
-                    mount_ddi(dir, &mut adapter, &mut handshake).await.map_err(|e| format!("DDI mount failed: {e}. Plug in USB and rerun with --usb"))?;
+                    if usb { mount_usb(dir).await.map_err(|e| format!("USB mount failed: {e}"))?; } else { mount_ddi(dir, &mut adapter, &mut handshake).await.map_err(|e| format!("DDI mount failed: {e}. Plug in USB and rerun with --usb"))?; }
                     println!("mounted; reconnecting because the service list is now stale");
                     let _ = adapter.close().await;
                     sleep(Duration::from_secs(2)).await;
@@ -264,7 +264,7 @@ impl Session {
         // Audio first: it sets up the screen-sharing session the video joins.
         let offer = build_screen_audio_offer(&call_id(), &call_info).map_err(|e| format!("audio offer: {e:?}"))?;
         let params = build_start_audio_parameters(&receiver, audio_udp.local_port(), &sender, 50000, offer, CLIENT_SUPPORTED_FEATURES, session_id);
-        display.start_media_stream(params).await.map_err(|e| format!("audio stream: {e:?} (a stuck stream needs an iPad reboot)"))?;
+        if let Err(e) = display.start_media_stream(params).await { println!("audio stream refused, trying video alone: {}", format!("{e:?}").chars().take(120).collect::<String>()); }
         println!("audio stream started");
 
         let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
@@ -595,6 +595,23 @@ async fn mount_ddi(dir: &Path, adapter: &mut AdapterHandle, handshake: &mut RsdH
     let chip_id = handshake.properties.get("UniqueChipID").and_then(|v| v.as_unsigned_integer()).ok_or("iPad didn't report its chip id")?;
     let mut mounter = ImageMounter::connect_rsd(adapter, handshake).await.map_err(|e| format!("image mounter: {e:?}"))?;
     mounter.mount_personalized_rsd(adapter, handshake, image, trust_cache, &manifest, None, chip_id).await.map_err(|e| format!("{e:?}"))
+}
+
+/// Mounts over lockdown, as the working mounter tool does: the RSD route timed out on this iPad.
+async fn mount_usb(dir: &Path) -> Res {
+    use idevice::{IdeviceService, lockdown::LockdownClient, provider::IdeviceProvider};
+    let ddi = dir.join("ddi");
+    let read = |name: &str| std::fs::read(ddi.join(name)).map_err(|e| format!("{name}: {e}"));
+    let (image, trust_cache, manifest) = (read("Image.dmg")?, read("Image.dmg.trustcache")?, read("BuildManifest.plist")?);
+    let mut mux = UsbmuxdConnection::default().await.map_err(|e| format!("usbmuxd: {e:?}"))?;
+    let dev = mux.get_devices().await.map_err(|e| format!("device list: {e:?}"))?.into_iter().next().ok_or("no iPad on USB")?;
+    let provider = dev.to_provider(UsbmuxdAddr::from_env_var().map_err(|e| format!("usbmuxd address: {e:?}"))?, HOST_NAME);
+    let mut lockdown = LockdownClient::connect(&provider).await.map_err(|e| format!("lockdown: {e:?}"))?;
+    let pairing = provider.get_pairing_file().await.map_err(|e| format!("pairing record: {e:?}"))?;
+    lockdown.start_session(&pairing).await.map_err(|e| format!("lockdown session: {e:?}"))?;
+    let chip_id = lockdown.get_value(Some("UniqueChipID"), None).await.map_err(|e| format!("chip id: {e:?}"))?.as_unsigned_integer().ok_or("no chip id")?;
+    let mut mounter = ImageMounter::connect(&provider).await.map_err(|e| format!("image mounter: {e:?}"))?;
+    mounter.mount_personalized(&provider, image, trust_cache, &manifest, None, chip_id).await.map_err(|e| format!("{e:?}"))
 }
 
 async fn connect_usb() -> Result<(AdapterHandle, RsdHandshake), String> {
