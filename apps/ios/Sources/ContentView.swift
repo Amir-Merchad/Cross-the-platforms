@@ -24,6 +24,7 @@ struct ContentView: View {
                 Button("Send files…") { picking = true }
                 Button("Send clipboard to PC") { m.sendClipboard() }
             }
+            Section { Text("Share folder: \(m.shareFolder)").font(.footnote).foregroundStyle(.secondary) }
             if !m.status.isEmpty { Section { Text(m.status) } }
         }
         .onChange(of: phase, initial: true) { _, p in m.phase(p) }

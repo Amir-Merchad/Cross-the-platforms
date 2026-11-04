@@ -31,8 +31,15 @@ final class ShareViewController: UIViewController {
         }
     }
 
+    /// A concrete image or movie type beats the generic `.item`, which may resolve to a bundle.
+    private static func pickType(_ p: NSItemProvider) -> UTType? {
+        let ids = p.registeredTypeIdentifiers.compactMap { UTType($0) }
+        return ids.first { $0.conforms(to: .image) } ?? ids.first { $0.conforms(to: .movie) }
+            ?? [UTType.item, .data].first { p.hasItemConformingToTypeIdentifier($0.identifier) }
+    }
+
     private func save() {
-        guard let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.crosstheplatforms.bridge") else {
+        guard let group = appGroupContainer() else {
             finish("Could not save: app group unavailable", after: 2.5)
             return
         }
@@ -47,12 +54,12 @@ final class ShareViewController: UIViewController {
         let g = DispatchGroup()
         for (i, p) in providers.enumerated() {
             g.enter()
-            let type = [UTType.item, .data].first { p.hasItemConformingToTypeIdentifier($0.identifier) }
-            guard let type else { g.leave(); continue }
+            guard let type = Self.pickType(p) else { g.leave(); continue }
             // the provided URL is only valid inside this callback: copy now, one folder per item keeps the name
             p.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                 defer { g.leave() }
-                guard let url else { return }
+                // folders, packages and Live Photo bundles can't be sent; skip them (counted in "Saved N of M")
+                guard let url, (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return }
                 let dir = scratch.appendingPathComponent(String(i))
                 let dest = dir.appendingPathComponent(url.lastPathComponent)
                 do {

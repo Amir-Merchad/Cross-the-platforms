@@ -6,6 +6,7 @@ import BridgeKit
     @Published var peers: [FfiPeer] = []
     @Published var status = ""
     @Published var choosing = false
+    @Published private(set) var shareFolder = ""
 
     private var node: FfiNode?
     private var life = NodeLifecycle()
@@ -25,12 +26,13 @@ import BridgeKit
         for d in [nodeDir, out] { try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         queue = OutgoingQueue(root: out)
         var all = [queue]
-        if let g = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.crosstheplatforms.bridge") {
+        if let g = appGroupContainer() {
             let shared = g.appendingPathComponent("outgoing")
             try? FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
             all.append(OutgoingQueue(root: shared))
         }
         queues = all
+        shareFolder = all.count > 1 ? "ready" : "unavailable (\(Bundle.main.bundleIdentifier ?? "?"))"
         queues.forEach { $0.sweepIncomplete() }   // default 1h: the extension may be mid-copy
     }
 
@@ -38,7 +40,9 @@ import BridgeKit
 
     func phase(_ p: ScenePhase) {
         switch p {
-        case .active: run(life.foreground())
+        case .active:
+            run(life.foreground())
+            if node != nil { flushOutgoing() }   // node survives backgrounding with files pending; else start() flushes
         case .background: run(life.background())
         default: break
         }
