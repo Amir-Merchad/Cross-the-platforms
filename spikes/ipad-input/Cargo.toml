@@ -11,3 +11,4 @@ mdns-sd = "0.13"
 socket2 = { version = "0.6", features = ["all"] }
 uuid = { version = "1", features = ["v4"] }
 plist = "1"
+png = "0.18"

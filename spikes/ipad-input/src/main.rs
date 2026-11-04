@@ -3,6 +3,7 @@
 //! HID use mirror idevice's `tools/src/coredevice_stream.rs` and `tools/src/hid.rs`.
 //!
 //!   ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]
+//!   ipad-input <shot|dump|probe ...|mousekeys ...> [--usb]   see probe.rs; screenshots land in SHOTS
 //!
 //! Wi-Fi unless `--usb`; no silent fallback, because Wi-Fi is the question. The pairing record path is
 //! handed to the library only: never read or print it here.
@@ -39,6 +40,8 @@ use idevice::{
     xpc::XPCObject,
 };
 use tokio::{task::JoinHandle, time::{sleep, timeout}};
+
+mod probe;
 
 type Io = Box<dyn ReadWrite>;
 type Res = Result<(), String>;
@@ -773,7 +776,8 @@ async fn run() -> ExitCode {
     let usb = args.iter().any(|a| a == "--usb");
     args.retain(|a| a != "--usb");
     let cmd = args.first().map(String::as_str).unwrap_or("");
-    if !["check", "keys", "touch", "scroll", "latency", "pointer"].contains(&cmd) {
+    if cmd == "diff" { return probe::diff_cmd(&args[1..]) }
+    if !["check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "mousekeys"].contains(&cmd) {
         eprintln!("usage: ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]");
         return ExitCode::from(2);
     }
@@ -801,6 +805,7 @@ async fn run() -> ExitCode {
         "touch" => session.touch().await,
         "scroll" => session.scroll().await,
         "latency" => session.latency(args.get(1).map(String::as_str).unwrap_or("uhid")).await,
+        "shot" | "dump" | "probe" | "mousekeys" => session.run_probe(&args).await,
         _ => session.pointer().await,
     };
     session.finish().await;

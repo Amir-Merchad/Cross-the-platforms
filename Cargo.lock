@@ -2993,6 +2993,7 @@ dependencies = [
  "idevice",
  "mdns-sd",
  "plist",
+ "png",
  "socket2 0.6.5",
  "tokio",
  "uuid",
