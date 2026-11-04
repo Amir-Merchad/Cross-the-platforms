@@ -238,7 +238,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
         if last_clock.elapsed() >= CLOCK_LOG {
             last_clock = Instant::now();
             let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-            diag::log(diag::clock_line(unix, status.hosts.iter().filter(|h| h.connected).count(), status.active.is_some()));
+            crate::diag::log(crate::diag::clock_line(unix, status.hosts.iter().filter(|h| h.connected).count(), status.active.is_some()));
         }
         if last_mon.elapsed() >= MONITOR_POLL {
             last_mon = Instant::now();
