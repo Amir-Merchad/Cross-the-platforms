@@ -161,6 +161,28 @@ fn wide_descriptor(vendor_tail: bool) -> Vec<u8> {
     d
 }
 
+/// Built like idevice's keyboard: no enclosing collection, report ID first, vendor bytes last.
+fn flat_descriptor() -> Vec<u8> {
+    let mut d = vec![
+        0x85, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+        0x95, 0x01, 0x75, 0x05, 0x81, 0x01, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F,
+        0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
+    ];
+    d.extend_from_slice(&VENDOR_TAIL);
+    d
+}
+
+/// Absolute position: Universal Control may place the pointer rather than nudge it.
+fn absolute_descriptor() -> Vec<u8> {
+    let mut d = vec![
+        0x85, 0x01, 0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+        0x95, 0x01, 0x75, 0x05, 0x81, 0x01, 0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xFF, 0x7F,
+        0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+    ];
+    d.extend_from_slice(&VENDOR_TAIL);
+    d
+}
+
 fn wide_report(dx: i16, dy: i16, vendor_tail: bool) -> Vec<u8> {
     let mut r = vec![0x01, 0];
     r.extend_from_slice(&dx.to_le_bytes());
@@ -180,11 +202,11 @@ fn uhid_request(payload: XPCObject) -> XPCObject {
 /// Same shape as idevice's `build_main_keyboard_create_request`, as a mouse.
 /// Which identity the virtual mouse claims. Apple ids may get Magic Mouse handling.
 #[derive(Clone, Copy)]
-struct MouseId { vendor: i64, product: i64, transport: &'static str, universal: bool, wide: bool }
+struct MouseId { vendor: i64, product: i64, transport: &'static str, universal: bool, wide: bool, shape: u8 }
 
 fn mouse_create_request(descriptor: Vec<u8>, m: MouseId) -> XPCObject {
     const ID: u64 = 0x1_0000_2002;
-    let (VENDOR, PRODUCT) = (m.vendor, m.product);
+    #[allow(non_snake_case)] let (VENDOR, PRODUCT) = (m.vendor, m.product);
     const NAME: &str = "ctp spike mouse";
     uhid_request(idevice::xpc!({
         "createService": {
@@ -550,12 +572,13 @@ impl Session {
     }
 
     async fn virtual_mouse(&mut self, vendor_tail: bool) -> Res {
-        self.mouse_with(vendor_tail, MouseId { vendor: 0x05AC, product: 0x0269, transport: "USB", universal: true, wide: false }).await
+        self.mouse_with(vendor_tail, MouseId { vendor: 0x05AC, product: 0x0269, transport: "USB", universal: true, wide: false, shape: 0 }).await
     }
 
     async fn mouse_with(&mut self, vendor_tail: bool, m: MouseId) -> Res {
         let raw = self.raw_client().await?;
-        let descriptor = if m.wide { wide_descriptor(vendor_tail) } else { mouse_descriptor(vendor_tail) };
+        let descriptor = match m.shape { 1 => flat_descriptor(), 2 => absolute_descriptor(), _ if m.wide => wide_descriptor(vendor_tail), _ => mouse_descriptor(vendor_tail) };
+        let mut pos = (16000_i32, 16000_i32);
         raw.send_object(mouse_create_request(descriptor, m), true).await.map_err(|e| format!("create: {e:?}"))?;
         let reply = raw.recv().await.map_err(|e| format!("create reply: {e:?}"))?;
         let Some(id) = reply.as_dictionary().and_then(|d| d.get("serviceID")).and_then(plist::Value::as_unsigned_integer).filter(|id| *id != 0) else {
@@ -570,12 +593,31 @@ impl Session {
         println!("  moving: watch for a round pointer tracing a square");
         let moved = self.square(async |s, dx, dy| {
             let raw = s.raw.as_mut().ok_or("no client")?;
-            let report = if m.wide { wide_report(dx as i16 * 4, dy as i16 * 4, vendor_tail) } else { mouse_report(dx, dy, vendor_tail) };
+            pos = (pos.0 + dx as i32 * 12, pos.1 + dy as i32 * 12);
+            let report = match m.shape { 1 => mouse_report(dx, dy, true), 2 => wide_report(pos.0 as i16, pos.1 as i16, true), _ if m.wide => wide_report(dx as i16 * 4, dy as i16 * 4, vendor_tail), _ => mouse_report(dx, dy, vendor_tail) };
             raw.send_object(send_request(id, report), false).await.map_err(|e| format!("report: {e:?}"))
         }).await;
         pause(1000).await?;
         self.remove_mouse().await;
         moved
+    }
+
+    async fn new_stages(&mut self) -> Res {
+        countdown("watch the iPad for a round pointer; stages are 4 s apart").await?;
+        let logi = MouseId { vendor: 0x046D, product: 0xC077, transport: "USB", universal: true, wide: false, shape: 1 };
+        let apple = MouseId { vendor: 0x05AC, product: 0x0269, ..logi };
+        for (name, m) in [
+            ("M: built like the working keyboard", logi),
+            ("N: M with Apple ids", apple),
+            ("O: absolute position", MouseId { shape: 2, ..logi }),
+            ("P: absolute position with Apple ids", MouseId { shape: 2, ..apple }),
+        ] {
+            println!("{name}");
+            note(self.mouse_with(true, m).await)?;
+            pause(4000).await?;
+        }
+        println!("done");
+        Ok(())
     }
 
     /// Nothing here can see the iPad's screen: the owner's eyes are the result, so stages are lettered.
@@ -584,6 +626,7 @@ impl Session {
         let list = self.surfaces().await?;
         let pointers: Vec<u64> = list.iter().filter(|s| is_pointer(s)).map(|s| s.service_id).collect();
 
+        if std::env::args().any(|a| a == "--new") { return self.new_stages().await }
         println!("A: send_report with a boot mouse report to listed pointer surfaces: {pointers:?}");
         for id in pointers {
             note(self.square(async |s, dx, dy| s.hid.send_report(id, vec![0, dx as u8, dy as u8, 0]).await.map_err(|e| format!("report: {e:?}"))).await)?;
@@ -614,7 +657,7 @@ impl Session {
         println!("F: virtual mouse with the keyboard's vendor timestamp bytes");
         note(self.virtual_mouse(true).await)?;
 
-        let logi = MouseId { vendor: 0x046D, product: 0xC077, transport: "USB", universal: true, wide: false };
+        let logi = MouseId { vendor: 0x046D, product: 0xC077, transport: "USB", universal: true, wide: false, shape: 0 };
         for (name, tail, m) in [
             ("G: plain Logitech-style mouse", false, logi),
             ("H: same, with vendor timestamp bytes", true, logi),
