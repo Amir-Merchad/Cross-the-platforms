@@ -66,7 +66,7 @@ export default function Transfers() {
             const [what, when] = waitingLine(d.waiting, d.name);
             return (
               <section key={d.key} className={`${CARD} flex items-center justify-between gap-3`}>
-                <span className="font-semibold">{what}</span><span className="text-muted-foreground">{when}</span>
+                <span className="min-w-0 truncate font-semibold">{what}</span><span className="flex-none text-muted-foreground">{when}</span>
               </section>
             );
           })}
@@ -75,7 +75,7 @@ export default function Transfers() {
               <div className="mb-1.5 font-semibold">History</div>
               {history.map((r) => {
                 const peer = byPeer(r.peer);
-                const h = historyLine(r, peer?.name, peer?.kind === "Ipad");
+                const h = historyLine(r, peer?.name);
                 return (
                   <div key={r.id} className="grid min-h-[42px] grid-cols-[2fr_1.4fr_90px_1.6fr] items-center gap-3 border-t border-border">
                     <span className="truncate">{h.file}</span>

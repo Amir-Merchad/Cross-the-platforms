@@ -38,6 +38,27 @@ test("attachment to a missing monitor flags missingScreen and keeps placement", 
   expect(d.placement).toEqual(att);
 });
 
+const placed = { device_id: "AA:1", monitor_id: "M1", edge: "Left" as const };
+
+test("Bluetooth off at launch keeps placed devices on the Desk, showing No Bluetooth", () => {
+  const d = buildDevices(status([]), [], settings({ attachments: [placed] }), [], {}, mon);
+  expect(d).toHaveLength(1);
+  expect(d[0]).toMatchObject({ hostId: "AA:1", connected: false, placement: placed, name: "Unnamed device" });
+  expect(deviceLook(d[0], null, true)).toEqual({ sub: "No Bluetooth", off: true });
+});
+
+test("a linked device keeps its host while the engine does not list it", () => {
+  const d = buildDevices(status([]), [peer("p1", "iPad")], settings({ device_links: { "AA:1": "p1" } }), ["p1"], {}, mon);
+  expect(d).toHaveLength(1);
+  expect(d[0]).toMatchObject({ hostId: "AA:1", peerId: "p1", name: "iPad", connected: false, reachable: true });
+});
+
+test("a host in status, attachments and links is one device, and the order does not depend on who is listed", () => {
+  const s = settings({ attachments: [{ ...placed, device_id: "b" }, { ...placed, device_id: "a", edge: "Right" }], device_links: { a: "p1" } });
+  expect(buildDevices(status([host("a", "A")]), [peer("p1", "A")], s, [], {}, mon).map((x) => x.key)).toEqual(["a", "b"]);
+  expect(buildDevices(status([]), [peer("p1", "A")], s, [], {}, mon).map((x) => x.key)).toEqual(["a", "b"]);
+});
+
 test("colours come from settings, else by index", () => {
   const d = buildDevices(status([host("a", "A"), host("b", "B")]), [], settings({ device_colors: { b: "#000000" } }), [], {}, mon);
   expect(d.map((x) => x.colour)).toEqual(["#FF7A4D", "#000000"]);
@@ -120,7 +141,8 @@ test("panelLines: an unplaced device cannot switch and says why", () => {
 
 test("panelLines: a device on an unplugged screen", () => {
   const l = lines(dev({ missingScreen: true }));
-  expect([l.key, l.canSwitch, l.why, l.hid]).toEqual(["Screen not connected", false, "Its screen is not connected.", "Bluetooth, screen not connected"]);
+  // The engine, hotkey and tray still switch to it, so the button does too.
+  expect([l.key, l.canSwitch, l.why, l.hid]).toEqual(["Screen not connected", true, "", "Bluetooth, screen not connected"]);
 });
 
 test("panelLines: files only and Bluetooth only", () => {
@@ -148,8 +170,8 @@ test("panelLines: Clipboard row never shows a raw reason", () => {
 
 const moving = (o: Partial<Row> = {}): Row => ({ id: 1, peer: "p", outgoing: true, name: "Site photos.zip", files: 1, total: 100e6, done: 84e6, startedAt: 0, now: 1000, paths: [], state: "moving", received: 0, ...o });
 const stat = (o: Partial<Status> = {}): Status => ({ advertising: true, hosts: [host("h", "iPad Air")], active: null, notice: null, ...o });
-const line = (o: { status?: Status | null; rows?: Row[]; selected?: Device | null; btOff?: boolean } = {}) =>
-  deskLine(o.status === undefined ? stat() : o.status, o.rows ?? [], [dev()], o.selected ?? null, o.btOff ?? false);
+const line = (o: { status?: Status | null; rows?: Row[]; selected?: Device | null; btOff?: boolean; filesDown?: boolean } = {}) =>
+  deskLine(o.status === undefined ? stat() : o.status, o.rows ?? [], [dev()], o.selected ?? null, o.btOff ?? false, o.filesDown ?? false);
 
 test("deskLine follows the canvas states, and input comes first", () => {
   expect(line()).toBe("Your keyboard and mouse are on Windows.");
@@ -158,6 +180,11 @@ test("deskLine follows the canvas states, and input comes first", () => {
   expect(line({ btOff: true, status: stat({ notice: "Bluetooth advertising restarting…" }) })).toBe("Keyboard and mouse sharing is paused.");
   expect(line({ selected: dev({ connected: false, reachable: false }) })).toBe("iPad Air went offline. Bridge reconnects by itself.");
   expect(line({ selected: dev({ reachable: false, waiting: 3 }) })).toBe("iPad Air has Bridge closed. Files will wait.");
+});
+
+test("deskLine says when file sending did not start, after where the input is", () => {
+  expect(line({ filesDown: true })).toBe("File sending did not start. Quit Bridge from the tray and open it again.");
+  expect(line({ filesDown: true, status: stat({ active: "h" }) })).toContain("Your keyboard and mouse are on iPad Air.");
 });
 
 test("deskLine ignores incoming and finished rows, and has nothing before status", () => {

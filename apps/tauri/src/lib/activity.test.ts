@@ -32,37 +32,43 @@ test("Failed with an unknown id adds a failed row named A file", () => {
   expect(r[0]).toMatchObject({ id: 9, name: "A file", state: "failed" });
 });
 
-test("plainError hides the raw string and says queued only when it can", () => {
+test("plainError hides the raw string, and a Failed never says queued: a send that queues arrives as Queued", () => {
   const raw = "peer is not reachable: timeout 0x5";
-  expect(plainError(raw, false)).not.toContain("0x5");
-  expect(plainError(raw, false).toLowerCase()).not.toContain("queued");
-  expect(plainError(raw, true).toLowerCase()).toContain("queued");
-  expect(plainError("weird internal", true)).not.toContain("weird");
+  expect(plainError(raw)).not.toContain("0x5");
+  expect(plainError(raw).toLowerCase()).not.toContain("queued");
+  expect(plainError("weird internal")).not.toContain("weird");
 });
 
-test("outgoing with total 0 ends done on Progress", () => {
-  const r = run([{ type: "Started", id: 1, peer: "p", outgoing: true, name: "e", files: 1, total: 0, paths: [] }, { type: "Progress", id: 1, done: 0, total: 0 }]);
-  expect(r[0].state).toBe("done");
+test("plainError says what to do about folders and unreadable files", () => {
+  expect(plainError("only files can be sent")).toBe("Folders can't be sent. Pick the files inside it.");
+  const read = plainError("can't read a file: os error 5 at C:/secret/x");
+  expect(read).toBe("A file could not be read. Check that it is still there, then send it again.");
 });
 
-test("a late Failed cannot flip a finished row", () => {
-  const r = run([started(true), { type: "Progress", id: 1, done: 100, total: 100 }, { type: "Failed", id: 1, reason: "late" }]);
-  expect(r[0].state).toBe("done");
+test("an empty file moves until core's final Progress, which comes after the receiver confirms", () => {
+  const empty: TransferEvent = { type: "Started", id: 1, peer: "p", outgoing: true, name: "e", files: 1, total: 0, paths: ["C:/e"] };
+  expect(run([empty])[0].state).toBe("moving");
+  expect(run([empty, { type: "Progress", id: 1, done: 0, total: 0 }])[0].state).toBe("done");
+});
+
+test("a receiver that fails after the last byte reads failed, never sent", () => {
+  const r = run([started(true), { type: "Progress", id: 1, done: 90, total: 100 }, { type: "Failed", id: 1, reason: "receiver reported a checksum mismatch" }]);
+  expect(r[0]).toMatchObject({ state: "failed", done: 90 });
 });
 
 const row = (o: Partial<Row>): Row => ({ id: 1, peer: "p", outgoing: true, name: "a.txt", files: 1, total: 2_000_000, done: 2_000_000, startedAt: 0, now: 1000, paths: [], state: "done", received: 0, ...o });
 
 test("historyLine: sent, received and failed rows", () => {
-  expect(historyLine(row({}), "iPad Air", true)).toEqual({ file: "a.txt", who: "To iPad Air", size: "2.0 MB", result: "Sent at 2.0 MB/s", failed: false });
-  expect(historyLine(row({ outgoing: false }), "Galaxy", false)).toMatchObject({ who: "From Galaxy", result: "Received", failed: false });
-  expect(historyLine(row({ state: "requeued" }), "iPad Air", true).result).toBe("Waiting. It sends when Bridge opens there.");
-  const f = historyLine(row({ state: "failed", reason: "os error 5 at C:/secret/x" }), "iPad Air", true);
+  expect(historyLine(row({}), "iPad Air")).toEqual({ file: "a.txt", who: "To iPad Air", size: "2.0 MB", result: "Sent at 2.0 MB/s", failed: false });
+  expect(historyLine(row({ outgoing: false }), "Galaxy")).toMatchObject({ who: "From Galaxy", result: "Received", failed: false });
+  expect(historyLine(row({ state: "requeued" }), "iPad Air").result).toBe("Waiting. It sends when Bridge opens there.");
+  const f = historyLine(row({ state: "failed", reason: "os error 5 at C:/secret/x" }), "iPad Air");
   expect(f).toMatchObject({ result: "That did not finish. Send it again.", failed: true });
-  expect(historyLine(row({ state: "failed", reason: "peer not reachable" }), "iPad Air", false).result).toBe("Not reachable right now. Open Bridge on the other device, then send again.");
+  expect(historyLine(row({ state: "failed", reason: "peer not reachable" }), "iPad Air").result).toBe("Not reachable right now. Open Bridge on the other device, then send again.");
 });
 
 test("historyLine: a failed row with no peer has no who", () => {
-  expect(historyLine(row({ peer: "", state: "failed", reason: "x" }), undefined, false).who).toBe("");
+  expect(historyLine(row({ peer: "", state: "failed", reason: "x" }), undefined).who).toBe("");
 });
 
 test("waitingLine", () => {

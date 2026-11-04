@@ -44,6 +44,9 @@ export function makeStore(initial: Settings, save: (s: Settings) => Promise<void
   return { update, current: () => current };
 }
 
+/** Null when the transfer service is down. Never rejects, so nothing waits forever for a list that will not come. */
+export const loadPeers = (list: () => Promise<Peer[]>): Promise<Peer[] | null> => list().catch(() => null);
+
 /** Anything but "light" and "dark" follows the system. */
 export const resolveDark = (appearance: string, systemDark: boolean): boolean =>
   appearance === "light" ? false : appearance === "dark" ? true : systemDark;
@@ -72,6 +75,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
   const [monitors, setMonitors] = useState<Monitor[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [peersLoaded, setPeersLoaded] = useState(false);
+  const [filesDown, setFilesDown] = useState(false);
   const [reachable, setReachable] = useState<string[]>([]);
   const [waiting, setWaiting] = useState<Record<string, number>>({});
   const [rows, setRows] = useState<Row[]>([]);
@@ -92,7 +96,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
 
   const update = useCallback((fn: (s: Settings) => Settings) => { store.current?.update(fn); }, []);
   const openAdd = useCallback((o: AddOpts = { kind: "ipad" }) => { setAddOpts(o); setTab("add"); }, []);
-  const refreshPeers = useCallback(() => pairedPeers().then((p) => { setPeers(p); setPeersLoaded(true); }), []);
+  const refreshPeers = useCallback(() => loadPeers(pairedPeers).then((p) => { if (p) setPeers(p); setFilesDown(!p); setPeersLoaded(true); }), []);
 
   useEffect(() => {
     getSettings().then((s) => { store.current = makeStore(s, saveSettings, setSettings, () => say("That did not save, so it went back. Try again.")); setSettings(s); });
@@ -104,7 +108,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
       if (e.type === "Paired") refreshPeers();
       if (e.type === "Queued") setWaiting((w) => ({ ...w, [e.peer]: e.files }));
     })];
-    const poll = () => { refreshPeers(); reachablePeers().then(setReachable); queuedFiles().then(setWaiting); };
+    const poll = () => { refreshPeers(); reachablePeers().then(setReachable, () => {}); queuedFiles().then(setWaiting, () => {}); };
     poll();
     const fast = setInterval(() => listMonitors().then(setMonitors), 3000);
     const slow = setInterval(poll, 5000);
@@ -143,7 +147,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
 
   if (!settings) return null;
   const current = devices.find((d) => d.key === selected) ?? devices[0] ?? null;
-  const statusLine = said || deskLine(status, rows, devices, current, btOff);
+  const statusLine = said || deskLine(status, rows, devices, current, btOff, filesDown);
   const hub: Hub = { settings, update, status, clip, monitors, peers, loaded: peersLoaded && status !== null, reachable, waiting, devices, rows, say, statusLine, btOff, refreshPeers, tab, setTab, addOpts, openAdd, selected, select, current };
   return <Ctx.Provider value={hub}>{children}</Ctx.Provider>;
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Attachment, Monitor, Settings } from "./api";
-import { deskPlan, deviceSize, edgeBar, edgeOpen, fileTarget, hotkeyNumber, keyboardScreen, magnet, moveDevice, nearestEdge, placedLine, placementChange, screenBoxes, slotFor } from "./desk";
+import { deskPlan, deviceSize, dropCounts, edgeBar, edgeOpen, fileTarget, hotkeyNumber, keyboardScreen, magnet, moveDevice, nearestEdge, placedLine, placementChange, screenBoxes, slotFor, swapToMissing } from "./desk";
 import { forgetDevice, type Device } from "./devices";
 
 const a = (device_id: string, monitor_id: string, edge: Attachment["edge"]): Attachment => ({ device_id, monitor_id, edge });
@@ -165,4 +165,22 @@ test("nearestEdge skips a closed edge even when its slot is the closest", () => 
   expect(found).not.toBeNull();
   expect(found).not.toEqual({ monitorId: "A", edge: "Right" });
   expect(found).not.toEqual({ monitorId: "B", edge: "Left" });
+});
+
+const gone = (o: Partial<Device> = {}) => ({ missingScreen: true, ...o });
+const live: Monitor[] = [{ id: "M1", rect: { left: 0, top: 0, right: 100, bottom: 100 } }];
+
+test("dropCounts: a release away from any edge keeps a device whose screen is unplugged", () => {
+  expect(dropCounts(gone(), null)).toBe(false);
+  expect(dropCounts(gone(), { monitorId: "M1", edge: "Left" })).toBe(true);
+  expect(dropCounts({ missingScreen: false }, null)).toBe(true);
+});
+
+test("swapToMissing names the device a swap would send to an unplugged screen", () => {
+  const list = [a("x", "GONE", "Left"), a("y", "M1", "Right")];
+  expect(swapToMissing(list, "x", { monitorId: "M1", edge: "Right" }, live)).toBe("y");
+  expect(swapToMissing(list, "x", { monitorId: "M1", edge: "Left" }, live)).toBeNull(); // free edge
+  expect(swapToMissing(list, "x", null, live)).toBeNull(); // Delete
+  expect(swapToMissing([a("x", "M1", "Left"), a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" }, live)).toBeNull();
+  expect(swapToMissing([a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" }, live)).toBeNull(); // unplaced mover
 });

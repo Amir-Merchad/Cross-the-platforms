@@ -67,7 +67,7 @@ export function useFileDrop() {
       if (!d.peerId) { hub.say("Not paired for files."); setChip(null); return; }
       hub.say("");
       // Drops always try: reachability can be a minute stale, and the result sets the message.
-      sendFiles(d.peerId, p.paths).catch((e) => hub.say(plainError(String(e), false)));
+      sendFiles(d.peerId, p.paths).catch((e) => hub.say(plainError(String(e))));
       fly(d.key);
     });
     return () => { off.then((f) => f()); };

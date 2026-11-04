@@ -17,17 +17,40 @@ export function addStep(kind: AddKind, seen: Seen, skipped: number[]): number {
 
 const PEER_KIND: Record<AddKind, PeerKind> = { ipad: "Ipad", phone: "Android" };
 
+type Before = { hosts: string[]; peers: string[] };
+
+/**
+ * The host that appeared since the guide opened. One linked to a peer from before is an old device reconnecting.
+ * One linked to a newer peer stays: that link is this guide's own, and dropping the host would undo the Bluetooth step.
+ */
+export const newHost = (before: Before, hosts: { id: string }[], links: Record<string, string>): string | undefined =>
+  hosts.find((x) => !before.hosts.includes(x.id) && !before.peers.includes(links[x.id]))?.id;
+
+/** The peer of this kind that appeared since the guide opened. */
+export const newPeer = (before: Before, peers: Peer[], kind: AddKind): string | undefined =>
+  peers.find((p) => p.kind === PEER_KIND[kind] && !before.peers.includes(p.id))?.id;
+
 /**
  * The host and peer to link once both are new since the guide opened. `anchor` is a device that already has one side,
  * so only the other side must appear. Null when not ready or already linked.
  */
 export function newLink(
-  before: { hosts: string[]; peers: string[] }, hosts: { id: string }[], peers: Peer[], links: Record<string, string>,
+  before: Before, hosts: { id: string }[], peers: Peer[], links: Record<string, string>,
   anchor: { hostId?: string; peerId?: string }, kind: AddKind,
 ): { host: string; peer: string } | null {
-  const host = anchor.hostId ?? hosts.find((x) => !before.hosts.includes(x.id))?.id;
-  const peer = anchor.peerId ?? peers.find((p) => p.kind === PEER_KIND[kind] && !before.peers.includes(p.id))?.id;
+  const host = anchor.hostId ?? newHost(before, hosts, links);
+  const peer = anchor.peerId ?? newPeer(before, peers, kind);
   return host && peer && links[host] !== peer ? { host, peer } : null;
+}
+
+/** The guide's last card: what really got set up, which skips can leave at nothing. */
+export function finishLine(kind: AddKind, name: string, seen: Seen, placed: boolean): { title: string; body: string } {
+  const place = placed ? "It already has its place on the Desk." : "Put it next to a screen edge on the Desk.";
+  if (seen.host && seen.peer) return { title: `${name} is ready`, body: place };
+  if (seen.host) return { title: `${name} is set up for keyboard and mouse`, body: `${place} Add files from its panel when you want them.` };
+  if (seen.peer) return { title: `${name} is ready for ${kind === "ipad" ? "files" : "files and clipboard"}`, body: "Keyboard and mouse need Bluetooth first. Add it from its panel on the Desk." };
+  if (seen.clip && kind === "ipad") return { title: "Clipboard is connected", body: "You skipped the other steps. Add a device again to set them up." };
+  return { title: "Nothing was added", body: "You skipped every step. Add a device whenever you want." };
 }
 
 /** Links for unlinked hosts whose name is identical to exactly one unlinked peer, when no other unlinked host shares that name. */

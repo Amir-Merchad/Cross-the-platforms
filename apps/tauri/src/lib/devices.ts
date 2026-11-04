@@ -34,9 +34,13 @@ export function buildDevices(
       colour: settings.device_colors[key] ?? DEFAULT_COLOURS[index % DEFAULT_COLOURS.length],
     };
   };
+  // The engine lists only what it sees: Bluetooth off lists nothing, and an unplaced offline host is dropped.
+  const listed = status?.hosts ?? [];
+  const known = [...settings.attachments.map((a) => a.device_id), ...Object.keys(settings.device_links)];
+  const absent = [...new Set(known)].filter((id) => !listed.some((h) => h.id === id)).map((id) => ({ id, name: null, connected: false }));
   const linked = new Set<string>();
   const out: Device[] = [];
-  for (const h of status?.hosts ?? []) {
+  for (const h of [...listed, ...absent].sort((a, b) => a.id.localeCompare(b.id))) {
     const peer = peers.find((p) => p.id === settings.device_links[h.id]) ?? null;
     if (peer) linked.add(peer.id);
     out.push(make(h, peer, out.length));
@@ -91,7 +95,7 @@ export function panelLines(d: Device, c: { active: string | null; btOff: boolean
   const inControl = !!d.hostId && d.hostId === c.active;
   const offline = !!d.hostId && !d.connected && !c.btOff;
   const why = inControl || offline ? "" : !d.hostId ? "It needs Bluetooth first." : c.btOff ? "Keyboard and mouse sharing is paused."
-    : d.missingScreen ? "Its screen is not connected." : !d.placement ? "Put it next to a screen edge first." : "";
+    : !d.placement ? "Put it next to a screen edge first." : "";
   const hid = inControl ? "In control" : !d.hostId ? "Needs Bluetooth" : c.btOff ? "Bluetooth is off" : !d.connected ? "Not connected"
     : d.missingScreen ? "Bluetooth, screen not connected" : d.placement ? `Bluetooth, ${c.where}` : "Bluetooth, not placed";
   return {
@@ -108,9 +112,10 @@ function restingLine(status: Status): string {
 }
 
 /** The top bar's line when nothing has just been said. Input comes first: that is what must never surprise. */
-export function deskLine(status: Status | null, rows: Row[], devices: Device[], selected: Device | null, btOff: boolean): string {
+export function deskLine(status: Status | null, rows: Row[], devices: Device[], selected: Device | null, btOff: boolean, filesDown: boolean): string {
   if (!status) return "";
   if (status.active) return `${restingLine(status)} Push back across the edge, or press Ctrl+Alt+Q.`;
+  if (filesDown) return "File sending did not start. Quit Bridge from the tray and open it again.";
   const sending = rows.filter((r) => r.outgoing && r.state === "moving").at(-1);
   if (sending) {
     const rate = formatRate(sending.done, sending.now - sending.startedAt);

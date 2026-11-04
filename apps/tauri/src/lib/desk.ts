@@ -91,6 +91,16 @@ export function moveDevice(attachments: Attachment[], id: string, target: { moni
   return mine ? out : [...out, next];
 }
 
+/** False when a drag ends away from every edge and the device's screen is unplugged: it keeps its place for when the screen returns. */
+export const dropCounts = (d: Pick<Device, "missingScreen">, target: { monitorId: string; edge: Edge } | null): boolean => !!target || !d.missingScreen;
+
+/** The device a swap would send to a monitor that is not connected, because the mover sits on one. */
+export function swapToMissing(attachments: Attachment[], id: string, target: { monitorId: string; edge: Edge } | null, monitors: Monitor[]): string | null {
+  const mine = attachments.find((a) => a.device_id === id);
+  if (!target || !mine || monitors.some((m) => m.id === mine.monitor_id)) return null;
+  return attachments.find((a) => a.device_id !== id && a.monitor_id === target.monitorId && a.edge === target.edge)?.device_id ?? null;
+}
+
 /** 1-based hotkey number, following list order. */
 export function hotkeyNumber(attachments: Attachment[], id: string): number | null {
   const i = attachments.findIndex((a) => a.device_id === id);

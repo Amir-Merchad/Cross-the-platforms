@@ -29,19 +29,19 @@ export default function Clipboard() {
       </label>
       <section className={`${CARD} px-5 py-1.5`}>
         <div className={ROW}>
-          <div><div className="font-medium">{ipad?.name ?? "iPad"}</div><div className="text-[13px] text-muted-foreground">Text and images, both ways</div></div>
-          <span className="flex items-center gap-3">
+          <div className="min-w-0"><div className="truncate font-medium">{ipad?.name ?? "iPad"}</div><div className="text-[13px] text-muted-foreground">Text and images, both ways</div></div>
+          <span className="flex flex-none items-center gap-3">
             <span className={cn(repair ? "text-destructive" : "text-muted-foreground")}>{on ? ipadLine(clip?.ipad ?? null) : "Sync off"}</span>
             <Button variant={repair ? "default" : "secondary"} className={RAISED} onClick={pair}>Pair over USB</Button>
           </span>
         </div>
         {others.map((d) => (
           <div key={d.key} className={ROW}>
-            <div>
-              <div className="font-medium">{d.name}</div>
+            <div className="min-w-0">
+              <div className="truncate font-medium">{d.name}</div>
               <div className="text-[13px] text-muted-foreground">{d.kind === "Android" ? "Text only. From the phone, use Bridge or its Quick Settings tile." : "Text only"}</div>
             </div>
-            <span className="text-muted-foreground">{!on ? "Sync off" : d.reachable ? "Connected" : "Not connected"}</span>
+            <span className="flex-none text-muted-foreground">{!on ? "Sync off" : d.reachable ? "Connected" : "Not connected"}</span>
           </div>
         ))}
       </section>

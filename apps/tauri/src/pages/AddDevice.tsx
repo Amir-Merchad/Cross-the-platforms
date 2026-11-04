@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
 import { pairIpad } from "@/lib/api";
-import { addStep, newLink, stepCount, type AddKind } from "@/lib/addflow";
+import { addStep, finishLine, newHost, newLink, newPeer, stepCount, type AddKind } from "@/lib/addflow";
 import { clipNotice } from "@/lib/clip";
 import { useHub } from "@/lib/hub";
 import { onTransfer, pairInvite } from "@/lib/transfer";
@@ -34,17 +34,18 @@ function Guide() {
   const [kind, setKind] = useState<AddKind>(addOpts.kind);
   const [skipped, setSkipped] = useState<number[]>([]);
   // New means appeared since this page opened.
-  const [before] = useState(() => ({ hosts: (status?.hosts ?? []).map((h) => h.id), peers: peers.map((p) => p.id) }));
+  const [before] = useState(() => ({ hosts: devices.flatMap((d) => d.hostId ?? []), peers: peers.map((p) => p.id) }));
   const [qr, setQr] = useState<Qr | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [triedCode, setTriedCode] = useState(false);
 
   const hosts = status?.hosts ?? [];
   const link = newLink(before, hosts, peers, settings.device_links, addOpts, kind);
-  const hostId = addOpts.hostId ?? hosts.find((h) => !before.hosts.includes(h.id))?.id;
+  const hostId = addOpts.hostId ?? newHost(before, hosts, settings.device_links);
+  const peerId = addOpts.peerId ?? newPeer(before, peers, kind);
   const seen = {
     host: !!hostId,
-    peer: !!addOpts.peerId || peers.some((p) => !before.peers.includes(p.id) && p.kind === (kind === "ipad" ? "Ipad" : "Android")),
+    peer: !!peerId,
     clip: !!clip?.ipad && typeof clip.ipad === "object" && "Connected" in clip.ipad,
   };
   const seenAt = [seen.host, seen.peer, seen.clip];
@@ -82,9 +83,10 @@ function Guide() {
   const expired = !!qr && left === 0;
   const notice = kind === "ipad" ? clipNotice(clip?.notice ?? null) : null;
 
-  const device = devices.find((d) => d.hostId === hostId);
+  const device = devices.find((d) => (hostId && d.hostId === hostId) || (peerId && d.peerId === peerId));
   const name = device?.name ?? (kind === "ipad" ? "Your iPad" : "Your phone");
   const toDesk = () => { select(device?.key ?? null); setTab("desk"); };
+  const finish = finishLine(kind, name, seen, !!device?.placement);
 
   const card = (i: number) => {
     const current = i === step;
@@ -135,8 +137,8 @@ function Guide() {
       {notice && <p role="status" className="flex-none px-1 text-muted-foreground">{notice}</p>}
       {step === count && (
         <section className="flex-none rounded-[18px] border-2 border-primary bg-card px-4 py-3.5">
-          <strong className="font-semibold">{name} is ready</strong>
-          <p className="mt-1.5 text-muted-foreground">Put it next to a screen edge on the Desk.</p>
+          <strong className="block truncate font-semibold">{finish.title}</strong>
+          <p className="mt-1.5 text-muted-foreground">{finish.body}</p>
           <Button className="mt-2.5 h-11 rounded-xl px-4 font-semibold" onClick={toDesk}>Go to the Desk</Button>
         </section>
       )}

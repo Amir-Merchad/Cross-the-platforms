@@ -25,7 +25,7 @@ function ActivityStrip() {
           <div className="mt-1.5 mb-1 h-1.5 rounded-[3px] bg-border"><div className="h-1.5 rounded-[3px] bg-primary" style={{ width: `${progressPercent(row.done, row.total)}%` }} /></div>
           <div className="text-[13px] text-muted-foreground tabular-nums">{formatBytes(row.done)} of {formatBytes(row.total)}</div>
         </div>
-      ) : <div className="min-w-0 flex-1 text-muted-foreground">{idleLine(devices)}</div>}
+      ) : <div className="min-w-0 flex-1 truncate text-muted-foreground">{idleLine(devices)}</div>}
       <label className="flex flex-none items-center gap-2.5 text-[13px] text-muted-foreground">
         Clipboard sync
         <Switch size="lg" checked={clip?.enabled ?? false} disabled={!clip} onCheckedChange={toggle} />
@@ -45,7 +45,7 @@ export default function Desk() {
       if (r.state !== "failed" || told.current.has(r.id)) continue;
       told.current.add(r.id);
       // A failed send was not queued: a send that can wait arrives as Queued instead.
-      say(plainError(r.reason ?? "", false));
+      say(plainError(r.reason ?? ""));
     }
   }, [rows, say]);
 

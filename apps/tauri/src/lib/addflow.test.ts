@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addStep, linkChoices, nameLinks, newLink, stepCount } from "./addflow";
+import { addStep, finishLine, linkChoices, nameLinks, newHost, newLink, stepCount } from "./addflow";
 import type { Device } from "./devices";
 import type { Peer } from "./transfer";
 
@@ -34,6 +34,47 @@ describe("newLink", () => {
   it("a phone links to an Android peer", () => expect(newLink(before, [h("new", "B")], [peer("p", "B", "Android")], {}, {}, "phone")).toEqual({ host: "new", peer: "p" }));
   it("an anchored host only needs the new peer", () => expect(newLink(before, [h("old", "A")], [peer("p", "A")], {}, { hostId: "old" }, "ipad")).toEqual({ host: "old", peer: "p" }));
   it("an anchored peer only needs the new host", () => expect(newLink(before, [h("new", "A")], [peer("oldp", "A")], {}, { peerId: "oldp" }, "ipad")).toEqual({ host: "new", peer: "oldp" }));
+  it("never overwrites a good link when an old device reconnects", () =>
+    expect(newLink(before, [h("back", "A")], [peer("oldp", "A"), peer("p", "B")], { back: "oldp" }, {}, "ipad")).toBeNull());
+  it("skips the reconnecting device for the new one", () =>
+    expect(newLink(before, [h("back", "A"), h("new", "B")], [peer("oldp", "A"), peer("p", "B")], { back: "oldp" }, {}, "ipad")).toEqual({ host: "new", peer: "p" }));
+});
+
+describe("newHost", () => {
+  const before = { hosts: ["old"], peers: ["oldp"] };
+  it("is a host that appeared since entry", () => expect(newHost(before, [h("old", "A"), h("new", "B")], {})).toBe("new"));
+  it("is not a device linked before the guide opened", () => expect(newHost(before, [h("back", "A")], { back: "oldp" })).toBeUndefined());
+  it("stays the same host once the guide has written its link, so the steps do not go back", () =>
+    expect(newHost(before, [h("new", "B")], { new: "p" })).toBe("new"));
+});
+
+describe("finishLine", () => {
+  it("both sides: ready, and where to put it", () =>
+    expect(finishLine("ipad", "iPad Air", { host: true, peer: true, clip: true }, false)).toEqual({ title: "iPad Air is ready", body: "Put it next to a screen edge on the Desk." }));
+  it("does not ask for a place it already has", () =>
+    expect(finishLine("ipad", "iPad Air", { host: true, peer: true, clip: false }, true).body).not.toContain("Put it"));
+  it("every step skipped says nothing was added", () => {
+    const l = finishLine("ipad", "Your iPad", { host: false, peer: false, clip: false }, false);
+    expect(l.title).toBe("Nothing was added");
+    expect(l.title + l.body).not.toContain("ready for");
+  });
+  it("a files-only result never mentions putting it at an edge as the next step", () => {
+    const l = finishLine("phone", "Pixel", { host: false, peer: true, clip: false }, false);
+    expect(l.title).toBe("Pixel is ready for files and clipboard");
+    expect(l.body).not.toContain("Put it");
+  });
+  it("an iPad's files step leaves the clipboard out", () =>
+    expect(finishLine("ipad", "iPad Air", { host: false, peer: true, clip: false }, false).title).toBe("iPad Air is ready for files"));
+  it("Bluetooth only says files are still to do", () => {
+    const l = finishLine("phone", "Pixel", { host: true, peer: false, clip: false }, false);
+    expect(l.title).toBe("Pixel is set up for keyboard and mouse");
+    expect(l.body).toContain("Put it next to a screen edge");
+    expect(l.body).toContain("files");
+  });
+  it("clipboard only says just that, and only for the iPad", () => {
+    expect(finishLine("ipad", "Your iPad", { host: false, peer: false, clip: true }, false).title).toBe("Clipboard is connected");
+    expect(finishLine("phone", "Your phone", { host: false, peer: false, clip: true }, false).title).toBe("Nothing was added");
+  });
 });
 
 describe("nameLinks", () => {

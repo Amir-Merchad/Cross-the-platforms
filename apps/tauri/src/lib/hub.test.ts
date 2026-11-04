@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Settings } from "./api";
-import { makeSaver, makeStore, resolveDark } from "./hub";
+import { loadPeers, makeSaver, makeStore, resolveDark } from "./hub";
 
 const s = (n: number) => ({ version: n }) as Settings;
 const gate = () => { let open!: () => void; const p = new Promise<void>((r) => (open = r)); return { p, open }; };
@@ -21,6 +21,11 @@ test("a failed save rejects but later saves still run", async () => {
   await expect(save(s(1))).rejects.toThrow("no");
   await save(s(2));
   expect(seen).toEqual([2]);
+});
+
+test("loadPeers gives null when the transfer service is down, so the hub can stop waiting", async () => {
+  await expect(loadPeers(() => Promise.reject("file transfer isn't running"))).resolves.toBeNull();
+  await expect(loadPeers(() => Promise.resolve([]))).resolves.toEqual([]);
 });
 
 test("anything but light or dark counts as system", () => {

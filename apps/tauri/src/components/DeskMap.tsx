@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Mo
 import DeviceObject from "@/components/DeviceObject";
 import { useDeskMotion, type Target } from "@/components/useDeskMotion";
 import { switchTo, type Edge } from "@/lib/api";
-import { deskPlan, EDGES, edgeBar, edgeOpen, hotkeyNumber, keyboardScreen, moveDevice, placedLine, placementChange, screenName, type Box } from "@/lib/desk";
+import { deskPlan, dropCounts, EDGES, edgeBar, edgeOpen, hotkeyNumber, keyboardScreen, moveDevice, placedLine, placementChange, screenName, swapToMissing, type Box } from "@/lib/desk";
 import { deviceLook, type Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { progressPercent } from "@/lib/transfer";
@@ -35,6 +35,10 @@ export default function DeskMap({ over }: { over: string | null }) {
 
   const commit = async (d: Device, target: Target | null) => {
     const id = d.hostId!;
+    if (swapToMissing(settings.attachments, id, target, monitors)) {
+      say(`Another device sits there, and it cannot swap to the screen ${d.name} was on. Pick a free edge.`);
+      return;
+    }
     const next = moveDevice(settings.attachments, id, target);
     try {
       if (placementChange(active, next) === null) await switchTo(null);
@@ -49,7 +53,12 @@ export default function DeskMap({ over }: { over: string | null }) {
       : `${d.name} is not placed.${d.peerId ? " It stays paired for files and clipboard." : ""}`);
   };
 
-  const { lifted, near, bind } = useDeskMotion(stage, plan, over, commit);
+  const drop = (d: Device, target: Target | null) => {
+    if (dropCounts(d, target)) commit(d, target);
+    else say(`${d.name} keeps its place until its screen is back.`);
+  };
+
+  const { lifted, near, bind } = useDeskMotion(stage, plan, over, drop);
 
   const onKeyDown = (e: KeyboardEvent, d: Device) => {
     const edge = KEYS[e.key];
@@ -75,7 +84,7 @@ export default function DeskMap({ over }: { over: string | null }) {
 
   return (
     <div ref={stage} className="relative min-h-0 flex-1 overflow-hidden rounded-[20px] bg-card">
-      {hint && <p className="absolute top-3.5 left-5 font-medium">Pick up {hint.name} and put it next to a screen edge.</p>}
+      {hint && <p className="absolute top-3.5 right-5 left-5 truncate font-medium">Pick up {hint.name} and put it next to a screen edge.</p>}
       <div className="absolute rounded-[18px] border-2 border-dashed px-3 py-1.5 text-[13px] text-muted-foreground" style={place(plan.tray)}>Not placed</div>
 
       {plan.screens.map(({ id, box }) => {

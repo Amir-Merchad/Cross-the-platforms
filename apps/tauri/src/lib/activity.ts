@@ -37,17 +37,18 @@ export function applyEvent(rows: Row[], e: TransferEvent, now: number): Row[] {
 }
 
 /** A sentence for the user. Never the raw reason, which can carry paths or internals. */
-export function plainError(reason: string, canQueue: boolean): string {
-  if (/not reachable/i.test(reason))
-    return canQueue ? "Not reachable right now. It is queued and goes when Bridge opens there." : "Not reachable right now. Open Bridge on the other device, then send again.";
+export function plainError(reason: string): string {
+  if (/only files can be sent/i.test(reason)) return "Folders can't be sent. Pick the files inside it.";
+  if (/can't read a file/i.test(reason)) return "A file could not be read. Check that it is still there, then send it again.";
+  if (/not reachable/i.test(reason)) return "Not reachable right now. Open Bridge on the other device, then send again.";
   return "That did not finish. Send it again.";
 }
 
 /** A history row in the owner's words. `peerName` is the device's display name, if it is known. */
-export function historyLine(r: Row, peerName: string | undefined, canQueue: boolean) {
+export function historyLine(r: Row, peerName: string | undefined) {
   const rate = formatRate(r.done, r.now - r.startedAt);
   const failed = r.state === "failed";
-  const result = failed ? plainError(r.reason ?? "", canQueue)
+  const result = failed ? plainError(r.reason ?? "")
     : r.state === "requeued" ? "Waiting. It sends when Bridge opens there."
     : r.state === "moving" ? (r.outgoing ? "Sending" : "Receiving")
     : r.outgoing ? `Sent${rate === "—" ? "" : ` at ${rate}`}` : "Received";
