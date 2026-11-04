@@ -7,6 +7,7 @@ import BridgeKit
     @Published private(set) var rows: [TransferRow] = []
     @Published private(set) var startFailed = false
     @Published var notice: String?          // one-off messages that are not a transfer (empty clipboard, bad code)
+    @Published private(set) var success: String?   // a one-off good result; clears by itself
     @Published var chosen: String?          // the PC Home shows; see `shown`
     @Published private(set) var shareFolder = ""
 
@@ -16,6 +17,7 @@ import BridgeKit
     private var bgTask = UIBackgroundTaskIdentifier.invalid
     private var log = ActivityLog()
     private var flushing = false, flushAgain = false
+    private var successClear: Task<Void, Never>?
     private let queue: OutgoingQueue          // app's own root; send() enqueues here
     private let queues: [OutgoingQueue]        // + app group root (share extension), nil group = local only
     private let nodeDir: URL
@@ -202,13 +204,23 @@ import BridgeKit
         }
     }
 
+    private func say(success text: String) {
+        success = text
+        successClear?.cancel()
+        successClear = Task {
+            try? await Task.sleep(for: .seconds(4))
+            if !Task.isCancelled { success = nil }
+        }
+    }
+
     func sendClipboard() {
         notice = nil
+        success = nil
         guard let text = UIPasteboard.general.string, !text.isEmpty else { notice = "Clipboard is empty"; return }
         withPC { pc in
             guard let node = self.node else { return }
             Task {
-                do { try await node.sendClip(peerId: pc.id, text: text); self.notice = "Clipboard sent" }
+                do { try await node.sendClip(peerId: pc.id, text: text); self.say(success: "Clipboard sent") }
                 catch { self.notice = "Could not reach the PC. Open Bridge on the PC and try again." }
             }
         }

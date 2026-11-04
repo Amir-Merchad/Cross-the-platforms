@@ -81,6 +81,12 @@ struct ContentView: View {
                     .padding(.horizontal, 14).padding(.vertical, 12)
                     .background(RoundedRectangle(cornerRadius: 14).fill(p.warnBg))
             }
+            if let done = m.success {
+                Text(done).font(.rBody).foregroundStyle(p.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 12)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(p.surface))
+            }
             Button(paired ? "Send files" : "Pair with PC") { if paired { picking = true } else { pairing = true } }
                 .buttonStyle(LipButtonStyle())
             if paired { Button("Send clipboard") { m.sendClipboard() }.buttonStyle(LipButtonStyle(primary: false)) }
