@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { pairIpad, setClipboardSync } from "@/lib/api";
-import { ipadLine, needsRepair } from "@/lib/clip";
+import { clipNotice, ipadLine, needsRepair } from "@/lib/clip";
 import { useHub } from "@/lib/hub";
 import { RAISED, cn } from "@/lib/utils";
 
@@ -16,6 +16,7 @@ export default function Clipboard() {
   const others = devices.filter((d) => d.peerId && d.kind !== "Ipad");
   const toggle = (next: boolean) => setClipboardSync(next).catch(() => say("Could not change clipboard sync. Try again."));
   const pair = () => pairIpad().catch(() => say("Could not pair over USB. Plug the iPad in and try again."));
+  const notice = clipNotice(clip?.notice ?? null);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto text-[15px] data-[hidden]:hidden">
@@ -44,6 +45,7 @@ export default function Clipboard() {
           </div>
         ))}
       </section>
+      {notice && <p role="status" className="flex-none px-1 text-muted-foreground">{notice}</p>}
       <section className={`${CARD} flex gap-12 px-5 py-3.5`}>
         <span>Synced since start <strong className="font-semibold tabular-nums">{clip?.synced ?? 0}</strong></span>
         <span>Skipped, too large <strong className="font-semibold tabular-nums">{clip?.skipped_too_large ?? 0}</strong></span>

@@ -13,7 +13,7 @@ const patch = (rows: Row[], id: number, f: (r: Row) => Partial<Row>) => rows.map
 export function applyEvent(rows: Row[], e: TransferEvent, now: number): Row[] {
   switch (e.type) {
     case "Started":
-      return [...rows.filter((r) => r.id !== e.id), {
+      return [...rows.filter((r) => r.id !== e.id && !(r.state === "requeued" && r.peer === e.peer)), {
         id: e.id, peer: e.peer, outgoing: e.outgoing, name: e.name, files: e.files, total: e.total, done: 0,
         startedAt: now, now, paths: e.paths, state: "moving", received: 0,
       }];
@@ -57,3 +57,6 @@ export function historyLine(r: Row, peerName: string | undefined, canQueue: bool
 /** The Transfers page's line for files waiting on a device that has Bridge closed: [what, when]. */
 export const waitingLine = (files: number, name: string): [string, string] =>
   files === 1 ? [`1 file waiting for ${name}`, "It sends when Bridge opens there."] : [`${files} files waiting for ${name}`, "They send when Bridge opens there."];
+
+/** Send again only makes sense for a failed send we still know the files and the device of. */
+export const canSendAgain = (r: Row, device: unknown): boolean => r.state === "failed" && r.outgoing && r.paths.length > 0 && !!device;

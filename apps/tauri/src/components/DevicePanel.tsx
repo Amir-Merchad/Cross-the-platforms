@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import HoldButton from "@/components/HoldButton";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -6,7 +7,7 @@ import { DEFAULT_CALIBRATION, DEFAULT_WIDTH, switchTo, type Calibration } from "
 import { hotkeyNumber, placementChange, screenName, whereLine } from "@/lib/desk";
 import { DEFAULT_COLOURS, forgetDevice, panelLines, type Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
-import { forgetPeer } from "@/lib/transfer";
+import { forgetPeer, sendFiles } from "@/lib/transfer";
 import { cn } from "@/lib/utils";
 
 const COLOUR_NAMES = ["Orange", "Green", "Blue", "Pink", "Yellow"];
@@ -46,6 +47,13 @@ function Panel({ d }: { d: Device }) {
   const inControl = !!d.hostId && d.hostId === active;
   const toggle = () => switchTo(inControl ? null : d.hostId).catch(() => say("Could not switch. Try again."));
 
+  const send = async () => {
+    try {
+      const paths = await open({ multiple: true, directory: false });
+      if (paths?.length) await sendFiles(d.peerId!, paths);
+    } catch { say("Could not send the files. Try again."); }
+  };
+
   const forget = async () => {
     try {
       if (placementChange(active, forgetDevice(settings, d).attachments) === null) await switchTo(null);
@@ -71,6 +79,7 @@ function Panel({ d }: { d: Device }) {
         <span className="flex-none text-[13px] text-muted-foreground">{lines.key}</span>
       </div>
       <Button className="h-11 w-full flex-none rounded-xl font-semibold" disabled={!lines.canSwitch} onClick={toggle}><span className="truncate">{lines.button}</span></Button>
+      {d.peerId && <Button variant="secondary" className="h-11 w-full flex-none rounded-xl font-semibold" onClick={send}>Send files</Button>}
       {lines.why && <p className="-mt-1.5 text-[13px] text-muted-foreground">{lines.why}</p>}
       <div className="flex flex-col gap-2">
         <Row name="Keyboard and mouse" value={lines.hid} />

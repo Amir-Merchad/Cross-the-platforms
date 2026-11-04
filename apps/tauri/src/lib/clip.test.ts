@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ipadLine, needsRepair } from "./clip";
+import { clipNotice, ipadLine, needsRepair } from "./clip";
 
 describe("ipadLine", () => {
   it("connected over Wi-Fi", () => expect(ipadLine({ Connected: { wifi: true } })).toBe("Connected over Wi-Fi"));
@@ -17,5 +17,19 @@ describe("needsRepair", () => {
     expect(needsRepair(null)).toBe(false);
     expect(needsRepair("NotPaired")).toBe(false);
     expect(needsRepair({ Connected: { wifi: true } })).toBe(false);
+  });
+});
+
+describe("clipNotice", () => {
+  it("passes the two fixed progress phrases", () => {
+    expect(clipNotice("Pairing… confirm on the iPad if it asks")).toBe("Pairing… confirm on the iPad if it asks");
+    expect(clipNotice("iPad paired")).toBe("iPad paired");
+  });
+  it("turns a failure into a plain line, never the raw text", () => {
+    expect(clipNotice("Pairing failed: lockdown error 0x1 at C:/x")).toBe("Pairing did not work. Plug the iPad in by USB and try again.");
+  });
+  it("hides anything else", () => {
+    expect(clipNotice("something raw")).toBeNull();
+    expect(clipNotice(null)).toBeNull();
   });
 });

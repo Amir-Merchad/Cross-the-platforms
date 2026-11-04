@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { TransferEvent } from "./transfer";
-import { applyEvent, historyLine, plainError, waitingLine, type Row } from "./activity";
+import { applyEvent, canSendAgain, historyLine, plainError, waitingLine, type Row } from "./activity";
 
 const run = (evs: TransferEvent[]) => evs.reduce<Row[]>((r, e, i) => applyEvent(r, e, 1000 + i), []);
 const started = (outgoing: boolean, files = 2): TransferEvent => ({ type: "Started", id: 1, peer: "p", outgoing, name: "a.txt", files, total: 100, paths: ["C:/a.txt"] });
@@ -68,4 +68,25 @@ test("historyLine: a failed row with no peer has no who", () => {
 test("waitingLine", () => {
   expect(waitingLine(1, "iPad Air")).toEqual(["1 file waiting for iPad Air", "It sends when Bridge opens there."]);
   expect(waitingLine(2, "iPad Air")).toEqual(["2 files waiting for iPad Air", "They send when Bridge opens there."]);
+});
+
+test("Started for a peer drops that peer's requeued rows", () => {
+  const r = run([started(true), { type: "Requeued", id: 1 }, { ...started(true), id: 2 } as TransferEvent]);
+  expect(r.map((x) => x.id)).toEqual([2]);
+});
+
+test("Started keeps requeued rows of other peers and failed rows", () => {
+  const other = { ...started(true), id: 2, peer: "q" } as TransferEvent;
+  expect(run([started(true), { type: "Requeued", id: 1 }, other]).map((x) => x.id)).toEqual([1, 2]);
+  expect(run([started(true), { type: "Failed", id: 1, reason: "x" }, { ...started(true), id: 2 } as TransferEvent]).map((x) => x.id)).toEqual([1, 2]);
+});
+
+test("canSendAgain needs a failed outgoing row with paths and a known device", () => {
+  const dev = {} as never;
+  const f = row({ state: "failed", paths: ["C:/a.txt"] });
+  expect(canSendAgain(f, dev)).toBe(true);
+  expect(canSendAgain(f, undefined)).toBe(false);
+  expect(canSendAgain({ ...f, outgoing: false }, dev)).toBe(false);
+  expect(canSendAgain({ ...f, paths: [] }, dev)).toBe(false);
+  expect(canSendAgain({ ...f, state: "done" }, dev)).toBe(false);
 });

@@ -12,3 +12,9 @@ export function ipadLine(s: IpadStatus | null): string {
   if ("Connected" in s) return s.Connected.wifi ? "Connected over Wi-Fi" : "Connected over USB";
   return needsRepair(s) ? "Needs pairing again" : "Not connected";
 }
+
+/** The engine's pairing notice as a fixed phrase. Anything it does not recognise is hidden: it can carry raw errors. */
+export function clipNotice(notice: string | null): string | null {
+  if (notice === "Pairing… confirm on the iPad if it asks" || notice === "iPad paired") return notice;
+  return notice?.startsWith("Pairing failed") ? "Pairing did not work. Plug the iPad in by USB and try again." : null;
+}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
-import { historyLine, waitingLine } from "@/lib/activity";
+import { canSendAgain, historyLine, waitingLine } from "@/lib/activity";
 import { displayName } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { formatBytes, formatRate, openReceiveDir, progressPercent, receiveDir, sendFiles, setReceiveDir } from "@/lib/transfer";
@@ -84,7 +84,7 @@ export default function Transfers() {
                     <span className="text-muted-foreground tabular-nums">{h.size}</span>
                     <span className="flex items-center justify-between gap-2">
                       <span className={h.failed ? "text-destructive" : "text-success"}>{h.result}</span>
-                      {h.failed && r.peer && r.paths.length > 0 && (
+                      {canSendAgain(r, peer) && (
                         <Button variant="secondary" className={RAISED} onClick={() => again(r.peer, r.paths)}>Send again</Button>
                       )}
                     </span>
