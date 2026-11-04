@@ -86,7 +86,8 @@ pub async fn logtap() -> Res {
     let all = std::env::var_os("LOGALL").is_some();
     loop {
         let Ok(l) = relay.next().await else { println!("log tap ended"); return Ok(()) };
-        if all || l.filename.contains("dtuhidd") || l.image_name.contains("dtuhidd") {
+        let pointer = l.filename.contains("backboardd") && (l.message.contains("Pointer ") || l.message.contains("button number"));
+        if all || pointer || l.filename.contains("dtuhidd") || l.image_name.contains("dtuhidd") {
             LOG.lock().unwrap().push(format!("{} [{}] {}", l.timestamp.format("%H:%M:%S%.3f"), l.filename.rsplit('/').next().unwrap_or(""), l.message));
         }
     }
@@ -110,6 +111,33 @@ fn verdicts_of(log: &[String]) -> Vec<(u8, &'static str)> {
 fn verdicts(log: &[String]) -> Vec<(u8, &'static str)> {
     let _ = std::fs::write("C:/dev/_ref/tmp/pointer/ids.log", log.join("\n"));
     verdicts_of(log)
+}
+
+/// Pointer positions in pixels from backboardd's log, oldest first, with the button mask. Each
+/// position is logged twice, in pixels then rotated into points: `(x, y)` then `((2048-y)/2, x/2)`.
+fn positions(log: &[String]) -> Vec<(f64, f64, String)> {
+    let all: Vec<(f64, f64, String)> = log.iter().filter_map(|l| {
+        let (_, rest) = l.split_once("Pointer ")?;
+        let (xy, rest) = rest.split_once(" (global)")?;
+        let (x, y) = xy.split_once(',')?;
+        let mask = rest.split_once("buttonMask:").map_or("", |m| m.1.split_whitespace().next().unwrap_or("")).to_string();
+        Some((x.parse().ok()?, y.parse().ok()?, mask))
+    }).collect();
+    all.windows(2).filter(|w| (w[1].1 - w[0].0 / 2.0).abs() < 1.0 && (w[1].0 - (2048.0 - w[0].1) / 2.0).abs() < 1.0).map(|w| w[0].clone()).collect()
+}
+
+fn track(log: &[String]) -> Option<((f64, f64), (f64, f64), usize, String)> {
+    let pts = positions(log);
+    let (a, b) = (pts.first()?, pts.last()?);
+    Some(((a.0, a.1), (b.0, b.1), pts.len(), b.2.clone()))
+}
+
+/// The UniversalHID pointer report: `05 dx dy`, eight zeros, buttons, seven zeros. Found by sweeping
+/// IDs, lengths and bytes against dtuhidd and backboardd logs. Bit 0 of buttons is the primary click.
+pub fn r05(dx: i8, dy: i8, buttons: u8) -> Vec<u8> {
+    let mut r = vec![0u8; 19];
+    (r[0], r[1], r[2], r[11]) = (5, dx as u8, dy as u8, buttons);
+    r
 }
 
 /// What a virtual service claims to be. `extra` goes into the codable storage as `{tag: value}`.
@@ -363,6 +391,107 @@ impl Session {
         Ok(())
     }
 
+    async fn pointer_report(&mut self, id: u64, dx: i8, dy: i8, buttons: u8) -> Res {
+        let raw = self.raw.as_mut().ok_or("no client")?;
+        raw.send_object(send_request(id, r05(dx, dy, buttons)), false).await.map_err(|e| format!("report: {e:?}"))
+    }
+
+    /// Waits for the lagging log to go quiet and returns the last position in it.
+    async fn settle(&mut self, trace: &mut Vec<String>) -> Result<Option<(f64, f64)>, String> {
+        let (mut last, mut quiet) = (None, 0);
+        for _ in 0..30 {
+            pause(200).await?;
+            let log = take_log();
+            match positions(&log).last() {
+                Some(p) => { last = Some((p.0, p.1)); quiet = 0 }
+                None => quiet += 1,
+            }
+            trace.extend(log.into_iter().filter(|l| l.contains("[backboardd]")));
+            if last.is_some() && quiet >= 5 { break }
+        }
+        Ok(last)
+    }
+
+    /// From the top-left corner, a known count of steady reports. The log lags and misses too much
+    /// to steer by, so it only verifies. Coordinates are landscape pixels, 2732 x 2048.
+    /// ponytail: open loop at one speed; a real driver would just send the user's mouse deltas.
+    async fn goto(&mut self, id: u64, target: (f64, f64), trace: &mut Vec<String>) -> Result<(f64, f64), String> {
+        const PX_PER_REPORT: f64 = 18.0; // At 16 units a report, measured.
+        for _ in 0..220 {
+            self.pointer_report(id, -100, -100, 0).await?;
+            sleep(Duration::from_millis(8)).await;
+        }
+        for (n, dx, dy) in [(target.0, 16, 0), (target.1, 0, 16)] {
+            for _ in 0..(n / PX_PER_REPORT).round() as usize {
+                self.pointer_report(id, dx, dy, 0).await?;
+                sleep(Duration::from_millis(8)).await;
+            }
+        }
+        self.settle(trace).await?.ok_or_else(|| format!("no position logged on the way to {target:?}"))
+    }
+
+    /// Moves the pointer both ways across the screen, hovers an icon and clicks it. Proof is
+    /// backboardd's own position log plus screenshots of what the pointer did to the screen.
+    async fn demo(&mut self, target: (f64, f64), tag: &str) -> Res {
+        self.home().await?;
+        let base = self.shot(&format!("{tag}-0home")).await?;
+        let id = self.create(&Spec::default()).await?;
+        pause(1200).await?;
+        take_log();
+        let mut trace = vec![];
+        for p in [(600.0, 400.0), (2200.0, 1500.0), (1366.0, 1024.0), target] {
+            let t = Instant::now();
+            let at = self.goto(id, p, &mut trace).await?;
+            println!("  asked for {p:?}, pointer at {at:?} in {:?}", t.elapsed());
+        }
+        pause(600).await?;
+        let hover = self.shot(&format!("{tag}-1hover")).await?;
+        say_diff("hover vs home", &base, &hover);
+        self.pointer_report(id, 0, 0, 1).await?;
+        pause(70).await?;
+        self.pointer_report(id, 0, 0, 0).await?;
+        pause(3500).await?;
+        let log = take_log();
+        println!("  button lines: {:?}", log.iter().filter(|l| l.contains("button number")).map(|l| l.split_once("->").map_or("", |x| x.1).trim().to_string()).collect::<Vec<_>>());
+        trace.extend(log);
+        let clicked = self.shot(&format!("{tag}-2clicked")).await?;
+        say_diff("clicked vs hover", &hover, &clicked);
+        self.remove_mouse().await;
+        self.home().await?;
+        let end = self.shot(&format!("{tag}-3home")).await?;
+        say_diff("home again vs home", &base, &end);
+        let _ = std::fs::write(format!("C:/dev/_ref/tmp/pointer/{tag}-trace.log"), trace.join("\n"));
+        let pts = positions(&trace);
+        println!("  {} positions logged; x {:.0}..{:.0}, y {:.0}..{:.0}", pts.len(),
+            pts.iter().map(|p| p.0).fold(f64::MAX, f64::min), pts.iter().map(|p| p.0).fold(f64::MIN, f64::max),
+            pts.iter().map(|p| p.1).fold(f64::MAX, f64::min), pts.iter().map(|p| p.1).fold(f64::MIN, f64::max));
+        Ok(())
+    }
+
+    /// Report 05, 19 bytes: one byte at a time set to `value`, the rest zero, then zeros to release.
+    async fn bytes(&mut self, value: u8) -> Res {
+        let id = self.create(&Spec::default()).await?;
+        pause(1200).await?;
+        for pos in 1..19usize {
+            let raw = self.raw.as_mut().ok_or("no client")?;
+            take_log();
+            let mut r = vec![0u8; 19];
+            r[0] = 5;
+            r[pos] = value;
+            for _ in 0..25 {
+                raw.send_object(send_request(id, r.clone()), false).await.map_err(|e| format!("report: {e:?}"))?;
+                sleep(Duration::from_millis(8)).await;
+            }
+            let mut z = vec![0u8; 19];
+            z[0] = 5;
+            raw.send_object(send_request(id, z), false).await.map_err(|e| format!("report: {e:?}"))?;
+            pause(700).await?;
+            let log = take_log();
+            println!("  byte {pos:2}: {:?} buttons {:?}", track(&log), log.iter().filter(|l| l.contains("button number")).count());
+        }
+        Ok(())
+    }
+
     pub async fn run_probe(&mut self, args: &[String]) -> Res {
         tokio::spawn(async { if let Err(e) = logtap().await { println!("log tap failed: {e}") } });
         pause(800).await?;
@@ -370,6 +499,8 @@ impl Session {
             "home" => self.home().await,
             "ids" => self.ids().await,
             "raw" => self.raw_reports(&args[1..]).await,
+            "demo" => self.demo((1980.0, 1898.0), args.get(1).map_or("demo", |s| s.as_str())).await,
+            "bytes" => self.bytes(args.get(1).and_then(|v| v.parse().ok()).unwrap_or(16)).await,
             "shot" => self.shot(args.get(1).map_or("shot", |s| s.as_str())).await.map(|_| ()),
             "dump" => self.dump().await,
             "probe" => self.stages(args.get(1).map_or("", |s| s.as_str())).await,
@@ -390,6 +521,14 @@ mod tests {
         b[(2 * 4 + 3) * 3 + 2] = 200;
         assert_eq!(changed(4, &a, &b, 24), Change { pixels: 2, bbox: Some((1, 1, 3, 2)) });
         assert_eq!(changed(4, &a, &a, 24).pixels, 0);
+    }
+
+    #[test]
+    fn pointer_track() {
+        let log = ["t [backboardd] Pointer 46,2046 (global) buttonMask:11 edges:bottom", "t [backboardd] Pointer 1,23 (global) buttonMask:11", "t [backboardd] Pointer 100,2000 (global) buttonMask:0", "t [backboardd] Pointer 24,50 (global) buttonMask:0"].map(String::from);
+        assert_eq!(track(&log), Some(((46.0, 2046.0), (100.0, 2000.0), 2, "0".into())));
+        assert_eq!(r05(-1, 2, 1)[..3], [5, 0xFF, 2]);
+        assert_eq!((r05(0, 0, 1).len(), r05(0, 0, 1)[11]), (19, 1));
     }
 
     #[test]

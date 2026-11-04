@@ -777,7 +777,7 @@ async fn run() -> ExitCode {
     args.retain(|a| a != "--usb");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "diff" { return probe::diff_cmd(&args[1..]) }
-    if !["check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "mousekeys", "home", "ids", "raw"].contains(&cmd) {
+    if !["check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "mousekeys", "home", "ids", "raw", "bytes", "demo"].contains(&cmd) {
         eprintln!("usage: ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]");
         return ExitCode::from(2);
     }
@@ -805,7 +805,7 @@ async fn run() -> ExitCode {
         "touch" => session.touch().await,
         "scroll" => session.scroll().await,
         "latency" => session.latency(args.get(1).map(String::as_str).unwrap_or("uhid")).await,
-        "shot" | "dump" | "probe" | "mousekeys" | "home" | "ids" | "raw" => session.run_probe(&args).await,
+        "shot" | "dump" | "probe" | "mousekeys" | "home" | "ids" | "raw" | "bytes" | "demo" => session.run_probe(&args).await,
         _ => session.pointer().await,
     };
     session.finish().await;
