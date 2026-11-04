@@ -22,7 +22,7 @@ matters), no Mac, free Apple ID, uses it daily while studying. No merge / PR / p
 | Clipboard PC → phone (automatic) and phone → PC (Quick Settings tile, 52 ms) | ✅ |
 | iPad app Bridge: pair, files both ways, share sheet, queue while closed (SideStore sideload) | ✅ `docs/v1/checklist-ipad.md`, overall owner report; 7-day re-sign (row 13) still to check |
 | Logs contain no file names / clipboard text / keys | ✅ |
-| Base UI (Windows hub, Android, iPad: Rubik, amber, light/dark, Desk board, Desk, Transfers, Clipboard and Settings pages) | Built on `v1/ui`. **Not yet verified on devices:** Windows rows 2 to 25 of `docs/v1/checklist-ui.md` (only row 1 has a result), all Android rows, all iPad rows |
+| Base UI (Windows hub, Android, iPad: Rubik, amber, light/dark, Desk board, Desk, Transfers, Clipboard and Settings pages) | Built on `v1/ui`. **Not yet verified on devices:** Windows rows 2 to 28 of `docs/v1/checklist-ui.md` (only row 1 has a result), all Android rows, all iPad rows |
 
 ## 3. Branches (all stacked; nothing merged into `main` yet)
 ```

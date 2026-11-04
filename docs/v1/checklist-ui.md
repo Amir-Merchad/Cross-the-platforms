@@ -2,7 +2,7 @@
 
 Fill in **Result** (PASS, or FAIL with a note). Compare with the Claude Design canvas "Bridge UI redesign".
 
-**Status:** Windows row 1 is the only Windows row with a result so far. Windows rows 2 to 25, all Android rows and all iPad rows are not yet run on devices.
+**Status:** Windows row 1 is the only Windows row with a result so far. Windows rows 2 to 28, all Android rows and all iPad rows are not yet run on devices.
 
 ## Windows hub
 
@@ -16,7 +16,7 @@ Fill in **Result** (PASS, or FAIL with a note). Compare with the Claude Design c
 | 6 | Keyboard placing | Tab to a device, press arrow keys, then Delete | Places, then unplaces | |
 | 7 | Covered edge | With two monitors, drag toward an edge touching the other monitor | That edge is not offered | |
 | 8 | Switch | Press Switch, then Back to Windows | Pointer moves, In control shows, edge glows, then returns | |
-| 9 | Unplace the device in control | While on the iPad, press Delete on it from the hub by keyboard | Input returns to Windows first | |
+| 9 | Unplace the device in control | While on the iPad, use touch on the PC, or a second mouse or keyboard not shared with it, to run Hold to forget in the hub. Delete cannot do this: while the iPad has the keyboard, Delete goes to the iPad | Input returns to Windows first | |
 | 10 | File drop | Drag a file from Explorer onto a device | Device grows, ring shows progress, file arrives | |
 | 11 | Send files button | Select a device, press Send files | File picker opens and the file sends | |
 | 12 | Files wait | Close Bridge on the iPad and drop 2 files | Count badge on the device, Waiting on Transfers | |
@@ -33,6 +33,9 @@ Fill in **Result** (PASS, or FAIL with a note). Compare with the Claude Design c
 | 23 | Explorer Send to | Right-click a file, Send to, Bridge | Shows in Transfers | |
 | 24 | Reduced motion | Windows: turn Animation effects off | Everything still works, with no movement | |
 | 25 | Quit | Tray, Quit | Exits cleanly, input back on Windows | |
+| 26 | Honest Sent | Send a file and cut the receiver off at the very end (close Bridge there as the bar fills). Then send a 0-byte file | The first row reads as failed, never Sent. The 0-byte row ends Sent and does not stay moving | |
+| 27 | Bluetooth off at launch | Turn off Windows Bluetooth, then open Bridge | Placed and linked devices stay on the Desk as No Bluetooth, with the Bluetooth off banner | |
+| 28 | Failures in plain words | Send a file that was just deleted (Send again on an old row). Send a folder from Explorer Send to | Each says what to do: the file could not be read, and folders can't be sent, pick the files inside | |
 
 ## Android
 
@@ -72,3 +75,4 @@ Same state names as the Mobile board. Check each in the iPad's light and dark mo
 | 8 | Fonts | Look at headings, body and buttons | Rubik shows, with visibly different weights | |
 | 9 | Hold to forget, short press | Tap once, or scroll the page starting on the button | Nothing is forgotten. Holding fully forgets | |
 | 10 | Several PCs | Pair two PCs, if available | PC chooser appears. Send files, Send clipboard and Forget act on the chosen PC | |
+| 11 | Clipboard sent | Copy text, press Send clipboard | A plain card, not the warning colour, says Clipboard sent and goes away after a few seconds | |
