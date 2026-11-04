@@ -20,7 +20,7 @@ public struct NodeLifecycle {
     public mutating func background() -> [LifecycleAction] {
         inBackground = true
         guard running else { return [] }
-        if pending > 0 { bgTime = true; return [.beginBackgroundTime] }
+        if pending > 0 { if bgTime { return [] }; bgTime = true; return [.beginBackgroundTime] }
         return shutDown()
     }
 

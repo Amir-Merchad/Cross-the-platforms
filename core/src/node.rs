@@ -33,6 +33,10 @@ const FALLBACK_WAIT: Duration = Duration::from_secs(30);
 const ANNOUNCE_EVERY: Duration = Duration::from_secs(60);
 /// Starts the `connect` error for a peer that didn't answer; `flush_outbox` keys on it.
 const NOT_REACHABLE: &str = "device not reachable";
+/// Start the `send_files_as` errors that would repeat on a retry; `flush_outbox` drops a batch only for these.
+const CANT_READ: &str = "can't read a file";
+const ONLY_FILES: &str = "only files can be sent";
+const DECLINED: &str = "declined";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a send to an iPad waits for it before queueing instead.
 const IPAD_PROBE: Duration = Duration::from_secs(5);
@@ -205,8 +209,8 @@ impl Node {
         self.send_files(peer_id, paths).await.map(SendOutcome::Sent)
     }
 
-    /// Sends what waited for `peer_id`, oldest first. A batch that fails already reports
-    /// `Event::Failed`; one that fails because the peer is gone again goes back, with the rest.
+    /// Sends what waited for `peer_id`, oldest first. A batch that can never succeed reports
+    /// `Event::Failed`; one that fails for any other reason (peer gone, stream cut) goes back, with the rest.
     #[doc(hidden)]
     pub async fn flush_outbox(&self, peer_id: &str) {
         if self.inner.outbox.lock().unwrap().pending(peer_id) == 0 || !self.inner.flushing.lock().unwrap().insert(peer_id.to_string()) { return }
@@ -215,7 +219,10 @@ impl Node {
             let Some(paths) = self.inner.outbox.lock().unwrap().peek(peer_id) else { break };
             let id = random_id();
             if let Err(reason) = self.send_files_as(id, peer_id, paths).await {
-                if reason.starts_with(NOT_REACHABLE) { break } // stays queued, not a failure
+                // ponytail: only errors that repeat pop the batch; anything else (cut stream, stall, unreachable)
+                // stays queued for the next Hello, so an unknown permanent error retries on each Hello while
+                // Bridge is open; a retry cap is the upgrade path. A half-landed batch arrives again as `a (1).pdf`.
+                if ![CANT_READ, ONLY_FILES, DECLINED].iter().any(|p| reason.starts_with(p)) { break }
                 let _ = self.inner.events.send(Event::Failed { id, reason }).await;
             }
             let left = {
@@ -231,8 +238,8 @@ impl Node {
     async fn send_files_as(&self, id: u64, peer_id: &str, paths: Vec<PathBuf>) -> Result<u64, String> {
         let mut files = Vec::with_capacity(paths.len());
         for p in &paths {
-            let m = tokio::fs::metadata(p).await.map_err(|e| format!("can't read a file: {e}"))?;
-            if !m.is_file() { return Err("only files can be sent".into()) }
+            let m = tokio::fs::metadata(p).await.map_err(|e| format!("{CANT_READ}: {e}"))?;
+            if !m.is_file() { return Err(ONLY_FILES.into()) }
             files.push(FileMeta { name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), size: m.len() });
         }
         let replies = self.send_ctl(peer_id, &[Ctl::Offer { id, files }]).await?;
@@ -242,7 +249,7 @@ impl Node {
             _ => None,
         }) {
             Some(Ok(a)) => a,
-            Some(Err(reason)) => return Err(format!("declined: {reason}")),
+            Some(Err(reason)) => return Err(format!("{DECLINED}: {reason}")),
             None => return Err("the device didn't answer the offer".into()),
         };
         let progress = progress_events(self.inner.events.clone(), id);

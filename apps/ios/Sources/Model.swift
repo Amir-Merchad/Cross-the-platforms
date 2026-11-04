@@ -33,6 +33,7 @@ import BridgeKit
         }
         queues = all
         shareFolder = all.count > 1 ? "ready" : "unavailable (\(Bundle.main.bundleIdentifier ?? "?"))"
+        sweepPartFiles(in: documents)   // receives the OS killed midway; no node is running yet
         queues.forEach { $0.sweepIncomplete() }   // default 1h: the extension may be mid-copy
     }
 
@@ -186,7 +187,7 @@ import BridgeKit
                         ok = false
                         break
                     }
-                    drop(b)   // would fail forever and jam the queue
+                    drop(b)   // would fail the same way again
                     status = "Dropped a batch: \(error)"
                 }
             }

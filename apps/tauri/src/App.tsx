@@ -58,7 +58,7 @@ export default function App() {
           <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
         </TabsList>
         <TabsContent value="devices"><Devices status={status} settings={draft} /></TabsContent>
-        <TabsContent value="transfer"><Transfer /></TabsContent>
+        <TabsContent value="transfer" keepMounted className="data-[hidden]:hidden"><Transfer /></TabsContent>
         <TabsContent value="clipboard"><Clipboard clip={clip} /></TabsContent>
         <TabsContent value="layout"><Layout status={status} settings={draft} monitors={monitors} onChange={setDraft} /></TabsContent>
         <TabsContent value="calibration"><Calibration status={status} settings={draft} onChange={setDraft} /></TabsContent>

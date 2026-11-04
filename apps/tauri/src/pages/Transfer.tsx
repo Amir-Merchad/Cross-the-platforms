@@ -18,7 +18,7 @@ const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 export default function Transfer() {
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [qr, setQr] = useState<{ img: string; until: number } | null>(null);
+  const [qr, setQr] = useState<{ img: string; code: string; until: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [live, setLive] = useState<Record<number, Live>>({});
   const [got, setGot] = useState<Got[]>([]);
@@ -62,7 +62,7 @@ export default function Transfer() {
   const showQr = async () => {
     try {
       const inv = await pairInvite();
-      setQr({ img: await QRCode.toDataURL(inv.qr, { margin: 4, width: 576, errorCorrectionLevel: "L" }), until: Date.now() + inv.expires_in_s * 1000 });
+      setQr({ img: await QRCode.toDataURL(inv.qr, { margin: 4, width: 576, errorCorrectionLevel: "L" }), code: inv.qr, until: Date.now() + inv.expires_in_s * 1000 });
       setError(null);
     } catch (e) { fail(e); }
   };
@@ -111,7 +111,10 @@ export default function Transfer() {
           {qr && left > 0 ? (
             <>
               <img src={qr.img} alt="Pairing code" className="size-72 rounded-md bg-white [image-rendering:pixelated]" />
-              <p className="text-sm tabular-nums text-muted-foreground">Expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}</p>
+              <div className="flex flex-col gap-2">
+                <p className="text-sm tabular-nums text-muted-foreground">Expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}</p>
+                <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(qr.code).catch(fail)}>Copy code</Button>
+              </div>
             </>
           ) : (
             <Button variant="outline" onClick={showQr}>{qr ? "Code expired — show a new one" : "Show pairing code"}</Button>

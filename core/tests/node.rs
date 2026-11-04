@@ -219,3 +219,24 @@ async fn batch_stays_queued_when_the_ipad_goes_away_mid_flush() { // Review Focu
     let got = received(&mut irx2, 1).await;
     assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
 }
+
+#[tokio::test]
+async fn batch_stays_queued_when_the_stream_is_cut_mid_transfer() { // final review I1
+    let ((pc, mut pcrx, dp), (ipad, _irx, di)) = paired_with(PeerKind::Ipad).await;
+    let ipad_id = ipad.id();
+    ipad.shutdown().await;
+    let src = tempfile::tempdir().unwrap();
+    let f = write(src.path(), "big.bin", 1_000_000, 12);
+    assert!(matches!(pc.send_or_queue(&ipad_id, vec![f.clone()]).await.unwrap(), SendOutcome::Queued));
+    // The iPad comes back, accepts the offer, then dies mid-receive (its receive dir can't be created).
+    let blocker = di.path().join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let cfg = NodeConfig { data_dir: di.path().join("data"), receive_dir: blocker.join("in"), me: Peer { id: String::new(), name: "S24+".into(), kind: PeerKind::Ipad } };
+    let (ipad2, _irx2) = Node::start(cfg).await.unwrap();
+    assert!(timeout(Duration::from_millis(1500), async { loop { if let Some(Event::Failed { .. }) = pcrx.recv().await { return } } }).await.is_err(), "a cut stream is not a failure");
+    assert_eq!(Outbox::load(&dp.path().join("data").join("outbox.json")).pending(&ipad_id), 1, "still on disk");
+    ipad2.shutdown().await;
+    let (_ipad3, mut irx3) = restart(&di, "S24+", PeerKind::Ipad).await;
+    let got = received(&mut irx3, 1).await;
+    assert_eq!(std::fs::read(&got[0].1).unwrap(), std::fs::read(&f).unwrap());
+}

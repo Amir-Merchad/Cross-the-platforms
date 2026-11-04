@@ -14,7 +14,17 @@ public func isPairInvite(_ s: String) -> Bool {
     s.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("ctp-pair:")
 }
 
-/// A failed send stays queued only if the PC was unreachable; any other failure would repeat forever.
+/// A failed send is dropped only if it would fail the same way again (mirrors core's flush_outbox);
+/// a stall, a cut stream or an unreachable PC keeps the batch for the next flush.
+/// ponytail: an unknown permanent error retries on every flush; a retry cap is the upgrade path.
 public func shouldKeepBatch(afterError reason: String) -> Bool {
-    reason.contains("device not reachable")
+    !["can't read a file", "only files can be sent", "declined"].contains { reason.contains($0) }
+}
+
+/// A `.part` is a receive the OS killed midway; call at cold launch, before any node starts.
+public func sweepPartFiles(in dir: URL) {
+    let fm = FileManager.default
+    for f in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] where f.pathExtension == "part" {
+        try? fm.removeItem(at: f)
+    }
 }
