@@ -17,6 +17,9 @@ pub fn log(msg: impl std::fmt::Display) {
     }
 }
 
+/// Wall-clock marker, so a Windows Bluetooth crash time can be matched to this log.
+pub fn clock_line(unix: u64, hosts: usize, active: bool) -> String { format!("clock unix={unix} hosts={hosts} active={active}") }
+
 /// Foreground window's exe and elevation: an elevated foreground hides keys from a non-elevated hook (UIPI).
 pub fn foreground() -> String {
     use windows::Win32::{
@@ -45,5 +48,13 @@ pub fn foreground() -> String {
         }
         let _ = CloseHandle(p);
         format!("pid {pid} {exe} elevated={elevated}")
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    #[test] fn clock_line_lets_a_crash_time_be_matched_to_the_log() {
+        assert_eq!(clock_line(1_793_800_000, 2, true), "clock unix=1793800000 hosts=2 active=true");
     }
 }

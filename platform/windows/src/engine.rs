@@ -72,6 +72,7 @@ impl Drop for EngineHandle {
 
 const CONNECTION_POLL: Duration = Duration::from_millis(200);
 const MONITOR_POLL: Duration = Duration::from_secs(2);
+const CLOCK_LOG: Duration = Duration::from_secs(60);
 const STATUS_REFRESH: Duration = Duration::from_secs(1);
 const ADVERTISE_RETRY: Duration = Duration::from_secs(5);
 const COMMAND_LATENCY: Duration = Duration::from_millis(50);
@@ -160,6 +161,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut connected: HashSet<String> = HashSet::new();
     let mut names: HashMap<String, Option<String>> = HashMap::new();
     let mut intervals: HashMap<String, u64> = HashMap::new();
+    let mut last_clock = Instant::now() - CLOCK_LOG;
     let (mut last_conn, mut last_mon, mut last_status) = (Instant::now() - CONNECTION_POLL, Instant::now(), Instant::now());
     // Bluetooth bookkeeping runs on its own thread: WinRT calls there can take tens of ms, and every
     // ms the input loop waits is a visible hitch of the remote pointer. The loop only reads snapshots.
@@ -232,6 +234,11 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             status.hosts.sort_by(|a, b| a.id.cmp(&b.id));
             status.advertising = snap.advertising;
             if !status.advertising && status.notice.is_none() { status.notice = Some("Bluetooth advertising restarting…".into()) }
+        }
+        if last_clock.elapsed() >= CLOCK_LOG {
+            last_clock = Instant::now();
+            let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            diag::log(diag::clock_line(unix, status.hosts.iter().filter(|h| h.connected).count(), status.active.is_some()));
         }
         if last_mon.elapsed() >= MONITOR_POLL {
             last_mon = Instant::now();

@@ -134,6 +134,7 @@ pairing keys and iroh relay already work over the internet (QR carries the relay
 - **Never force-kill a BLE publisher** (ctp-app / ctp-engine / ble-hid): the MT7921 Bluetooth wedged before (needed a BIOS
   reset once). Quit from **tray → Quit**. Earlier BT hangs were caused by `FromIdAsync` per 200 ms poll + `ThroughputOptimized`
   requests — fixed (cached device + watcher thread); don't reintroduce either.
+- **MT7921 Bluetooth crashes** (HP Victus 15-fa1xxx, driver 1.3.17.166, BIOS F.20): `BTHUSB` event 3 (command timed out), then 17 (adapter failed); after that the adapter is gone even after a restart, while Wi-Fi works. The System log from 2026-10-11 has no 3 or 17 events before 2026-11-03, then 16 in two days, so Bridge's Bluetooth use probably triggers it, but which part is not known. `engine.log` now has a `clock unix=` line each minute: compare it with those event times. Recovery order: shut down, unplug the charger, hold power 30 s; if that fails, BIOS defaults. HP driver 1.3.17.168 (sp172694) reduced it for others. A USB Bluetooth dongle or Intel AX210 would avoid this chip.
 - Windows locks running exes → build to `C:\dev\ctp-target-check` or quit the app first.
 - Keyboard hook: Windows skips `WH_KEYBOARD_LL` while our own window is foreground → fixed (focus moves to the shell + raw-input
   fallback via `HookWitness`). If keys ever leak to Windows again, look there first.

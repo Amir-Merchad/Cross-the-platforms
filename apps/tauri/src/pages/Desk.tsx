@@ -53,7 +53,7 @@ export default function Desk() {
     <>
       {btOff && (
         <div className="flex flex-none items-center justify-between gap-3 rounded-xl bg-warn px-3.5 py-2.5 font-medium text-warn-foreground">
-          <span>Bluetooth is off, so keyboard and mouse sharing is paused. Files and clipboard still work.</span>
+          <span>Bluetooth is off, so keyboard and mouse sharing is paused. Files and clipboard still work. If Bluetooth is missing from Windows, shut down, unplug the charger, hold the power button for 30 seconds, then start up.</span>
           <Button
             className="h-8 flex-none rounded-[9px] px-3 font-semibold shadow-none"
             onClick={() => openBluetoothSettings().catch(() => say("Could not open Bluetooth settings. Open them from the Windows Settings app."))}
