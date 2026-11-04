@@ -7,7 +7,7 @@ const TABS: [Tab, string][] = [["desk", "Desk"], ["transfers", "Transfers"], ["c
 
 /** Must render inside <Tabs>. */
 export default function TopBar() {
-  const { statusLine, setTab } = useHub();
+  const { statusLine, openAdd } = useHub();
   return (
     <header className="flex h-11 flex-none items-center gap-3.5">
       <h1 className="text-[22px] font-bold">Bridge</h1>
@@ -17,7 +17,7 @@ export default function TopBar() {
         ))}
       </TabsList>
       <p role="status" className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{statusLine}</p>
-      <Button variant="secondary" className={RAISED} onClick={() => setTab("desk")}>Add a device</Button>
+      <Button variant="secondary" className={RAISED} onClick={() => openAdd()}>Add a device</Button>
     </header>
   );
 }

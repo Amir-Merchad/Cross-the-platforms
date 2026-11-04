@@ -6,7 +6,6 @@ import { displayName } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { formatBytes, formatRate, openReceiveDir, progressPercent, receiveDir, sendFiles, setReceiveDir } from "@/lib/transfer";
 import { RAISED } from "@/lib/utils";
-import Pairing from "@/pages/Transfer";
 
 const CARD = "flex-none rounded-[20px] bg-card px-4 py-3.5";
 
@@ -96,7 +95,6 @@ export default function Transfers() {
         </>
       )}
       <ReceiveFolder />
-      <Pairing />
     </div>
   );
 }

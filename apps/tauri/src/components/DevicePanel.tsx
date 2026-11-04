@@ -4,6 +4,7 @@ import HoldButton from "@/components/HoldButton";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { DEFAULT_CALIBRATION, DEFAULT_WIDTH, switchTo, type Calibration } from "@/lib/api";
+import { linkChoices, type AddKind } from "@/lib/addflow";
 import { hotkeyNumber, placementChange, screenName, whereLine } from "@/lib/desk";
 import { DEFAULT_COLOURS, forgetDevice, panelLines, type Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
@@ -32,12 +33,22 @@ export function Tune({ label, value, show, min, max, step, onCommit }: TuneProps
   );
 }
 
-function Row({ name, value }: { name: string; value: string }) {
-  return <div className="flex justify-between gap-3"><span className="flex-none">{name}</span><span className="text-right text-[13px] text-muted-foreground">{value}</span></div>;
+function Row({ name, value, action }: { name: string; value: string; action?: { label: string; run: () => void } }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="flex-none">{name}</span>
+      <span className="flex items-center gap-2 text-right text-[13px] text-muted-foreground">
+        {value}
+        {action && <Button variant="secondary" size="sm" className="rounded-lg font-semibold" onClick={action.run}>{action.label}</Button>}
+      </span>
+    </div>
+  );
 }
 
+const addKind = (d: Device): AddKind => (d.kind === "Android" ? "phone" : "ipad");
+
 function Panel({ d }: { d: Device }) {
-  const { settings, update, status, clip, monitors, btOff, say, select, refreshPeers } = useHub();
+  const { settings, update, status, clip, monitors, btOff, say, select, refreshPeers, devices, openAdd } = useHub();
   const active = status?.active ?? null;
   const lines = panelLines(d, {
     active, btOff, clip,
@@ -67,6 +78,13 @@ function Panel({ d }: { d: Device }) {
     say("Remove it from Bluetooth on the device too.");
   };
 
+  const choices = linkChoices(d, devices);
+  const link = (o: Device) => {
+    const hostId = d.hostId ?? o.hostId!, peerId = d.peerId ?? o.peerId!;
+    update((s) => ({ ...s, device_links: { ...s.device_links, [hostId]: peerId } }));
+    select(hostId);
+  };
+
   const host = d.hostId;
   const cal = (host && settings.calibration[host]) || DEFAULT_CALIBRATION;
   const setCal = (patch: Partial<Calibration>) =>
@@ -82,8 +100,8 @@ function Panel({ d }: { d: Device }) {
       {d.peerId && <Button variant="secondary" className="h-11 w-full flex-none rounded-xl font-semibold" onClick={send}>Send files</Button>}
       {lines.why && <p className="-mt-1.5 text-[13px] text-muted-foreground">{lines.why}</p>}
       <div className="flex flex-col gap-2">
-        <Row name="Keyboard and mouse" value={lines.hid} />
-        <Row name="Files" value={lines.files} />
+        <Row name="Keyboard and mouse" value={lines.hid} action={!d.hostId && d.kind !== "Windows" ? { label: "Add Bluetooth", run: () => openAdd({ kind: addKind(d), peerId: d.peerId! }) } : undefined} />
+        <Row name="Files" value={lines.files} action={!d.peerId ? { label: "Add files", run: () => openAdd({ kind: addKind(d), hostId: d.hostId! }) } : undefined} />
         <Row name="Clipboard" value={lines.clip} />
       </div>
       {host && (
@@ -102,6 +120,12 @@ function Panel({ d }: { d: Device }) {
           </details>
         </>
       )}
+      {choices.map((o) => (
+        <div key={o.key} className="flex items-center justify-between gap-3">
+          <span className="min-w-0 truncate">Is this also your {o.name}?</span>
+          <Button variant="secondary" size="sm" className="flex-none rounded-lg font-semibold" aria-label={`Yes, same as ${o.name}`} onClick={() => link(o)}>Yes</Button>
+        </div>
+      ))}
       <div>
         <div className="mb-1.5 text-[13px] text-muted-foreground">Colour</div>
         <div className="flex gap-2">
@@ -121,15 +145,14 @@ function Panel({ d }: { d: Device }) {
 }
 
 export default function DevicePanel() {
-  const { current, setTab } = useHub();
+  const { current, openAdd } = useHub();
   return (
     <aside aria-label="Selected device" className="flex min-w-0 flex-col gap-3.5 overflow-y-auto rounded-[20px] bg-card p-4">
       {current ? <Panel key={current.key} d={current} /> : (
         <>
           <strong className="text-xl font-semibold">Add your first device</strong>
           <p className="text-muted-foreground">Bridge shares this PC's keyboard, mouse, clipboard and files with your phone or iPad. Nothing leaves your devices.</p>
-          {/* Pairing lives on Transfers until the Add a device flow lands. */}
-          <Button className="h-11 rounded-xl font-semibold" onClick={() => setTab("transfers")}>Add a device</Button>
+          <Button className="h-11 rounded-xl font-semibold" onClick={() => openAdd()}>Add a device</Button>
           <p className="mt-auto text-[13px] text-muted-foreground">Closing this window keeps Bridge running in the tray.</p>
         </>
       )}

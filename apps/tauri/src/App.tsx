@@ -1,6 +1,7 @@
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import TopBar from "@/components/TopBar";
 import { HubProvider, useHub, type Tab } from "@/lib/hub";
+import AddDevice from "@/pages/AddDevice";
 import Desk from "@/pages/Desk";
 import Clipboard from "@/pages/Clipboard";
 import Settings from "@/pages/Settings";
@@ -17,6 +18,8 @@ function Shell() {
       <TabsContent value="transfers" keepMounted className={PAGE}><Transfers /></TabsContent>
       <TabsContent value="clipboard" keepMounted className={PAGE}><Clipboard /></TabsContent>
       <TabsContent value="settings" keepMounted className={PAGE}><Settings /></TabsContent>
+      {/* Mounted only while open, so it snapshots the devices on entry. */}
+      {tab === "add" && <div className={PAGE}><AddDevice /></div>}
     </Tabs>
   );
 }
