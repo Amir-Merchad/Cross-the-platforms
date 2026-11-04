@@ -149,15 +149,42 @@ fn mouse_report(dx: i8, dy: i8, vendor_tail: bool) -> Vec<u8> {
     r
 }
 
+/// Same mouse with 16-bit X and Y, as modern mice report.
+fn wide_descriptor(vendor_tail: bool) -> Vec<u8> {
+    let mut d = vec![
+        0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x01, 0x09, 0x01, 0xA1, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
+        0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02, 0x95, 0x01, 0x75, 0x05, 0x81, 0x01, 0x05, 0x01,
+        0x09, 0x30, 0x09, 0x31, 0x16, 0x01, 0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02, 0x81, 0x06, 0xC0,
+    ];
+    if vendor_tail { d.extend_from_slice(&VENDOR_TAIL) }
+    d.push(0xC0);
+    d
+}
+
+fn wide_report(dx: i16, dy: i16, vendor_tail: bool) -> Vec<u8> {
+    let mut r = vec![0x01, 0];
+    r.extend_from_slice(&dx.to_le_bytes());
+    r.extend_from_slice(&dy.to_le_bytes());
+    if vendor_tail {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        r.extend_from_slice(&nanos.to_le_bytes()[..6]);
+        r.extend_from_slice(&[0, 0]);
+    }
+    r
+}
+
 fn uhid_request(payload: XPCObject) -> XPCObject {
     idevice::xpc!({ "featureIdentifier": UHID_FEATURE, "messageType": "Request", "payload": payload })
 }
 
 /// Same shape as idevice's `build_main_keyboard_create_request`, as a mouse.
-fn mouse_create_request(descriptor: Vec<u8>) -> XPCObject {
+/// Which identity the virtual mouse claims. Apple ids may get Magic Mouse handling.
+#[derive(Clone, Copy)]
+struct MouseId { vendor: i64, product: i64, transport: &'static str, universal: bool, wide: bool }
+
+fn mouse_create_request(descriptor: Vec<u8>, m: MouseId) -> XPCObject {
     const ID: u64 = 0x1_0000_2002;
-    const VENDOR: i64 = 0x05AC;
-    const PRODUCT: i64 = 0x0269;
+    let (VENDOR, PRODUCT) = (m.vendor, m.product);
     const NAME: &str = "ctp spike mouse";
     uhid_request(idevice::xpc!({
         "createService": {
@@ -178,9 +205,9 @@ fn mouse_create_request(descriptor: Vec<u8>) -> XPCObject {
                     "DeviceUsagePairs": {
                         "array": [{ "dictionary": { "DeviceUsage": { "int": 2_i64 }, "DeviceUsagePage": { "int": 1_i64 } } }],
                     },
-                    "Transport": { "string": "USB" },
+                    "Transport": { "string": m.transport },
                     "ReportDescriptor": { "data": descriptor },
-                    "UniversalControlVirtualService": { "bool": true },
+                    "UniversalControlVirtualService": { "bool": m.universal },
                     "_ServiceID": { "uint": ID },
                 },
                 "_ServiceID": ID,
@@ -513,7 +540,7 @@ impl Session {
 
     /// A small square: 80 reports over about 1.3 s.
     async fn square(&mut self, mut send: impl AsyncFnMut(&mut Self, i8, i8) -> Res) -> Res {
-        for (dx, dy) in [(8, 0), (0, 8), (-8, 0), (0, -8)] {
+        for (dx, dy) in [(20, 0), (0, 20), (-20, 0), (0, -20)] {
             for _ in 0..20 {
                 send(self, dx, dy).await?;
                 pause(16).await?;
@@ -523,8 +550,13 @@ impl Session {
     }
 
     async fn virtual_mouse(&mut self, vendor_tail: bool) -> Res {
+        self.mouse_with(vendor_tail, MouseId { vendor: 0x05AC, product: 0x0269, transport: "USB", universal: true, wide: false }).await
+    }
+
+    async fn mouse_with(&mut self, vendor_tail: bool, m: MouseId) -> Res {
         let raw = self.raw_client().await?;
-        raw.send_object(mouse_create_request(mouse_descriptor(vendor_tail)), true).await.map_err(|e| format!("create: {e:?}"))?;
+        let descriptor = if m.wide { wide_descriptor(vendor_tail) } else { mouse_descriptor(vendor_tail) };
+        raw.send_object(mouse_create_request(descriptor, m), true).await.map_err(|e| format!("create: {e:?}"))?;
         let reply = raw.recv().await.map_err(|e| format!("create reply: {e:?}"))?;
         let Some(id) = reply.as_dictionary().and_then(|d| d.get("serviceID")).and_then(plist::Value::as_unsigned_integer).filter(|id| *id != 0) else {
             return Err(format!("iPad refused the mouse: {}", short(reply, 400)));
@@ -538,7 +570,8 @@ impl Session {
         println!("  moving: watch for a round pointer tracing a square");
         let moved = self.square(async |s, dx, dy| {
             let raw = s.raw.as_mut().ok_or("no client")?;
-            raw.send_object(send_request(id, mouse_report(dx, dy, vendor_tail)), false).await.map_err(|e| format!("report: {e:?}"))
+            let report = if m.wide { wide_report(dx as i16 * 4, dy as i16 * 4, vendor_tail) } else { mouse_report(dx, dy, vendor_tail) };
+            raw.send_object(send_request(id, report), false).await.map_err(|e| format!("report: {e:?}"))
         }).await;
         pause(1000).await?;
         self.remove_mouse().await;
@@ -580,6 +613,20 @@ impl Session {
 
         println!("F: virtual mouse with the keyboard's vendor timestamp bytes");
         note(self.virtual_mouse(true).await)?;
+
+        let logi = MouseId { vendor: 0x046D, product: 0xC077, transport: "USB", universal: true, wide: false };
+        for (name, tail, m) in [
+            ("G: plain Logitech-style mouse", false, logi),
+            ("H: same, with vendor timestamp bytes", true, logi),
+            ("I: same, 16-bit X and Y", false, MouseId { wide: true, ..logi }),
+            ("J: 16-bit X and Y with timestamp bytes", true, MouseId { wide: true, ..logi }),
+            ("K: Bluetooth transport", false, MouseId { transport: "Bluetooth", ..logi }),
+            ("L: not marked as a Universal Control device", false, MouseId { universal: false, ..logi }),
+        ] {
+            pause(3000).await?;
+            println!("{name}");
+            note(self.mouse_with(tail, m).await)?;
+        }
 
         println!("done. If no stage moved a pointer, nothing here works and iPad input over Wi-Fi is touch only");
         Ok(())
