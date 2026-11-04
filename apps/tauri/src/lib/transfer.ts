@@ -9,6 +9,8 @@ export interface FileMeta { name: string; size: number }
 export type TransferEvent =
   | ({ type: "Paired" } & Peer)
   | { type: "Incoming"; from: string; files: FileMeta[] }
+  | { type: "Started"; id: number; peer: string; outgoing: boolean; name: string; files: number; total: number; paths: string[] }
+  | { type: "Requeued"; id: number }
   | { type: "Progress"; id: number; done: number; total: number }
   | { type: "Received"; from: string; path: string; size: number }
   | { type: "Failed"; id: number; reason: string }
