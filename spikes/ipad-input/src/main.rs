@@ -7,6 +7,9 @@
 //!   ipad-input wifidiag <record> [tag]    Wi-Fi verify step by step beside the iPad log (USB for the log)
 //!   ipad-input <demo [tag]|typed [tag]|shot [name]|dump|home|ids|bytes [value]|raw <hex>...|probe <set>> [--usb]
 //!   ipad-input diff <a.png> <b.png>
+//!   ipad-input <scroll [tag]|rightdrag [tag]|streamtime [cold|warm|pointer] [step ms]|callcheck [secs]|twotunnels|idle <rtt|zero|none> [secs]|keyboard [tag]>
+//!   ipad-input wifimount [dry]            over Wi-Fi after an iPad restart, lockdown then tunnel
+//!   ipad-input do <step>...               see `Session::steps`
 //! `demo` is the pointer proof: see probe.rs and docs/spikes/ipad-pointer.md.
 //!
 //! Wi-Fi unless `--usb`; no silent fallback, because Wi-Fi is the question. The pairing record path is
@@ -288,6 +291,36 @@ fn pump(udp: UdpSocketHandle, video_ssrc: Option<u32>, rtp: Arc<AtomicU64>) -> J
     })
 }
 
+/// Audio then video; returns the pumps that throw the media away.
+async fn open_stream(adapter: &mut AdapterHandle, display: &mut DisplayServiceClient<Io>, rtp: &Arc<AtomicU64>) -> Result<Vec<JoinHandle<()>>, String> {
+    let audio_udp = adapter.bind_udp(0).await.map_err(|e| format!("bind audio: {e:?}"))?;
+    let video_udp = adapter.bind_udp(0).await.map_err(|e| format!("bind video: {e:?}"))?;
+    let (receiver, sender) = (adapter.host_ip().to_string(), adapter.peer_ip().to_string());
+    // Strings mirror the Device Hub offer idevice captured, which the device accepted.
+    let call_info = CallInfoBlob {
+        call_id: 0, client_version: 1, device_type: "Mac17,7".into(), framework_version: "2205.3.1".into(),
+        os_version: "25F71".into(), device_name: None, audio_device_uid: None,
+    };
+    let session_id = uuid::Uuid::new_v4();
+    let call_id = || uuid::Uuid::new_v4().to_string().to_uppercase();
+
+    // Audio first: it sets up the screen-sharing session the video joins.
+    let offer = build_screen_audio_offer(&call_id(), &call_info).map_err(|e| format!("audio offer: {e:?}"))?;
+    let params = build_start_audio_parameters(&receiver, audio_udp.local_port(), &sender, 50000, offer, CLIENT_SUPPORTED_FEATURES, session_id);
+    if let Err(e) = display.start_media_stream(params).await { println!("audio stream refused, trying video alone: {}", format!("{e:?}").chars().take(120).collect::<String>()); }
+    println!("audio stream started");
+
+    let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
+    let offer = build_screen_video_offer(&call_id(), &call_info, ssrc).map_err(|e| format!("video offer: {e:?}"))?;
+    let params = build_start_video_parameters(&receiver, video_udp.local_port(), &sender, 50001, offer, CLIENT_SUPPORTED_FEATURES, 1, session_id);
+    if let Err(e) = display.start_media_stream(params).await {
+        let _ = display.stop_media_stream().await;
+        return Err(format!("video stream: {e:?}"));
+    }
+    println!("video stream started, input gate should be open");
+    Ok(vec![pump(audio_udp, None, rtp.clone()), pump(video_udp, Some(ssrc), rtp.clone())])
+}
+
 impl Session {
     async fn open(dir: &Path, usb: bool) -> Result<Session, String> {
         for attempt in 0..2 {
@@ -309,35 +342,11 @@ impl Session {
     }
 
     async fn start(mut adapter: AdapterHandle, mut handshake: RsdHandshake, mut display: DisplayServiceClient<Io>) -> Result<Session, String> {
-        let audio_udp = adapter.bind_udp(0).await.map_err(|e| format!("bind audio: {e:?}"))?;
-        let video_udp = adapter.bind_udp(0).await.map_err(|e| format!("bind video: {e:?}"))?;
-        let (receiver, sender) = (adapter.host_ip().to_string(), adapter.peer_ip().to_string());
-        // Strings mirror the Device Hub offer idevice captured, which the device accepted.
-        let call_info = CallInfoBlob {
-            call_id: 0, client_version: 1, device_type: "Mac17,7".into(), framework_version: "2205.3.1".into(),
-            os_version: "25F71".into(), device_name: None, audio_device_uid: None,
-        };
-        let session_id = uuid::Uuid::new_v4();
-        let call_id = || uuid::Uuid::new_v4().to_string().to_uppercase();
-
-        // Audio first: it sets up the screen-sharing session the video joins.
-        let offer = build_screen_audio_offer(&call_id(), &call_info).map_err(|e| format!("audio offer: {e:?}"))?;
-        let params = build_start_audio_parameters(&receiver, audio_udp.local_port(), &sender, 50000, offer, CLIENT_SUPPORTED_FEATURES, session_id);
-        if let Err(e) = display.start_media_stream(params).await { println!("audio stream refused, trying video alone: {}", format!("{e:?}").chars().take(120).collect::<String>()); }
-        println!("audio stream started");
-
-        let ssrc = uuid::Uuid::new_v4().as_u128() as u32;
-        let offer = build_screen_video_offer(&call_id(), &call_info, ssrc).map_err(|e| format!("video offer: {e:?}"))?;
-        let params = build_start_video_parameters(&receiver, video_udp.local_port(), &sender, 50001, offer, CLIENT_SUPPORTED_FEATURES, 1, session_id);
-        if let Err(e) = display.start_media_stream(params).await {
-            let _ = display.stop_media_stream().await;
-            return Err(format!("video stream: {e:?}"));
-        }
-        println!("video stream started, input gate should be open");
-
         let rtp = Arc::new(AtomicU64::new(0));
-        let pumps = vec![pump(audio_udp, None, rtp.clone()), pump(video_udp, Some(ssrc), rtp.clone())];
-        sleep(Duration::from_millis(300)).await; // idevice: surfaces need a moment to re-match the stream.
+        // NOSTREAM: is a stream needed at all? See the stream section of docs/spikes/ipad-pointer.md.
+        let pumps = if std::env::var_os("NOSTREAM").is_some() { vec![] } else { open_stream(&mut adapter, &mut display, &rtp).await? };
+        // idevice: surfaces need a moment to re-match the stream. SETTLE_MS is for measuring that.
+        sleep(Duration::from_millis(std::env::var("SETTLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(300))).await;
 
         let clients = async {
             let hid = UniversalHidServiceClient::connect_rsd(&mut adapter, &mut handshake).await.map_err(|e| format!("universal HID: {e:?}"))?;
@@ -857,7 +866,7 @@ async fn run() -> ExitCode {
     args.retain(|a| a != "--usb");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "diff" { return probe::diff_cmd(&args[1..]) }
-    if !["wifidiag", "rppair", "check", "keys", "touch", "scroll", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo", "typed"].contains(&cmd) {
+    if !["wifidiag", "rppair", "check", "keys", "touch", "scrollold", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo", "typed", "do", "scroll", "rightdrag", "streamtime", "callcheck", "twotunnels", "wifimount", "idle", "keyboard"].contains(&cmd) {
         eprintln!("usage: ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]");
         return ExitCode::from(2);
     }
@@ -885,6 +894,17 @@ async fn run() -> ExitCode {
         std::process::exit(0); // The log tap task has no stop.
     }
 
+    if cmd == "wifimount" {
+        let r = probe::wifimount(&dir, args.get(1).is_some_and(|a| a == "dry")).await;
+        println!("{r:?}");
+        return if r.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    if cmd == "streamtime" && args.get(1).is_none_or(|a| a == "cold") {
+        let r = probe::streamtime_cold(&dir, args.get(2).and_then(|v| v.parse().ok()).unwrap_or(50)).await;
+        println!("{r:?}");
+        return if r.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+
     let mut session = match timeout(Duration::from_secs(90), Session::open(&dir, usb)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => { eprintln!("FAILED: {e}"); return ExitCode::FAILURE }
@@ -894,9 +914,9 @@ async fn run() -> ExitCode {
         "check" => session.check().await,
         "keys" => session.keys().await,
         "touch" => session.touch().await,
-        "scroll" => session.scroll().await,
+        "scrollold" => session.scroll().await,
         "latency" => session.latency(args.get(1).map(String::as_str).unwrap_or("uhid")).await,
-        "shot" | "dump" | "probe" | "home" | "ids" | "raw" | "bytes" | "demo" | "typed" => session.run_probe(&args).await,
+        "shot" | "dump" | "probe" | "home" | "ids" | "raw" | "bytes" | "demo" | "typed" | "do" | "scroll" | "rightdrag" | "streamtime" | "callcheck" | "twotunnels" | "idle" | "keyboard" => session.run_probe(&args, &dir).await,
         _ => session.pointer().await,
     };
     session.finish().await;
