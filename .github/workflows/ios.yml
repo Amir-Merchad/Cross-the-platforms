@@ -40,11 +40,19 @@ jobs:
       - name: Build unsigned app
         working-directory: apps/ios
         run: xcodebuild -project Bridge.xcodeproj -scheme Bridge -sdk iphoneos -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
-      - name: Package IPA
+      - name: Package IPA (ad-hoc sign with app group, extension first)
         working-directory: apps/ios
         run: |
           mkdir Payload
           cp -R build/Build/Products/Release-iphoneos/Bridge.app Payload/
+          APP=Payload/Bridge.app
+          test -d $APP/PlugIns/BridgeShare.appex || { echo "appex missing from app"; exit 1; }
+          codesign --force --sign - --entitlements Share/Share.entitlements $APP/PlugIns/BridgeShare.appex
+          codesign --force --sign - --entitlements Bridge.entitlements $APP
+          for b in $APP/PlugIns/BridgeShare.appex $APP; do
+            echo "== $b"; codesign -d --entitlements - $b
+          done
           zip -qr Bridge.ipa Payload
+          unzip -l Bridge.ipa | grep -q 'PlugIns/BridgeShare.appex/' || { echo "appex missing from ipa"; exit 1; }
       - uses: actions/upload-artifact@v4
         with: { name: Bridge-ipa, path: apps/ios/Bridge.ipa, retention-days: 3 }

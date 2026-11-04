@@ -13,7 +13,8 @@ import BridgeKit
     private var bgTask = UIBackgroundTaskIdentifier.invalid
     private var afterChoice: ((FfiPeer) -> Void)?
     private var flushing = false, flushAgain = false
-    private let queue: OutgoingQueue
+    private let queue: OutgoingQueue          // app's own root; send() enqueues here
+    private let queues: [OutgoingQueue]        // + app group root (share extension), nil group = local only
     private let nodeDir: URL
     private let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
@@ -23,7 +24,14 @@ import BridgeKit
         let out = support.appendingPathComponent("outgoing")
         for d in [nodeDir, out] { try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         queue = OutgoingQueue(root: out)
-        queue.sweepIncomplete()
+        var all = [queue]
+        if let g = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.crosstheplatforms.bridge") {
+            let shared = g.appendingPathComponent("outgoing")
+            try? FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+            all.append(OutgoingQueue(root: shared))
+        }
+        queues = all
+        queues.forEach { $0.sweepIncomplete() }   // default 1h: the extension may be mid-copy
     }
 
     // MARK: lifecycle
@@ -147,21 +155,24 @@ import BridgeKit
     func flushOutgoing() {
         guard node != nil else { status = "Starting…"; return }   // start() flushes again
         if flushing { flushAgain = true; return }
-        guard !queue.batches().isEmpty else { return }
+        guard !pending().isEmpty else { return }
         withPC { pc in self.deliver(to: pc) }
     }
+
+    private func pending() -> [[URL]] { queues.flatMap { $0.batches() } }
+    private func drop(_ b: [URL]) { queues.forEach { try? $0.remove(batchOf: b[0]) } }   // remove ignores foreign roots
 
     private func deliver(to pc: FfiPeer) {
         guard let node else { return }
         flushing = true
         Task {
             var ok = true
-            for b in queue.batches() {
+            for b in pending() {
                 life.transferStarted(files: 1)
                 status = "Sending…"
                 do {
                     _ = try await node.sendFiles(peerId: pc.id, paths: b.map(\.path))
-                    try? queue.remove(batchOf: b[0])
+                    drop(b)
                     run(life.fileFinished())
                     status = "Sent to \(pc.name)"
                 } catch {
@@ -171,7 +182,7 @@ import BridgeKit
                         ok = false
                         break
                     }
-                    try? queue.remove(batchOf: b[0])   // would fail forever and jam the queue
+                    drop(b)   // would fail forever and jam the queue
                     status = "Dropped a batch: \(error)"
                 }
             }
