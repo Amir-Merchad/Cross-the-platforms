@@ -39,3 +39,13 @@ test("plainError hides the raw string and says queued only when it can", () => {
   expect(plainError(raw, true).toLowerCase()).toContain("queued");
   expect(plainError("weird internal", true)).not.toContain("weird");
 });
+
+test("outgoing with total 0 ends done on Progress", () => {
+  const r = run([{ type: "Started", id: 1, peer: "p", outgoing: true, name: "e", files: 1, total: 0, paths: [] }, { type: "Progress", id: 1, done: 0, total: 0 }]);
+  expect(r[0].state).toBe("done");
+});
+
+test("a late Failed cannot flip a finished row", () => {
+  const r = run([started(true), { type: "Progress", id: 1, done: 100, total: 100 }, { type: "Failed", id: 1, reason: "late" }]);
+  expect(r[0].state).toBe("done");
+});

@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "label": "main", "title": "Cross the Platforms", "width": 920, "height": 660, "visible": false }
+      { "label": "main", "title": "Bridge", "width": 1100, "height": 760, "minWidth": 900, "minHeight": 640, "visible": false }
     ],
     "security": { "csp": null }
   },

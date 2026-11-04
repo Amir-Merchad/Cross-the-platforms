@@ -17,7 +17,7 @@ export function applyEvent(rows: Row[], e: TransferEvent, now: number): Row[] {
         startedAt: now, now, paths: e.paths, state: "moving", received: 0,
       }];
     case "Progress":
-      return patch(rows, e.id, (r) => ({ done: e.done, total: e.total, now, state: r.outgoing && e.total > 0 && e.done >= e.total ? "done" : r.state }));
+      return patch(rows, e.id, (r) => ({ done: e.done, total: e.total, now, state: r.outgoing && e.done >= e.total ? "done" : r.state }));
     case "Received": {
       const row = rows.find((r) => !r.outgoing && r.peer === e.from && r.state === "moving");
       if (!row) return rows;
@@ -28,7 +28,7 @@ export function applyEvent(rows: Row[], e: TransferEvent, now: number): Row[] {
       return patch(rows, e.id, () => ({ state: "requeued", now }));
     case "Failed":
       return rows.some((r) => r.id === e.id)
-        ? patch(rows, e.id, () => ({ state: "failed", reason: e.reason, now }))
+        ? patch(rows, e.id, (r) => (r.state === "moving" ? { state: "failed", reason: e.reason, now } : {}))
         : [...rows, { id: e.id, peer: "", outgoing: false, name: "A file", files: 1, total: 0, done: 0, startedAt: now, now, paths: [], state: "failed", reason: e.reason, received: 0 }];
     default:
       return rows;
