@@ -149,7 +149,7 @@ Record iPadOS and One UI versions first.
 
 ## 12. Calls Claude made (owner to check)
 - Shared Rust core used by all three apps (Tauri directly, Kotlin/Swift via UniFFI).
-- Build order: Windows Tauri → native Kotlin/Swift → Tauri mobile.
+- Build order: Windows Tauri → native Kotlin/Swift (Tauri mobile dropped).
 - Public GitHub repo (free macOS CI minutes).
 - v1.5 holds cross-platform input and screens; v2 internet.
 - Port Universal Bridge's HID approach to Rust; `idevice` over pymobiledevice3.

@@ -22,7 +22,7 @@ matters), no Mac, free Apple ID, uses it daily while studying. No merge / PR / p
 | Clipboard PC → phone (automatic) and phone → PC (Quick Settings tile, 52 ms) | ✅ |
 | iPad app Bridge: pair, files both ways, share sheet, queue while closed (SideStore sideload) | ✅ `docs/v1/checklist-ipad.md`, overall owner report; 7-day re-sign (row 13) still to check |
 | Logs contain no file names / clipboard text / keys | ✅ |
-| Base UI (Windows hub, Android, iPad: Rubik, amber, light/dark, Desk board, pages Devices / Transfers / Clipboard / Settings) | Built on `v1/ui`. **Not yet verified on devices:** Windows rows 2 to 25 of `docs/v1/checklist-ui.md` (only row 1 has a result), all Android rows, all iPad rows |
+| Base UI (Windows hub, Android, iPad: Rubik, amber, light/dark, Desk board, Desk, Transfers, Clipboard and Settings pages) | Built on `v1/ui`. **Not yet verified on devices:** Windows rows 2 to 25 of `docs/v1/checklist-ui.md` (only row 1 has a result), all Android rows, all iPad rows |
 
 ## 3. Branches (all stacked; nothing merged into `main` yet)
 ```
@@ -46,7 +46,7 @@ sendto), `apps/tauri/` (hub app), `apps/android/` (Bridge), `spikes/*` (throwawa
 | Windows app | `cd apps/tauri && pnpm tauri build --debug --no-bundle` → `target\debug\ctp-app.exe` |
 | …while the app is running | build to a side dir: `CARGO_TARGET_DIR=C:/dev/ctp-target-check pnpm tauri build --debug --no-bundle`, then quit the app from the tray and copy the exe over `target\debug\ctp-app.exe` |
 | Android Rust core + bindings | `powershell -File apps/android/build-rust.ps1` (cargo-ndk, arm64; ~9 min first time) |
-| Android APK | `cd apps/android`, `JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`, `TMP=TEMP=C:\dev\_ref\tmp`, `./gradlew :app:assembleDebug` |
+| Android APK | `cd apps/android`, `JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`, `TMP=TEMP=C:\dev\_ref\tmp`, `./gradlew :app:assembleDebug`. Gradle needs `TEMP` and `TMP` set to a short path without `~` (not the 8.3 user temp), and JDK 17 here |
 | Install on phone | `"$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe" install -r apps/android/app/build/outputs/apk/debug/app-debug.apk` |
 | Throughput check | `cargo test -p bridge-core --release --test bulk loopback_throughput -- --ignored --nocapture` (82 MB/s here, disk-bound) |
 
@@ -102,12 +102,12 @@ Plan: `docs/superpowers/plans/2026-11-04-v1-ipad-app.md`. Code in `apps/ios/`, b
 `Bridge-ipa`, kept 3 days), install via iloader → SideStore 0.7.0 (free Apple ID ⇒ re-sign every 7 days). Still open:
 - Checklist row 13: confirm data and pairing survive the first real re-sign. Rows 4 and 5 have no MB/s recorded, so the iPad→PC speed is unmeasured.
 - Rulings and deferred minors: `docs/v1/ipad-deferred.md`.
-- `ios-spike` CI has failed since `v1/transfer`: `spikes/ios-app` calls `startReceiver` and `sendFileFfi`, which the core no longer exposes. Not an app bug.
+- The `ios-spike` workflow is removed (it failed since `v1/transfer`; `ios.yml` replaced it). `spikes/ios-app` is kept as history only.
+- iPad UI rows of `docs/v1/checklist-ui.md` are not yet run on a device.
 - Run `apps/android/build-rust.ps1` before the next Android build; the local bindings are stale.
 
-### 7.4 Plan 5 — Tauri mobile flavours (spec §4: "the Tauri app with shadcn on all devices")
-Same React UI on Android/iPad as a settings/companion app, sharing `apps/tauri/src`. Decide with the owner how it coexists with
-the native apps (spec §4 has the owner's decision; §11/§12 list what was left to the builder).
+### 7.4 Plan 5 — Tauri mobile flavours — DROPPED
+One app per platform now (spec §4): Tauri is Windows only; Android and iPad stay native. Nothing to do.
 
 ### 7.5 Ship v1
 Release builds; Windows installer (`pnpm tauri build` without `--no-bundle` → NSIS/MSI); Android signed release (Play Console
