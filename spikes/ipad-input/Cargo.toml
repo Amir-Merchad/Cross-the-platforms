@@ -1,0 +1,13 @@
+[package]
+name = "ipad-input"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+idevice = { version = "=0.1.68", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+mdns-sd = "0.13"
+socket2 = { version = "0.6", features = ["all"] }
+uuid = { version = "1", features = ["v4"] }
+plist = "1"

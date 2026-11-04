@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "spikes/ipad-clip", "spikes/ble-hid", "spikes/transfer-cli", "tools/uniffi-bindgen", "platform/windows", "apps/tauri/src-tauri"]
+members = ["core", "spikes/ipad-clip", "spikes/ipad-input", "spikes/ble-hid", "spikes/transfer-cli", "tools/uniffi-bindgen", "platform/windows", "apps/tauri/src-tauri"]
 
 # Debug builds are what the owner runs on devices: optimise dependencies (image codecs, crypto, BLE) but
 # keep our own crates fast to rebuild.

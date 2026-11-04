@@ -2987,6 +2987,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipad-input"
+version = "0.0.0"
+dependencies = [
+ "idevice",
+ "mdns-sd",
+ "plist",
+ "socket2 0.6.5",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "ipconfig"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
