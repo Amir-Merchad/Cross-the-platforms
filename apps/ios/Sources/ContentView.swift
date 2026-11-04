@@ -30,7 +30,7 @@ struct ContentView: View {
         .fileImporter(isPresented: $picking, allowedContentTypes: [.item], allowsMultipleSelection: true) { r in
             if case .success(let urls) = r { m.send(urls) }
         }
-        .sheet(isPresented: $pairing) { PairSheet(m: m) }
+        .sheet(isPresented: $pairing, onDismiss: { m.flushOutgoing() }) { PairSheet(m: m) }
         .confirmationDialog("Send to which PC?", isPresented: $m.choosing) {
             ForEach(pcs, id: \.id) { p in Button(p.name) { m.choose(p) } }
         }

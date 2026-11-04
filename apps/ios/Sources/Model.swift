@@ -132,12 +132,14 @@ import BridgeKit
         status = "Preparing…"
         Task {
             do {
-                try await Task.detached {
+                let queued = try await Task.detached { () -> Bool in
                     let scoped = urls.map { ($0, $0.startAccessingSecurityScopedResource()) }
                     defer { for (u, ok) in scoped where ok { u.stopAccessingSecurityScopedResource() } }
+                    guard urls.allSatisfy({ (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }) else { return false }
                     try q.enqueue(urls)
+                    return true
                 }.value
-                flushOutgoing()
+                if queued { flushOutgoing() } else { status = "Only files can be sent, not folders or packages" }
             } catch { status = "Could not copy: \(error.localizedDescription)" }
         }
     }
@@ -163,10 +165,14 @@ import BridgeKit
                     run(life.fileFinished())
                     status = "Sent to \(pc.name)"
                 } catch {
-                    run(life.transferFailed())
-                    status = "Send failed, will retry: \(error)"
-                    ok = false
-                    break
+                    // core already emitted .failed, which calls transferFailed
+                    if shouldKeepBatch(afterError: "\(error)") {
+                        status = "Send failed, will retry: \(error)"
+                        ok = false
+                        break
+                    }
+                    try? queue.remove(batchOf: b[0])   // would fail forever and jam the queue
+                    status = "Dropped a batch: \(error)"
                 }
             }
             flushing = false

@@ -13,3 +13,8 @@ public func formatBytes(_ n: UInt64) -> String {
 public func isPairInvite(_ s: String) -> Bool {
     s.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("ctp-pair:")
 }
+
+/// A failed send stays queued only if the PC was unreachable; any other failure would repeat forever.
+public func shouldKeepBatch(afterError reason: String) -> Bool {
+    reason.contains("device not reachable")
+}

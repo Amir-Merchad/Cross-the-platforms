@@ -1,20 +1,26 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 import VisionKit
 import BridgeKit
 
 struct PairSheet: View {
     @ObservedObject var m: Model
     @Environment(\.dismiss) private var dismiss
+    @State private var available = false
 
     var body: some View {
         VStack(spacing: 16) {
-            if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+            if available {
                 ScanView { code in join(code) }
             } else {
                 Text("Camera unavailable. Copy the code on your PC, then paste it.").padding()
             }
             Button("Paste code") { join(UIPasteboard.general.string ?? "") }.padding(.bottom)
+        }
+        .task {
+            _ = await AVCaptureDevice.requestAccess(for: .video)
+            available = DataScannerViewController.isSupported && DataScannerViewController.isAvailable
         }
     }
 
