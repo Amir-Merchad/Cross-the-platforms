@@ -18,7 +18,12 @@ pub fn get_settings(state: State<AppState>) -> Settings { state.settings.lock().
 #[tauri::command]
 pub fn save_settings(app: AppHandle, state: State<AppState>, mut settings: Settings) -> Result<(), String> {
     // The clipboard toggle is owned by `set_clipboard_sync` (tray + Clipboard tab): an older draft can't undo it.
-    settings.clipboard_sync = state.settings.lock().unwrap().clipboard_sync;
+    {
+        let current = state.settings.lock().unwrap();
+        settings.clipboard_sync = current.clipboard_sync;
+        // Same for the receive folder, owned by its own command: autosave can carry an older copy.
+        settings.receive_dir = current.receive_dir.clone();
+    }
     settings.save(&settings_path())?;
     let autostart = app.autolaunch();
     let _ = if settings.start_with_windows { autostart.enable() } else { autostart.disable() };
@@ -43,6 +48,9 @@ pub fn get_clip_status(state: State<AppState>) -> ClipStatus { state.clip_status
 
 #[tauri::command]
 pub fn set_clipboard_sync(app: AppHandle, on: bool) -> Result<(), String> { set_clipboard_sync_now(&app, on) }
+
+#[tauri::command]
+pub fn reachable_peers(app: AppHandle) -> Result<Vec<String>, String> { Ok(transfer(&app)?.reachable()) }
 
 #[tauri::command]
 pub fn pair_ipad(state: State<AppState>) {

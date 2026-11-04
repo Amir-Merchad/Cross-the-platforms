@@ -51,6 +51,15 @@ async fn clip_round_trip_between_paired_nodes() {
 }
 
 #[tokio::test]
+async fn reachable_lists_peers_recently_heard() {
+    let ((a, mut arx, _da), (b, _brx, _db)) = paired().await;
+    b.send_clip(&a.id(), "hi".into()).await.unwrap();
+    wait_for(&mut arx, |e| matches!(e, Event::Clip { .. })).await;
+    assert_eq!(a.reachable(Duration::from_secs(60)), vec![b.id()]);
+    assert!(a.reachable(Duration::ZERO).is_empty());
+}
+
+#[tokio::test]
 async fn pair_then_restart_keeps_pairing() {
     let ((a, _arx, da), (b, _brx, db)) = paired().await;
     let (aid, bid) = (a.id(), b.id());

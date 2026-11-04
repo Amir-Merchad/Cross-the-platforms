@@ -98,6 +98,8 @@ pub(crate) struct Inner {
     outbox: Mutex<Outbox>,
     /// Peers whose queued batches are going out right now (two quick `Hello`s must not double-send).
     flushing: Mutex<HashSet<String>>,
+    /// When each peer last sent us a control message or answered one of ours.
+    heard: Mutex<HashMap<String, Instant>>,
 }
 
 type IrohStream = (Connection, SendStream, RecvStream);
@@ -123,7 +125,7 @@ impl Node {
             addrs: Mutex::new(addrs), addrs_path,
             pending: Mutex::new(None), events: tx, tasks: Mutex::new(Vec::new()),
             waiting: Mutex::new(HashMap::new()), test_bulk_addrs: Mutex::new(None),
-            outbox: Mutex::new(Outbox::load(&cfg.data_dir.join("outbox.json"))), flushing: Mutex::new(HashSet::new()),
+            outbox: Mutex::new(Outbox::load(&cfg.data_dir.join("outbox.json"))), flushing: Mutex::new(HashSet::new()), heard: Mutex::new(HashMap::new()),
         });
         let node = Node { inner: inner.clone() };
         let accept = tokio::spawn(accept_loop(ep, Arc::downgrade(&inner)));
@@ -149,6 +151,10 @@ impl Node {
     pub fn addr(&self) -> EndpointAddr { self.inner.ep.addr() }
     /// Where the next accepted transfer lands.
     pub fn set_receive_dir(&self, dir: PathBuf) { *self.inner.receive_dir.lock().unwrap() = dir; }
+    /// Peers heard from within `within`. Not exposed through FFI.
+    pub fn reachable(&self, within: Duration) -> Vec<String> {
+        self.inner.heard.lock().unwrap().iter().filter(|(_, t)| t.elapsed() < within).map(|(id, _)| id.clone()).collect()
+    }
     pub fn peers(&self) -> Vec<Peer> { self.inner.peers.lock().unwrap().list().to_vec() }
 
     /// (peer id, files waiting) for each paired peer with something queued; what `Event::Queued` last said.
@@ -317,6 +323,7 @@ impl Node {
         s.finish().map_err(|e| e.to_string())?;
         let reply = r.read_to_end(MAX_CTL_LINE).await.map_err(|e| e.to_string())?;
         conn.close(0u32.into(), b"");
+        self.inner.heard.lock().unwrap().insert(peer_id.to_string(), Instant::now());
         Ok(reply.split(|&b| b == b'\n').filter(|l| !l.is_empty()).filter_map(|l| serde_json::from_slice(l).ok()).collect())
     }
 
@@ -407,6 +414,7 @@ async fn handle_ctl(conn: Connection, node: Node) {
     let from = conn.remote_id().to_string();
     if !node.inner.is_paired(&from) { conn.close(1u32.into(), b"not paired"); return }
     let Ok((mut s, mut r)) = conn.accept_bi().await else { return };
+    node.inner.heard.lock().unwrap().insert(from.clone(), Instant::now());
     let mut replies = String::new();
     // The sender finishes its side after its messages: read all of it, then handle line by line.
     let Ok(data) = r.read_to_end(MAX_CTL_LINE).await else { return };

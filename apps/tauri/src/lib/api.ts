@@ -13,6 +13,10 @@ export interface Settings {
   start_with_windows: boolean;
   remote_width: Record<string, number>;
   clipboard_sync: boolean;
+  receive_dir: string | null;
+  device_links: Record<string, string>;
+  device_colors: Record<string, string>;
+  appearance: "system" | "light" | "dark";
 }
 export interface Rect { left: number; top: number; right: number; bottom: number }
 export interface Monitor { id: string; rect: Rect }
@@ -24,6 +28,7 @@ export const DEFAULT_WIDTH = 1366;
 
 export const getSettings = () => invoke<Settings>("get_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+export const reachablePeers = () => invoke<string[]>("reachable_peers");
 export const getStatus = () => invoke<Status>("get_status");
 export const listMonitors = () => invoke<Monitor[]>("list_monitors");
 export const switchTo = (deviceId: string | null) => invoke<void>("switch_to", { deviceId });

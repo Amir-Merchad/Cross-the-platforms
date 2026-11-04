@@ -28,11 +28,17 @@ pub struct Settings {
     pub clipboard_sync: bool,
     /// Where received files go; `None` = `Downloads\Bridge`.
     pub receive_dir: Option<String>,
+    /// Bluetooth host id → peer id: which files peer is the same physical device.
+    pub device_links: BTreeMap<String, String>,
+    /// Device key (host id, or peer id for files-only devices) → `#rrggbb`.
+    pub device_colors: BTreeMap<String, String>,
+    /// `"system"`, `"light"` or `"dark"`.
+    pub appearance: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into() }
     }
 }
 
@@ -94,6 +100,9 @@ mod tests {
         let mut s = Settings::default();
         s.attachments.push(Attachment { device_id: "ipad".into(), monitor_id: "M1".into(), edge: Edge::Right });
         s.calibration.insert("ipad".into(), Calibration { gain: 1.4, min_push: 120.0, dwell_ms: 250 });
+        s.device_links.insert("host".into(), "peer".into());
+        s.device_colors.insert("host".into(), "#aabbcc".into());
+        s.appearance = "dark".into();
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
     }
@@ -109,6 +118,13 @@ mod tests {
         let s = Settings::load(&p);
         assert_eq!(s.entry_hold_ms, 500); assert!(s.start_with_windows);
         assert!(s.clipboard_sync);
+    }
+    #[test] fn older_file_gets_ui_defaults() {
+        let d = tempdir().unwrap(); let p = d.path().join("s.json");
+        std::fs::write(&p, r#"{"version":1,"entry_hold_ms":500}"#).unwrap();
+        let s = Settings::load(&p);
+        assert!(s.device_links.is_empty() && s.device_colors.is_empty());
+        assert_eq!(s.appearance, "system");
     }
     #[test] fn clipboard_sync_defaults_on() { assert!(Settings::default().clipboard_sync); }
     #[test] fn invalid_layout_is_not_saved() {
