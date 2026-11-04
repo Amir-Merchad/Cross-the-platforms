@@ -744,7 +744,7 @@ async fn discover() -> Result<SocketAddr, String> {
 async fn connect_wifi(record: &Path) -> Result<(AdapterHandle, RsdHandshake), String> {
     let mut rpf = RpPairingFile::read_from_file(record).await.map_err(|e| format!("pairing record: {e:?}"))?;
     println!("looking for the iPad on Wi-Fi");
-    let addr = discover().await?;
+    let addr = match std::env::var("IPAD_ADDR").ok().and_then(|a| a.parse().ok()) { Some(a) => a, None => discover().await? };
     println!("found it at {addr}");
     let stream = tokio::net::TcpStream::connect(addr).await.map_err(|e| format!("connect: {e}"))?;
     let mut rpc = RemotePairingClient::new(RpPairingSocket::new(stream), HOST_NAME);
