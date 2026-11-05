@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use bridge_core::{identity::Peer, layout::Monitor, settings::Settings};
+use bridge_core::{cliphistory::Entry, clipboard::Content, identity::Peer, layout::Monitor, settings::Settings};
 use ctp_windows::{
     clipsync::{ClipCommand, ClipStatus},
     engine::{Command, Status, settings_path},
@@ -131,3 +131,31 @@ pub fn set_clipboard_sync_now(app: &AppHandle, on: bool) -> Result<(), String> {
     crate::tray::refresh(app, &status);
     Ok(())
 }
+
+#[derive(serde::Serialize)]
+pub struct HistoryList { enabled: bool, entries: Vec<Entry> }
+
+#[tauri::command]
+pub fn history_list(state: State<AppState>, query: String) -> HistoryList {
+    let h = state.history.lock().unwrap();
+    HistoryList { enabled: h.enabled(), entries: h.search(&query).into_iter().cloned().collect() }
+}
+
+/// Puts the item back on the clipboard; the clipboard service then syncs it like any copy.
+#[tauri::command]
+pub fn history_copy(state: State<AppState>, id: u64) -> Result<(), String> {
+    let c: Content = state.history.lock().unwrap().content(id).ok_or("That item is gone.")?;
+    ctp_windows::clipboard::write(&c)
+}
+
+#[tauri::command]
+pub fn history_pin(state: State<AppState>, id: u64, pinned: bool) { state.history.lock().unwrap().pin(id, pinned); }
+
+#[tauri::command]
+pub fn history_delete(state: State<AppState>, id: u64) { state.history.lock().unwrap().delete(id); }
+
+#[tauri::command]
+pub fn history_clear(state: State<AppState>) { state.history.lock().unwrap().clear(); }
+
+#[tauri::command]
+pub fn history_enable(state: State<AppState>, on: bool) { state.history.lock().unwrap().set_enabled(on); }

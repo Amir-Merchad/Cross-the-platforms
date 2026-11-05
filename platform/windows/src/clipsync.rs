@@ -1,9 +1,9 @@
 //! Clipboard sync service: Windows clipboard ⇄ core `Hub` ⇄ iPad, on its own thread, separate from
 //! the input engine so nothing here can ever stall keyboard/mouse. Logs kinds and sizes only.
 
-use std::{thread, time::Duration};
+use std::{sync::{Arc, Mutex}, thread, time::{Duration, SystemTime, UNIX_EPOCH}};
 
-use bridge_core::clipboard::{Content, Endpoint, Hub};
+use bridge_core::{cliphistory::{self, History}, clipboard::{Content, Endpoint, Hub, MAX_ITEM_BYTES}};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -31,6 +31,8 @@ pub struct ClipStatus {
     pub synced: u64,
     pub skipped_too_large: u64,
     pub notice: Option<String>,
+    /// Goes up whenever history stored something, so the hub knows to reload its list.
+    pub history_rev: u64,
 }
 
 pub struct ClipHandle { tx: UnboundedSender<ClipCommand>, thread: Option<thread::JoinHandle<()>> }
@@ -53,12 +55,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// 5 s plus 1 s per MiB: big screenshots need encoding and a slow link, small text must fail fast.
 fn write_timeout(size: usize) -> Duration { Duration::from_secs(5 + (size / (1024 * 1024)) as u64) }
 
-pub fn start(enabled: bool, to_phone: ToPhone, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
+pub fn start(enabled: bool, history: Arc<Mutex<History>>, to_phone: ToPhone, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
     let (tx, rx) = unbounded_channel();
     let thread = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         // Single-threaded on purpose: idevice futures don't prove Send, and nothing here needs more threads.
-        tokio::task::LocalSet::new().block_on(&rt, run(enabled, rx, to_phone, on_status));
+        tokio::task::LocalSet::new().block_on(&rt, run(enabled, history, rx, to_phone, on_status));
         // Don't let a pending mDNS lookup (up to 10 s, blocking pool) hold up Quit.
         rt.shutdown_background();
     });
@@ -70,9 +72,11 @@ enum Event {
     Connected(Result<Box<IpadLink>, String>),
     FromIpad { session: u64, change: Result<Content, String> },
     Paired(Result<(), String>),
+    /// History stored an item (see `record`).
+    Recorded,
 }
 
-async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, to_phone: ToPhone, on_status: impl Fn(ClipStatus)) {
+async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: UnboundedReceiver<ClipCommand>, to_phone: ToPhone, on_status: impl Fn(ClipStatus)) {
     let mut hub = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
     hub.set_paused(!enabled);
     let mut status = ClipStatus { enabled, ipad: Some(IpadStatus::Connecting), ..Default::default() };
@@ -130,9 +134,9 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, to_pho
                     tokio::task::spawn_local(async move { let _ = tx.send(Event::Paired(ipad::pair_usb(&ipad::ipad_dir()).await)); });
                 }
                 Some(ClipCommand::Phones(ids)) => hub.set_endpoints([Endpoint::Windows, Endpoint::Ipad].into_iter().chain(ids.into_iter().map(Endpoint::Peer)).collect()),
-                Some(ClipCommand::FromPhone { id, text }) => writes = route(&mut hub, Endpoint::Peer(id), Content::Text(text)),
+                Some(ClipCommand::FromPhone { id, text }) => writes = route(&mut hub, &history, &ev_tx, Endpoint::Peer(id), Content::Text(text)),
             },
-            Some(c) = from_windows.recv() => writes = route(&mut hub, Endpoint::Windows, c),
+            Some(c) = from_windows.recv() => writes = route(&mut hub, &history, &ev_tx, Endpoint::Windows, c),
             Some(ev) = events.recv() => match ev {
                 Event::Connected(Ok(link)) => {
                     connecting = false;
@@ -159,13 +163,14 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, to_pho
                     status.ipad = Some(s);
                 }
                 Event::FromIpad { session: s, .. } if s != session => {}
-                Event::FromIpad { change: Ok(c), .. } => writes = route(&mut hub, Endpoint::Ipad, c),
+                Event::FromIpad { change: Ok(c), .. } => writes = route(&mut hub, &history, &ev_tx, Endpoint::Ipad, c),
                 Event::FromIpad { change: Err(e), .. } => {
                     diag::log(format_args!("iPad clipboard disconnected: {e}"));
                     writer = None;
                     retry = tokio::time::Instant::now() + RECONNECT;
                     status.ipad = Some(ipad::classify(&e));
                 }
+                Event::Recorded => status.history_rev += 1,
                 Event::Paired(r) => status.notice = Some(match r { Ok(()) => "iPad paired".into(), Err(e) => format!("Pairing failed: {e}") }),
             },
             _ = tokio::time::sleep_until(retry), if writer.is_none() && !connecting => {}
@@ -209,8 +214,21 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, to_pho
     watcher.stop();
 }
 
-fn route(hub: &mut Hub, from: Endpoint, c: Content) -> Vec<(Endpoint, Content)> {
+fn route(hub: &mut Hub, history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, from: Endpoint, c: Content) -> Vec<(Endpoint, Content)> {
+    // Our own pairing code coming back is not a copy: it stays out of history.
+    if !hub.is_pending_echo(&from, &c) && c.size() <= MAX_ITEM_BYTES { record(history, ev, &from, c.clone()); }
     hub.observe(from, c).into_iter().map(|(to, item)| (to, item.content)).collect()
+}
+
+/// Hashing, PNG encoding and the file writes happen on the blocking pool, never in this loop.
+fn record(history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, from: &Endpoint, c: Content) {
+    let (history, ev) = (history.clone(), ev.clone());
+    let from = match from { Endpoint::Windows => "This PC", Endpoint::Ipad => "iPad", Endpoint::Peer(_) => "Phone" };
+    tokio::task::spawn_blocking(move || {
+        let Some(item) = cliphistory::prepare(&c) else { return };
+        let at = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        if history.lock().unwrap().add(from, item, at) { let _ = ev.send(Event::Recorded); }
+    });
 }
 
 #[cfg(test)]

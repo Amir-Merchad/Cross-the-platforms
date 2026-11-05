@@ -75,6 +75,12 @@ impl Hub {
         q.push_back(content.hash());
     }
 
+    /// True when `observe` would swallow this as the echo of something we wrote to `from`.
+    pub fn is_pending_echo(&self, from: &Endpoint, content: &Content) -> bool {
+        let h = content.hash();
+        self.pending.get(from).is_some_and(|q| q.contains(&h))
+    }
+
     /// `from` reported a clipboard change; returns what to write where.
     pub fn observe(&mut self, from: Endpoint, content: Content) -> Vec<(Endpoint, Item)> {
         if matches!(&content, Content::Text(t) if t.is_empty()) { return Vec::new() }
@@ -136,6 +142,13 @@ pub mod codec {
 
 #[cfg(test)]
 mod tests {
+    #[test] fn a_direct_write_is_a_pending_echo() {
+        let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
+        let c = Content::Text("code".into());
+        h.written_directly(Endpoint::Ipad, &c);
+        assert!(h.is_pending_echo(&Endpoint::Ipad, &c));
+        assert!(!h.is_pending_echo(&Endpoint::Windows, &c));
+    }
     #[test] fn a_direct_write_does_not_spread() {
         let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
         let code = Content::Text("ctp-pair:{}".into());

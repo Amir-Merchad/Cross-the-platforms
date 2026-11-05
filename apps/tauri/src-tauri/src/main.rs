@@ -6,7 +6,7 @@ mod tray;
 
 use std::{path::PathBuf, sync::{Arc, Mutex}};
 
-use bridge_core::{identity::PeerKind, node::Event, settings::Settings};
+use bridge_core::{cliphistory::History, identity::PeerKind, node::Event, settings::Settings};
 use ctp_windows::{
     clipsync::{self, ClipCommand, ClipHandle, ClipStatus},
     diag,
@@ -23,6 +23,7 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub clip: Mutex<Option<ClipHandle>>,
     pub clip_status: Mutex<ClipStatus>,
+    pub history: Arc<Mutex<History>>,
     pub transfer: Mutex<Option<Arc<TransferHandle>>>,
 }
 
@@ -59,13 +60,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             engine: Mutex::new(None), status: Mutex::new(Status::default()), settings: Mutex::new(settings.clone()),
-            clip: Mutex::new(None), clip_status: Mutex::new(ClipStatus::default()), transfer: Mutex::new(None),
+            clip: Mutex::new(None), clip_status: Mutex::new(ClipStatus::default()), history: Arc::new(Mutex::new(History::open(engine::settings_path().with_file_name("history")))), transfer: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings, commands::save_settings, commands::get_status, commands::list_monitors, commands::switch_to,
             commands::get_clip_status, commands::set_clipboard_sync, commands::pair_ipad, commands::invite_to_ipad, commands::reachable_peers,
             commands::pair_invite, commands::paired_peers, commands::forget_peer, commands::queued_files, commands::send_files,
-            commands::receive_dir, commands::set_receive_dir, commands::open_receive_dir, commands::open_bluetooth_settings
+            commands::receive_dir, commands::set_receive_dir, commands::open_receive_dir, commands::open_bluetooth_settings,
+            commands::history_list, commands::history_copy, commands::history_pin, commands::history_delete, commands::history_clear, commands::history_enable
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -112,7 +114,7 @@ fn main() {
                 let handle = handle.clone();
                 Box::new(move |id, text| if let Some(t) = transfer(&handle) { t.send_clip(id, text) })
             };
-            *app.state::<AppState>().clip.lock().unwrap() = Some(clipsync::start(settings.clipboard_sync, to_phone, on_clip));
+            *app.state::<AppState>().clip.lock().unwrap() = Some(clipsync::start(settings.clipboard_sync, app.state::<AppState>().history.clone(), to_phone, on_clip));
             peers_changed(&handle);
             handle_args(&handle, &std::env::args().collect::<Vec<_>>());
             Ok(())
