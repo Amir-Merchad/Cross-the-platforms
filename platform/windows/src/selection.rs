@@ -1,7 +1,7 @@
 //! Explorer's selected files, through Shell COM, for Ctrl+Alt+F. COM calls into Explorer can hang,
-//! so this runs on its own thread, never the engine's. Logs nothing about the files.
+//! so this runs on its own thread, never the engine's, and one at a time. Logs nothing about the files.
 
-use std::{path::PathBuf, thread};
+use std::{path::PathBuf, sync::atomic::{AtomicBool, Ordering}, thread};
 
 use windows::{
     Win32::{
@@ -12,22 +12,26 @@ use windows::{
             WindowsAndMessaging::{FindWindowExW, GetForegroundWindow},
         },
     },
-    core::{Interface, Result, w},
+    core::{Interface, w},
 };
 
 pub const NOTHING_SELECTED: &str = "Nothing is selected in Explorer, so nothing was sent.";
-pub const SENDING: &str = "Sending the selected files.";
-const NOT_RUNNING: &str = "File sending is not running, so nothing was sent.";
+pub const NOT_ANSWERING: &str = "Explorer is not answering, so nothing was sent.";
 
-fn outcome(files: usize) -> &'static str { if files == 0 { NOTHING_SELECTED } else { SENDING } }
+/// A worker is asking Explorer. It stays set while Explorer hangs, so presses never pile up threads.
+static BUSY: AtomicBool = AtomicBool::new(false);
 
-/// Sends the selection of the Explorer window in front to `peer`, then says what happened.
-pub fn send_selected(peer: String, say: impl FnOnce(&'static str) + Send + 'static) {
-    let _ = thread::Builder::new().name("ctp-selection".into()).spawn(move || {
+fn answer(files: Vec<PathBuf>) -> Result<Vec<PathBuf>, &'static str> { if files.is_empty() { Err(NOTHING_SELECTED) } else { Ok(files) } }
+
+/// Finds the selection of the Explorer window in front, or a plain message saying why there is none.
+pub fn find_selected(done: impl FnOnce(Result<Vec<PathBuf>, &'static str>) + Send + 'static) {
+    if BUSY.swap(true, Ordering::SeqCst) { return done(Err(NOT_ANSWERING)) }
+    let worker = thread::Builder::new().name("ctp-selection".into()).spawn(move || {
         let files = selected_in(unsafe { GetForegroundWindow() });
-        let line = outcome(files.len());
-        say(if files.is_empty() || crate::transfer::send_files_to(peer, files) { line } else { NOT_RUNNING });
+        BUSY.store(false, Ordering::SeqCst);
+        done(answer(files));
     });
+    if worker.is_err() { BUSY.store(false, Ordering::SeqCst); }
 }
 
 /// The real files selected in Explorer window `top`. Anything else (another app, folders, items with
@@ -41,7 +45,7 @@ fn selected_in(top: HWND) -> Vec<PathBuf> {
     }
 }
 
-unsafe fn shell_selection(top: HWND) -> Result<Vec<PathBuf>> {
+unsafe fn shell_selection(top: HWND) -> windows::core::Result<Vec<PathBuf>> {
     unsafe {
         let windows: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL)?;
         // Windows 11 tabs share the top window; its first tab child is the tab in front.
@@ -73,7 +77,14 @@ mod tests {
         assert!(selected_in(HWND::default()).is_empty());
     }
     #[test] fn nothing_selected_says_so() {
-        assert_eq!(outcome(0), NOTHING_SELECTED);
-        assert_eq!(outcome(3), SENDING);
+        assert_eq!(answer(Vec::new()), Err(NOTHING_SELECTED));
+        assert_eq!(answer(vec![PathBuf::from("a")]), Ok(vec![PathBuf::from("a")]));
+    }
+    #[test] fn a_press_while_explorer_is_busy_says_so() {
+        BUSY.store(true, Ordering::SeqCst);
+        let (tx, rx) = std::sync::mpsc::channel();
+        find_selected(move |r| tx.send(r).unwrap());
+        assert_eq!(rx.try_recv(), Ok(Err(NOT_ANSWERING)), "answered at once, no second worker");
+        BUSY.store(false, Ordering::SeqCst);
     }
 }

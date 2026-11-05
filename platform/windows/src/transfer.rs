@@ -1,7 +1,7 @@
 //! File transfer service: owns the core `Node` on its own tokio runtime, separate from the input
 //! engine and the clipboard thread. Events go out through `on_event`; never logs file names.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{future::Future, path::PathBuf, sync::Mutex, time::Duration};
 
 use bridge_core::{
     identity::{Peer, PeerKind},
@@ -42,14 +42,24 @@ pub fn send_files_to(peer_id: String, paths: Vec<PathBuf>) -> bool {
     true
 }
 
-/// Sends clipboard text, then reports whether the device took it.
+/// A later answer would press paste into whatever has focus by then.
+const CLIP_ANSWER: Duration = Duration::from_secs(5);
+/// ponytail: a guess at how long the app takes to write its clipboard. The peer answers when the clip is
+/// queued, not when it is written, so a slower app pastes the old clipboard. Upgrade: a reply once it has written.
+const CLIP_SETTLE: Duration = Duration::from_millis(300);
+
+async fn answered(send: impl Future<Output = Result<(), String>>, limit: Duration, settle: Duration) -> Result<(), String> {
+    match tokio::time::timeout(limit, send).await {
+        Ok(Ok(())) => { tokio::time::sleep(settle).await; Ok(()) }
+        Ok(Err(e)) => { diag::log(format_args!("clip to phone failed: {e}")); Err(crate::clipsync::NO_ANSWER.into()) }
+        Err(_) => { diag::log("clip to phone timed out"); Err(crate::clipsync::NO_ANSWER.into()) }
+    }
+}
+
+/// Sends clipboard text, then says whether the device took it, after a short wait for its app to write it.
 pub fn send_clip_then(peer_id: String, text: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
     let Some((rt, node)) = RUNNING.lock().unwrap().clone() else { return done(Err(crate::clipsync::NO_ANSWER.into())) };
-    rt.spawn(async move {
-        let r = node.send_clip(&peer_id, text).await;
-        if let Err(e) = &r { diag::log(format_args!("clip to phone failed: {e}")) }
-        done(r.map_err(|_| crate::clipsync::NO_ANSWER.into()));
-    });
+    rt.spawn(async move { done(answered(node.send_clip(&peer_id, text), CLIP_ANSWER, CLIP_SETTLE).await) });
 }
 
 impl TransferHandle {
@@ -96,5 +106,29 @@ impl Drop for TransferHandle {
         *RUNNING.lock().unwrap() = None;
         let node = self.node.clone();
         let _ = self.rt.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(2), node.shutdown()).await });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{future::{pending, ready}, time::Instant};
+    use crate::clipsync::NO_ANSWER;
+
+    const LONG: Duration = Duration::from_secs(60);
+    const SHORT: Duration = Duration::from_millis(20);
+
+    #[tokio::test] async fn a_phone_that_never_answers_is_no_answer() { // Review I2: no late paste
+        assert_eq!(answered(pending(), SHORT, Duration::ZERO).await, Err(NO_ANSWER.to_string()));
+    }
+    #[tokio::test] async fn a_refused_clip_is_no_answer_at_once() {
+        let t = Instant::now();
+        assert_eq!(answered(ready(Err("no route".to_string())), LONG, LONG).await, Err(NO_ANSWER.to_string()));
+        assert!(t.elapsed() < SHORT * 50, "no settling wait after a failure");
+    }
+    #[tokio::test] async fn a_taken_clip_waits_for_the_app_to_write_it() { // Review I1
+        let t = Instant::now();
+        assert_eq!(answered(ready(Ok(())), LONG, SHORT).await, Ok(()));
+        assert!(t.elapsed() >= SHORT);
     }
 }

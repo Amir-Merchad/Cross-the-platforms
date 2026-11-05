@@ -215,9 +215,21 @@ test("deviceLook: a Bluetooth device reachable only for files reads Offline, bec
 test("deskLine says what a send hotkey did, and only that", () => {
   const nothing = "No device is in control, so nothing was sent.";
   expect(line({ status: stat({ notice: nothing }) })).toBe(nothing);
-  expect(line({ status: stat({ notice: "Sending the selected files.", active: "h" }) })).toBe("Your keyboard and mouse are on iPad Air. Sending the selected files.");
-  expect(line({ status: stat({ notice: "Clipboard sent and pasted.", active: "h" }) })).toBe("Your keyboard and mouse are on iPad Air. Clipboard sent and pasted.");
   expect(line({ status: stat({ notice: "Bluetooth not ready: 0x80070005" }) })).toBe("Your keyboard and mouse are on Windows.");
+});
+
+test("a send notice keeps the way out in view while a device is in control", () => {
+  const way = "Push back across the edge, or press Ctrl+Alt+Q.";
+  expect(line({ status: stat({ notice: "Sending the selected files.", active: "h" }) })).toBe(`Your keyboard and mouse are on iPad Air. Sending the selected files. ${way}`);
+  expect(line({ status: stat({ notice: "Paste pressed.", active: "h" }) })).toBe(`Your keyboard and mouse are on iPad Air. Paste pressed. ${way}`);
+});
+
+test("a send notice never hides what matters more", () => {
+  const status = stat({ notice: "Nothing is selected in Explorer, so nothing was sent." });
+  expect(line({ status, filesDown: true })).toBe("File sending did not start. Quit Bridge from the tray and open it again.");
+  expect(line({ status, rows: [moving()] })).toBe("Sending Site photos.zip to iPad Air at 84.0 MB/s.");
+  expect(line({ status, btOff: true })).toBe("Keyboard and mouse sharing is paused.");
+  expect(line({ status, selected: dev({ connected: false, reachable: false }) })).toBe("iPad Air went offline. Bridge reconnects by itself.");
 });
 
 test("deskLine never passes an engine notice through", () => {

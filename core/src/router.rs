@@ -1,7 +1,7 @@
 //! Input routing: decides when local input goes to a device and turns it into HID reports.
 //! Pure state machine; the Windows engine feeds it captured input and executes its actions.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     hid::{HeldInput, KeyboardReport, MouseReport, split_delta},
@@ -26,8 +26,10 @@ pub enum Input {
     SendClipboard,
     /// Ctrl+Alt+F: Explorer's selected files to the device in control.
     SendFiles,
-    /// The clipboard reached `host`: press its paste, Cmd+V if `cmd`, else Ctrl+V.
-    Paste { host: String, cmd: bool },
+    /// The clipboard reached `host`: press its paste, Cmd+V if `cmd`, else Ctrl+V. `at` is when the hotkey was acted on.
+    Paste { host: String, cmd: bool, at: u64 },
+    /// Explorer's selection, found for `host`: goes only if `host` is still in control.
+    Files { host: String, paths: Vec<PathBuf> },
     /// A worker's plain message.
     Say(String),
 }
@@ -44,11 +46,17 @@ pub enum Action {
     SendClipboard { host: String },
     /// Off the engine thread: send Explorer's selection to `host`.
     SendFiles { host: String },
+    /// The selection, checked against the device in control: send these to `host`.
+    SendPaths { host: String, paths: Vec<PathBuf> },
 }
 
 pub const NO_DEVICE: &str = "No device is in control, so nothing was sent.";
 pub const NOT_PRESSED: &str = "That device is no longer in control, so paste was not pressed.";
-pub const PASTED: &str = "Clipboard sent and pasted.";
+pub const TOO_LATE: &str = "That took too long, so paste was not pressed.";
+pub const LEFT_DEVICE: &str = "That device is no longer in control, so nothing was sent.";
+pub const PASTED: &str = "Paste pressed.";
+/// Older than this, whatever has focus on the device is not what the owner pressed the hotkey for.
+pub const PASTE_MAX_AGE_MS: u64 = 10_000;
 
 /// iPads paste with Cmd. A Bluetooth host reports no kind, so its name decides, as in the hub.
 pub fn pastes_with_cmd(host: &str, name: Option<&str>) -> bool {
@@ -122,7 +130,8 @@ impl Router {
                 let Some(host) = self.active().map(String::from) else { return vec![Action::Notice(NO_DEVICE.into())] };
                 vec![if input == Input::SendFiles { Action::SendFiles { host } } else { Action::SendClipboard { host } }]
             }
-            Input::Paste { host, cmd } => self.paste(host, cmd),
+            Input::Paste { host, cmd, at } => self.paste(host, cmd, now_ms.saturating_sub(at)),
+            Input::Files { host, paths } => vec![if self.active() == Some(&host) { Action::SendPaths { host, paths } } else { Action::Notice(LEFT_DEVICE.into()) }],
             Input::Say(s) => vec![Action::Notice(s)],
             _ if self.remote.is_none() => self.local(input, now_ms, connected),
             _ => self.remote_input(input, now_ms, connected),
@@ -131,8 +140,9 @@ impl Router {
 
     /// One clean press: the hotkey's Ctrl and Alt are usually still down on the device, so they are
     /// lifted for the press and whatever is held then comes back.
-    fn paste(&self, host: String, cmd: bool) -> Vec<Action> {
+    fn paste(&self, host: String, cmd: bool, age_ms: u64) -> Vec<Action> {
         let Some(r) = self.remote.as_ref().filter(|r| r.device_id == host) else { return vec![Action::Notice(NOT_PRESSED.into())] };
+        if age_ms > PASTE_MAX_AGE_MS { return vec![Action::Notice(TOO_LATE.into())] }
         let modifiers = if cmd { 0x08 } else { 0x01 };
         let bare = KeyboardReport { modifiers, keys: [0; 6] };
         let press = KeyboardReport { modifiers, keys: [0x19, 0, 0, 0, 0, 0] }; // V
@@ -232,7 +242,7 @@ impl Router {
                 out.push(Action::Keyboard { host, report });
                 out
             }
-            Input::Hotkey(_) | Input::Escape | Input::SendClipboard | Input::SendFiles | Input::Paste { .. } | Input::Say(_) => unreachable!("handled in on_input"),
+            Input::Hotkey(_) | Input::Escape | Input::SendClipboard | Input::SendFiles | Input::Paste { .. } | Input::Files { .. } | Input::Say(_) => unreachable!("handled in on_input"),
         }
     }
 
@@ -481,26 +491,40 @@ mod tests {
         assert!(!pastes_with_cmd("AA:BB", Some("Galaxy S24")));
         assert!(!pastes_with_cmd("AA:BB", None));
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
-        let a = r.on_input(Input::Paste { host: "ipad".into(), cmd: true }, 10, &up);
+        let a = r.on_input(Input::Paste { host: "ipad".into(), cmd: true, at: 0 }, 10, &up);
         assert_eq!(keyboards(&a), [(0x08, 0), (0x08, 0x19), (0x08, 0), (0, 0)]);
     }
     #[test] fn paste_uses_ctrl_elsewhere() {
         let mut r = r(); r.on_input(Input::Hotkey(2), 0, &up);
-        let a = r.on_input(Input::Paste { host: "s24".into(), cmd: false }, 10, &up);
+        let a = r.on_input(Input::Paste { host: "s24".into(), cmd: false, at: 0 }, 10, &up);
         assert_eq!(keyboards(&a), [(0x01, 0), (0x01, 0x19), (0x01, 0), (0, 0)]);
     }
     #[test] fn paste_hides_the_held_hotkey_modifiers_then_restores_them() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
         r.on_input(Input::Key { vk: 0xA2, down: true }, 5, &up); // Ctrl and Alt of the hotkey are still down on the device
         r.on_input(Input::Key { vk: 0xA4, down: true }, 5, &up);
-        let a = r.on_input(Input::Paste { host: "ipad".into(), cmd: true }, 10, &up);
+        let a = r.on_input(Input::Paste { host: "ipad".into(), cmd: true, at: 0 }, 10, &up);
         assert_eq!(keyboards(&a), [(0x08, 0), (0x08, 0x19), (0x08, 0), (0x05, 0)], "never Ctrl+Alt+Cmd+V");
     }
     #[test] fn paste_is_not_pressed_on_a_device_no_longer_in_control() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up); r.on_input(Input::Hotkey(2), 5, &up);
-        assert_eq!(r.on_input(Input::Paste { host: "ipad".into(), cmd: true }, 10, &up), vec![Action::Notice(NOT_PRESSED.into())]);
+        assert_eq!(r.on_input(Input::Paste { host: "ipad".into(), cmd: true, at: 0 }, 10, &up), vec![Action::Notice(NOT_PRESSED.into())]);
         r.on_input(Input::Hotkey(0), 15, &up);
-        assert_eq!(r.on_input(Input::Paste { host: "s24".into(), cmd: false }, 20, &up), vec![Action::Notice(NOT_PRESSED.into())]);
+        assert_eq!(r.on_input(Input::Paste { host: "s24".into(), cmd: false, at: 0 }, 20, &up), vec![Action::Notice(NOT_PRESSED.into())]);
+    }
+    #[test] fn a_late_paste_is_refused() {
+        let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
+        let late = |at| Input::Paste { host: "ipad".into(), cmd: true, at };
+        assert_eq!(r.on_input(late(0), PASTE_MAX_AGE_MS + 1, &up), vec![Action::Notice(TOO_LATE.into())]);
+        assert!(!keyboards(&r.on_input(late(1), PASTE_MAX_AGE_MS + 1, &up)).is_empty(), "at the limit it still presses");
+    }
+    #[test] fn a_selection_goes_only_to_the_device_still_in_control() {
+        let paths = vec![std::path::PathBuf::from("a")];
+        let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
+        let found = |host: &str| Input::Files { host: host.into(), paths: paths.clone() };
+        assert_eq!(r.on_input(found("ipad"), 10, &up), vec![Action::SendPaths { host: "ipad".into(), paths: paths.clone() }]);
+        r.on_input(Input::Hotkey(2), 15, &up);
+        assert_eq!(r.on_input(found("ipad"), 20, &up), vec![Action::Notice(LEFT_DEVICE.into())]);
     }
     #[test] fn a_worker_message_becomes_a_notice() {
         assert_eq!(r().on_input(Input::Say("Plain words.".into()), 0, &up), vec![Action::Notice("Plain words.".into())]);

@@ -202,14 +202,13 @@ function restingLine(status: Status): string {
 }
 
 /** What a send hotkey just did: fixed phrases only, as other engine notices can carry raw errors and ids. */
-const sendLine = (notice: string | null) => (notice && /(, so (nothing was (sent|pasted)|paste was not pressed)|^Sending the selected files|^Clipboard sent and pasted)\.$/.test(notice) ? notice : null);
+const sendLine = (notice: string | null) => (notice && /(, so (nothing was (sent|pasted)|paste was not pressed)|^Sending the selected files|^Paste pressed)\.$/.test(notice) ? notice : null);
 
 /** The top bar's line when nothing has just been said. Input comes first: that is what must never surprise. */
 export function deskLine(status: Status | null, rows: Row[], devices: Device[], selected: Device | null, btOff: boolean, filesDown: boolean): string {
   if (!status) return "";
   const said = sendLine(status.notice);
-  if (status.active) return `${restingLine(status)} ${said ?? "Push back across the edge, or press Ctrl+Alt+Q."}`;
-  if (said) return said;
+  if (status.active) return `${restingLine(status)} ${said ? `${said} ` : ""}Push back across the edge, or press Ctrl+Alt+Q.`;
   if (filesDown) return "File sending did not start. Quit Bridge from the tray and open it again.";
   const sending = rows.filter((r) => r.outgoing && r.state === "moving").at(-1);
   if (sending) {
@@ -219,7 +218,7 @@ export function deskLine(status: Status | null, rows: Row[], devices: Device[], 
   if (btOff) return "Keyboard and mouse sharing is paused.";
   if (selected?.hostId && !selected.connected && !selected.reachable) return `${selected.name} went offline. Bridge reconnects by itself.`;
   if (selected?.peerId && !selected.reachable && selected.waiting > 0) return `${selected.name} has Bridge closed. Files will wait.`;
-  return restingLine(status);
+  return said ?? restingLine(status);
 }
 
 /** The activity strip when no file is moving. */

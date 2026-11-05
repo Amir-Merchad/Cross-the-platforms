@@ -74,6 +74,11 @@ fn history_flag(format: u32) -> Result<Option<u32>, ()> {
 /// Text if there is any, else an image, else `None` (secrets, files, RTF-only, empty, or still busy).
 pub fn read() -> Option<Content> {
     if excluded() { return None }
+    // A secret copied while we read must not slip through on the first check.
+    read_formats().filter(|_| !excluded())
+}
+
+fn read_formats() -> Option<Content> {
     let mut cb = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, arboard::Clipboard::new).ok()?;
     if let Ok(t) = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get_text()) && !t.is_empty() {
         // arboard hands back just the CF_HTML fragment; plain text stays alongside it.

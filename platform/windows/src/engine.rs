@@ -10,7 +10,6 @@ use std::{
 };
 
 use bridge_core::{
-    clipboard::Endpoint,
     ipadhid::IPAD_HOST,
     keyqueue::KeyQueue,
     names::display_name,
@@ -20,7 +19,7 @@ use bridge_core::{
 use serde::Serialize;
 use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
-use crate::{capture, clipsync::{self, ClipCommand}, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral, selection};
+use crate::{capture, clipsync::{self, ClipCommand, ClipRoute, NOT_LINKED}, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral, selection, transfer};
 
 pub enum Command { Reload(Box<Settings>), SwitchTo(Option<String>), Stop }
 
@@ -150,13 +149,27 @@ fn watch_list(s: &Settings) -> Vec<String> { s.placed_ids().into_iter().filter(|
 /// The watcher's ids that are Bluetooth hosts to count.
 fn ble_ids<'a>(snap: &'a Snapshot, s: &Settings) -> Vec<&'a String> { snap.ids.iter().filter(|id| is_ble_host(id, s)).collect() }
 
-/// Where the clipboard goes for a host: the iPad's own link, else the files peer it is linked to.
-fn clip_target(host: &str, s: &Settings) -> Option<Endpoint> {
-    if sink_for(host) == Sink::Ipad { Some(Endpoint::Ipad) } else { s.device_links.get(host).cloned().map(Endpoint::Peer) }
-}
+const CLIP_NOT_RUNNING: &str = "The clipboard service is not running, so nothing was sent.";
+const FILES_NOT_RUNNING: &str = "File sending is not running, so nothing was sent.";
+const SENDING: &str = "Sending the selected files.";
+/// How long a hotkey's answer stays up: it must not cover the tray's device count for good.
+const NOTICE_FOR: Duration = Duration::from_secs(5);
 
-const NOT_LINKED: &str = "That device is not linked for files yet, so nothing was sent.";
-const NOT_RUNNING: &str = "The clipboard service is not running, so nothing was sent.";
+/// The notice that expires, so `expire` can leave a newer one alone.
+#[derive(Default)]
+struct Said(Option<(Instant, String)>);
+
+impl Said {
+    fn say(&mut self, s: &mut Status, line: impl Into<String>, now: Instant) {
+        let line = line.into();
+        s.notice = Some(line.clone());
+        self.0 = Some((now + NOTICE_FOR, line));
+    }
+    fn expire(&mut self, s: &mut Status, now: Instant) {
+        if self.0.as_ref().is_none_or(|(until, _)| now < *until) { return }
+        if self.0.take().map(|(_, line)| line) == s.notice { s.notice = None; }
+    }
+}
 
 /// Whether to run the Bluetooth peripheral at all.
 pub fn wants_peripheral(s: &Settings) -> bool { s.bluetooth_enabled }
@@ -234,6 +247,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut reported = Status::default();
     // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
     let mut keys = KeyQueue::default();
+    let mut said = Said::default();
 
     'outer: loop {
         let wait = router.next_tick_ms().map(|t| Duration::from_millis(t.saturating_sub(now_ms()))).unwrap_or(COMMAND_LATENCY).min(COMMAND_LATENCY);
@@ -388,18 +402,25 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     status.active = a;
                     status.notice = None;
                 }
-                Action::Notice(n) => status.notice = Some(n),
+                Action::Notice(n) => said.say(&mut status, n, Instant::now()),
                 Action::SendClipboard { host } => {
-                    let Some(to) = clip_target(&host, &settings) else { status.notice = Some(NOT_LINKED.into()); continue };
                     let cmd = pastes_with_cmd(&host, names.get(&host).and_then(|n| n.as_deref()));
-                    let tx = answers.clone();
-                    let done = Box::new(move |r: Result<(), String>| { let _ = tx.send(r.map_or_else(Input::Say, |()| Input::Paste { host, cmd })); });
-                    if !clipsync::request(ClipCommand::ToDevice { to, done }) { status.notice = Some(NOT_RUNNING.into()); }
+                    let route = ClipRoute { ipad: cmd, peer: settings.device_links.get(&host).cloned() };
+                    let (tx, at) = (answers.clone(), now_ms());
+                    let done = Box::new(move |r: Result<(), String>| { let _ = tx.send(r.map_or_else(Input::Say, |()| Input::Paste { host, cmd, at })); });
+                    if !clipsync::request(ClipCommand::ToDevice { route, done }) { said.say(&mut status, CLIP_NOT_RUNNING, Instant::now()); }
                 }
                 Action::SendFiles { host } => {
-                    let Some(peer) = settings.device_links.get(&host).cloned() else { status.notice = Some(NOT_LINKED.into()); continue };
+                    if !settings.device_links.contains_key(&host) { said.say(&mut status, NOT_LINKED, Instant::now()); continue }
                     let tx = answers.clone();
-                    selection::send_selected(peer, move |line| { let _ = tx.send(Input::Say(line.into())); });
+                    selection::find_selected(move |r| { let _ = tx.send(r.map_or_else(|line| Input::Say(line.into()), |paths| Input::Files { host, paths })); });
+                }
+                Action::SendPaths { host, paths } => {
+                    let line = match settings.device_links.get(&host) {
+                        None => NOT_LINKED,
+                        Some(peer) => if transfer::send_files_to(peer.clone(), paths) { SENDING } else { FILES_NOT_RUNNING },
+                    };
+                    said.say(&mut status, line, Instant::now());
                 }
             }
         }
@@ -409,6 +430,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             let (_, avg, max) = ble.peripheral().map_or((0, 0.0, 0.0), |p| p.take_stats());
             if let Some(h) = status.hosts.iter_mut().find(|h| Some(&h.id) == status.active.as_ref()) { h.notify_avg_ms = avg; h.notify_max_ms = max; }
         }
+        said.expire(&mut status, Instant::now());
         if status != reported { reported = status.clone(); on_status(status.clone()); }
     }
 
@@ -493,12 +515,20 @@ mod tests {
         assert_eq!(ble_ids(&snap, &s), ["AA:BB"], "it may still subscribe, but it is no host of ours");
     }
 
-    #[test] fn the_clipboard_goes_to_the_ipad_link_or_the_linked_peer() {
-        let mut s = Settings::default();
-        s.device_links.insert("AA:BB".into(), "peer".into());
-        assert_eq!(clip_target(IPAD_HOST, &s), Some(Endpoint::Ipad));
-        assert_eq!(clip_target("AA:BB", &s), Some(Endpoint::Peer("peer".into())));
-        assert_eq!(clip_target("CC:DD", &s), None, "no files link: nowhere to put it");
+    #[test] fn a_said_notice_goes_after_a_few_seconds() { // Review I6: the tray's device count comes back
+        let (mut said, mut s, t) = (Said::default(), Status { bluetooth_off: true, ..Status::default() }, Instant::now());
+        said.say(&mut s, "Nothing was sent.", t);
+        said.expire(&mut s, t + NOTICE_FOR - Duration::from_millis(1));
+        assert_eq!(status_line(&s), "Nothing was sent.");
+        said.expire(&mut s, t + NOTICE_FOR);
+        assert_eq!(status_line(&s), "0 device(s) connected");
+    }
+    #[test] fn expiry_leaves_a_later_notice_alone() {
+        let (mut said, mut s, t) = (Said::default(), Status::default(), Instant::now());
+        said.say(&mut s, "Nothing was sent.", t);
+        s.notice = Some("Keyboard on iPad is still connecting…".into());
+        said.expire(&mut s, t + NOTICE_FOR);
+        assert_eq!(s.notice.as_deref(), Some("Keyboard on iPad is still connecting…"));
     }
     #[test] fn a_notice_shows_while_a_device_is_in_control() { // Review Focus 5: the owner is on the device then
         let s = Status { hosts: vec![host(Some("iPad Air"))], active: Some("AA:BB".into()), notice: Some("Nothing was sent.".into()), ..Status::default() };

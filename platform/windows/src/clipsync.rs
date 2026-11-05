@@ -3,7 +3,7 @@
 
 use std::{sync::{Arc, Mutex}, thread, time::{Duration, SystemTime, UNIX_EPOCH}};
 
-use bridge_core::{cliphistory::{self, History}, clipboard::{Content, Endpoint, Hub, MAX_ITEM_BYTES}};
+use bridge_core::{cliphistory::{self, History}, clipboard::{Content, Endpoint, Hub, MAX_ITEM_BYTES}, node::MAX_CTL_LINE};
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -19,25 +19,34 @@ pub enum ClipCommand {
     /// Text a phone sent (its clipboard tile).
     FromPhone { id: String, text: String },
     /// The hotkey: the clipboard, read now, to one device. Goes even with sync off: the owner asked.
-    ToDevice { to: Endpoint, done: Done },
+    ToDevice { route: ClipRoute, done: Done },
     Stop,
 }
 
-/// `Ok` once the device has the clipboard, else a plain message.
+/// How the clipboard reaches a device: an iPad by its pasteboard link, which needs no app open there,
+/// else by the files peer it is linked to.
+pub struct ClipRoute { pub ipad: bool, pub peer: Option<String> }
+
+/// `Ok` once the device has taken the clipboard, else a plain message.
 pub type Done = Box<dyn FnOnce(Result<(), String>) + Send>;
 
 pub const NOTHING_ON_CLIPBOARD: &str = "The clipboard is empty or private, so nothing was sent.";
+pub const NOT_LINKED: &str = "That device is not linked for files yet, so nothing was sent.";
 pub const TEXT_ONLY: &str = "Phones take text only, so nothing was sent.";
+pub const IMAGE_NEEDS_LINK: &str = "Images need the iPad's clipboard link, which is down, so nothing was sent.";
 pub const TOO_LARGE: &str = "That copy is too large, so nothing was sent.";
 pub const NO_ANSWER: &str = "The device did not answer, so nothing was pasted.";
 
 /// What the hotkey may send: `read` is `None` for a secret, so a secret stops here. Devices take plain
 /// text only (`Hub::observe` does the same), and the iPad's echo must match what it was given.
-fn ready_for(to: &Endpoint, read: Option<Content>) -> Result<Content, String> {
+fn ready_for(route: &ClipRoute, ipad_up: bool, read: Option<Content>) -> Result<(Endpoint, Content), String> {
     let c = match read.ok_or(NOTHING_ON_CLIPBOARD)? { Content::Rich { text, .. } => Content::Text(text), c => c };
     if c.size() > MAX_ITEM_BYTES { return Err(TOO_LARGE.into()) }
-    if matches!(to, Endpoint::Peer(_)) && c.plain_text().is_none() { return Err(TEXT_ONLY.into()) }
-    Ok(c)
+    if route.ipad && (ipad_up || route.peer.is_none()) { return Ok((Endpoint::Ipad, c)) }
+    let id = route.peer.clone().ok_or(NOT_LINKED)?;
+    if c.plain_text().is_none() { return Err(if route.ipad { IMAGE_NEEDS_LINK } else { TEXT_ONLY }.into()) }
+    if c.size() > MAX_CTL_LINE { return Err(TOO_LARGE.into()) }
+    Ok((Endpoint::Peer(id), c))
 }
 
 /// Delivers text to a phone (the transfer service's `send_clip`). Text only: phones get no images.
@@ -80,6 +89,20 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 5 s plus 1 s per MiB: big screenshots need encoding and a slow link, small text must fail fast.
 fn write_timeout(size: usize) -> Duration { Duration::from_secs(5 + (size / (1024 * 1024)) as u64) }
+
+async fn write_ipad(w: &mut IpadWriter, c: &Content) -> Result<(), String> {
+    tokio::time::timeout(write_timeout(c.size()), w.write(c)).await.unwrap_or_else(|_| Err("iPad write timed out".into()))
+}
+
+/// After a failed write: drop the session and reconnect. Every failed write comes here, as a reply left
+/// unread would give the next write a false `Ok`.
+fn ipad_write_failed(writer: &mut Option<IpadWriter>, reader_task: &mut Option<tokio::task::JoinHandle<()>>, session: &mut u64, retry: &mut tokio::time::Instant, status: &mut ClipStatus, e: &str) {
+    *writer = None;
+    *session += 1;
+    if let Some(t) = reader_task.take() { t.abort(); }
+    *retry = tokio::time::Instant::now() + RECONNECT;
+    status.ipad = Some(ipad::classify(e));
+}
 
 pub fn start(enabled: bool, history: Arc<Mutex<History>>, to_phone: ToPhone, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
     let (tx, rx) = unbounded_channel();
@@ -148,9 +171,12 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                         None => "The iPad's clipboard is not connected yet. Use the QR code instead.".into(),
                         Some(w) => {
                             hub.written_directly(Endpoint::Ipad, &c);
-                            match tokio::time::timeout(write_timeout(c.size()), w.write(&c)).await {
-                                Ok(Ok(())) => "The code is on the iPad's clipboard. In Bridge there, tap Pair, then Paste code.".into(),
-                                _ => "Could not put the code on the iPad. Use the QR code instead.".into(),
+                            match write_ipad(w, &c).await {
+                                Ok(()) => "The code is on the iPad's clipboard. In Bridge there, tap Pair, then Paste code.".into(),
+                                Err(e) => {
+                                    ipad_write_failed(&mut writer, &mut reader_task, &mut session, &mut retry, &mut status, &e);
+                                    "Could not put the code on the iPad. Use the QR code instead.".into()
+                                }
                             }
                         }
                     });
@@ -162,19 +188,19 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                 }
                 Some(ClipCommand::Phones(ids)) => hub.set_endpoints([Endpoint::Windows, Endpoint::Ipad].into_iter().chain(ids.into_iter().map(Endpoint::Peer)).collect()),
                 Some(ClipCommand::FromPhone { id, text }) => writes = route(&mut hub, &history, &ev_tx, Endpoint::Peer(id), Content::Text(text)),
-                Some(ClipCommand::ToDevice { to, done }) => {
+                Some(ClipCommand::ToDevice { route, done }) => {
                     let read = tokio::task::spawn_blocking(clipboard::read).await.unwrap_or(None);
-                    match (ready_for(&to, read), to) {
-                        (Err(e), _) => done(Err(e)),
-                        (Ok(c), Endpoint::Peer(id)) => transfer::send_clip_then(id, c.plain_text().unwrap_or_default().to_string(), done),
-                        (Ok(c), _) => done(match writer.as_mut() {
+                    match ready_for(&route, writer.is_some(), read) {
+                        Err(e) => done(Err(e)),
+                        Ok((Endpoint::Peer(id), c)) => transfer::send_clip_then(id, c.plain_text().unwrap_or_default().to_string(), done),
+                        Ok((_, c)) => done(match writer.as_mut() {
                             None => Err(NO_ANSWER.into()),
                             Some(w) => {
                                 hub.written_directly(Endpoint::Ipad, &c);
-                                match tokio::time::timeout(write_timeout(c.size()), w.write(&c)).await {
-                                    Ok(Ok(())) => Ok(()),
-                                    _ => Err(NO_ANSWER.into()),
-                                }
+                                write_ipad(w, &c).await.map_err(|e| {
+                                    ipad_write_failed(&mut writer, &mut reader_task, &mut session, &mut retry, &mut status, &e);
+                                    NO_ANSWER.to_string()
+                                })
                             }
                         }),
                     }
@@ -229,10 +255,7 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                 Endpoint::Ipad => match writer.as_mut() {
                     // iPad down: drop it. The next copy anywhere wins anyway.
                     None => Err("iPad not connected".into()),
-                    Some(w) => match tokio::time::timeout(write_timeout(c.size()), w.write(&c)).await {
-                        Ok(r) => r,
-                        Err(_) => Err("iPad write timed out".into()),
-                    },
+                    Some(w) => write_ipad(w, &c).await,
                 },
                 Endpoint::Peer(ref id) => match &c {
                     Content::Text(t) | Content::Rich { text: t, .. } => { to_phone(id.clone(), t.clone()); Ok(()) }
@@ -243,13 +266,7 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                 Ok(()) => { status.synced += 1; diag::log(format_args!("clip {} -> {to:?} ({} bytes)", c.kind(), c.size())); }
                 Err(e) => {
                     diag::log(format_args!("clip {} -> {to:?} failed: {e}", c.kind()));
-                    if to == Endpoint::Ipad && writer.is_some() {
-                        writer = None;
-                        session += 1;
-                        if let Some(t) = reader_task.take() { t.abort(); }
-                        retry = tokio::time::Instant::now() + RECONNECT;
-                        status.ipad = Some(ipad::classify(&e));
-                    }
+                    if to == Endpoint::Ipad && writer.is_some() { ipad_write_failed(&mut writer, &mut reader_task, &mut session, &mut retry, &mut status, &e); }
                 }
             }
         }
@@ -279,23 +296,41 @@ fn record(history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, from: &End
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn ipad() -> ClipRoute { ClipRoute { ipad: true, peer: Some("p".into()) } }
+    fn phone() -> ClipRoute { ClipRoute { ipad: false, peer: Some("p".into()) } }
+    fn text(s: &str) -> Option<Content> { Some(Content::Text(s.into())) }
+    fn image() -> Content { Content::Image(bridge_core::clipboard::Image { width: 1, height: 1, rgba: vec![0; 4] }) }
+
     #[test] fn nothing_to_read_sends_nothing() { // Review Focus 1, 5: `read` gives `None` for a secret
-        assert_eq!(ready_for(&Endpoint::Ipad, None), Err(NOTHING_ON_CLIPBOARD.to_string()));
+        assert_eq!(ready_for(&ipad(), true, None), Err(NOTHING_ON_CLIPBOARD.to_string()));
     }
-    #[test] fn phones_take_text_only() {
-        let img = Content::Image(bridge_core::clipboard::Image { width: 1, height: 1, rgba: vec![0; 4] });
-        assert_eq!(ready_for(&Endpoint::Peer("p".into()), Some(img.clone())), Err(TEXT_ONLY.to_string()));
-        assert_eq!(ready_for(&Endpoint::Ipad, Some(img.clone())), Ok(img));
-        assert!(ready_for(&Endpoint::Peer("p".into()), Some(Content::Text("x".into()))).is_ok());
+    #[test] fn an_ipad_uses_its_link_first_then_its_peer() {
+        assert_eq!(ready_for(&ipad(), true, text("x")).unwrap().0, Endpoint::Ipad, "the Bridge app need not be open");
+        assert_eq!(ready_for(&ipad(), false, text("x")).unwrap().0, Endpoint::Peer("p".into()));
+        assert_eq!(ready_for(&ClipRoute { ipad: true, peer: None }, false, text("x")).unwrap().0, Endpoint::Ipad, "the write then says it did not answer");
+    }
+    #[test] fn others_use_their_peer_or_say_they_are_not_linked() {
+        assert_eq!(ready_for(&phone(), true, text("x")).unwrap().0, Endpoint::Peer("p".into()), "the iPad's link is not theirs");
+        assert_eq!(ready_for(&ClipRoute { ipad: false, peer: None }, true, text("x")), Err(NOT_LINKED.to_string()));
+    }
+    #[test] fn images_need_the_ipad_link() {
+        assert_eq!(ready_for(&phone(), true, Some(image())), Err(TEXT_ONLY.to_string()));
+        assert_eq!(ready_for(&ipad(), true, Some(image())), Ok((Endpoint::Ipad, image())));
+        assert_eq!(ready_for(&ipad(), false, Some(image())), Err(IMAGE_NEEDS_LINK.to_string()), "never \"Phones\" on an iPad");
+    }
+    #[test] fn text_over_the_peer_line_limit_says_too_large() {
+        let big = "x".repeat(MAX_CTL_LINE + 1);
+        assert_eq!(ready_for(&phone(), true, text(&big)), Err(TOO_LARGE.to_string()));
+        assert!(ready_for(&ipad(), true, text(&big)).is_ok(), "the iPad's link takes it");
     }
     #[test] fn a_formatted_copy_goes_as_its_text() { // same rule as the sync, oversize HTML included
         for html in ["<b>x</b>".to_string(), "y".repeat(MAX_ITEM_BYTES)] {
-            assert_eq!(ready_for(&Endpoint::Ipad, Some(Content::Rich { text: "x".into(), html })), Ok(Content::Text("x".into())));
+            assert_eq!(ready_for(&ipad(), true, Some(Content::Rich { text: "x".into(), html })), Ok((Endpoint::Ipad, Content::Text("x".into()))));
         }
     }
     #[test] fn a_copy_over_the_limit_is_not_sent() { // Review Focus 3
-        let big = Content::Text("x".repeat(MAX_ITEM_BYTES + 1));
-        assert_eq!(ready_for(&Endpoint::Ipad, Some(big)), Err(TOO_LARGE.to_string()));
+        let big = "x".repeat(MAX_ITEM_BYTES + 1);
+        assert_eq!(ready_for(&ipad(), true, text(&big)), Err(TOO_LARGE.to_string()));
     }
     #[test] fn write_timeout_grows_with_size() { // Final review I5
         assert_eq!(write_timeout(10), Duration::from_secs(5));

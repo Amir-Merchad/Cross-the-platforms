@@ -42,7 +42,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a send to an iPad waits for it before queueing instead.
 const IPAD_PROBE: Duration = Duration::from_secs(5);
 /// Big enough for a long clipboard text, small enough that a peer can't exhaust memory.
-const MAX_CTL_LINE: usize = 4 << 20;
+pub const MAX_CTL_LINE: usize = 4 << 20;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileMeta { pub name: String, pub size: u64 }
