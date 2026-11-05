@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import VisionKit
+import CoreImage.CIFilterBuiltins
 import BridgeKit
 
 struct PairSheet: View {
@@ -10,10 +11,20 @@ struct PairSheet: View {
     @Environment(\.palette) private var p
     @State private var available = false
     @State private var busy = false
+    @State private var showCode = false
 
     var body: some View {
         VStack(spacing: 14) {
-            if available {
+            if showCode {
+                if let qr = m.invite(), let img = qrImage(qr) {
+                    Image(uiImage: img).interpolation(.none).resizable().aspectRatio(1, contentMode: .fit).frame(maxWidth: 320)
+                        .padding(16).background(RoundedRectangle(cornerRadius: 22).fill(.white))
+                    Text("Scan this on your phone or another iPad, in Bridge, Pair. Works once, for 5 minutes.")
+                        .font(.rHeading).foregroundStyle(p.ink).multilineTextAlignment(.center).frame(maxWidth: 440)
+                } else {
+                    Text("Bridge is still starting. Try again in a moment.").foregroundStyle(p.muted)
+                }
+            } else if available {
                 ScanView { code in join(code) }
                     .frame(maxWidth: 440).aspectRatio(1, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -27,8 +38,12 @@ struct PairSheet: View {
             if let n = m.notice {
                 Text(n).font(.rBodyStrong).foregroundStyle(p.warnInk).multilineTextAlignment(.center)
             }
-            Button("Paste code") { join(UIPasteboard.general.string ?? "") }
-                .buttonStyle(LipButtonStyle()).frame(maxWidth: 280)
+            if !showCode {
+                Button("Paste code") { join(UIPasteboard.general.string ?? "") }
+                    .buttonStyle(LipButtonStyle()).frame(maxWidth: 280)
+            }
+            Button(showCode ? "Scan a code instead" : "Show my code for another device") { showCode.toggle() }
+                .buttonStyle(LipButtonStyle(primary: false)).frame(maxWidth: 280)
             Button("Cancel") { dismiss() }.font(.rBodyStrong.weight(.medium)).foregroundStyle(p.muted).frame(minHeight: 44)
         }
         .padding(40)
@@ -50,6 +65,16 @@ struct PairSheet: View {
             busy = false
         }
     }
+}
+
+/// A crisp QR code for a pairing code, drawn by Core Image.
+func qrImage(_ text: String) -> UIImage? {
+    let f = CIFilter.qrCodeGenerator()
+    f.message = Data(text.utf8)
+    f.correctionLevel = "L"
+    guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
+          let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+    return UIImage(cgImage: cg)
 }
 
 struct ScanView: UIViewControllerRepresentable {

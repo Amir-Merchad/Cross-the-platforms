@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{sync::{mpsc, oneshot}, task::JoinHandle, time::timeout};
 
 use crate::{
+    clipmesh::ClipMesh,
     bulk::{self, BulkListener},
     identity::{PairedPeers, Peer, PeerKind, load_or_create_key},
     outbox::Outbox,
@@ -100,6 +101,9 @@ pub(crate) struct Inner {
     flushing: Mutex<HashSet<String>>,
     /// When each peer last sent us a control message or answered one of ours.
     heard: Mutex<HashMap<String, Instant>>,
+    /// Direct clipboard between all devices: drops duplicates and echoes (`clipmesh`).
+    mesh: Mutex<ClipMesh>,
+    started: Instant,
 }
 
 type IrohStream = (Connection, SendStream, RecvStream);
@@ -126,6 +130,7 @@ impl Node {
             pending: Mutex::new(None), events: tx, tasks: Mutex::new(Vec::new()),
             waiting: Mutex::new(HashMap::new()), test_bulk_addrs: Mutex::new(None),
             outbox: Mutex::new(Outbox::load(&cfg.data_dir.join("outbox.json"))), flushing: Mutex::new(HashSet::new()), heard: Mutex::new(HashMap::new()),
+            mesh: Mutex::new(ClipMesh::default()), started: Instant::now(),
         });
         let node = Node { inner: inner.clone() };
         let accept = tokio::spawn(accept_loop(ep, Arc::downgrade(&inner)));
@@ -190,6 +195,20 @@ impl Node {
 
     pub async fn send_clip(&self, peer_id: &str, text: String) -> Result<(), String> {
         self.send_ctl(peer_id, &[Ctl::Clip { text }]).await.map(|_| ())
+    }
+
+    /// This device's clipboard changed: send it straight to every paired device, unless it is an echo of
+    /// a clip just received or the same copy again. Returns how many devices took it; unreachable ones
+    /// are skipped (a clipboard is not queued: the next copy anywhere wins anyway).
+    pub async fn share_clip(&self, text: String) -> usize {
+        let now = self.inner.started.elapsed().as_millis() as u64;
+        if !self.inner.mesh.lock().unwrap().on_local(&text, now) { return 0 }
+        let mut set = tokio::task::JoinSet::new();
+        for p in self.peers() {
+            let (node, text) = (self.clone(), text.clone());
+            set.spawn(async move { node.send_clip(&p.id, text).await.is_ok() });
+        }
+        set.join_all().await.into_iter().filter(|ok| *ok).count()
     }
 
     /// Offers `paths` to a paired device and streams them once it accepts: LAN TLS first, iroh if
@@ -441,7 +460,12 @@ impl Node {
                 self.inner.tasks.lock().unwrap().push(task);
                 None
             }
-            Ctl::Clip { text } => { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; None }
+            Ctl::Clip { text } => {
+                let now = self.inner.started.elapsed().as_millis() as u64;
+                let fresh = self.inner.mesh.lock().unwrap().on_remote(&text, now);
+                if fresh { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; }
+                None
+            }
             Ctl::Offer { id, files } => Some(self.accept_offer(from, id, files).await),
             Ctl::Accept { .. } | Ctl::Reject { .. } => None,
         }

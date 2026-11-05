@@ -12,6 +12,7 @@ pub mod settings;
 pub mod router;
 pub mod keyqueue;
 pub mod clipboard;
+pub mod clipmesh;
 pub mod identity;
 pub mod pairing;
 pub mod node;

@@ -68,6 +68,10 @@ pub trait NodeEvents: Send + Sync { fn on_event(&self, e: FfiEvent); }
 #[derive(uniffi::Object)]
 pub struct FfiNode { node: Node }
 
+/// A pairing code to show as a QR code, so phones and iPads can pair with each other, not only with the PC.
+#[derive(uniffi::Record)]
+pub struct FfiInvite { pub qr: String, pub expires_in_s: u64 }
+
 #[uniffi::export(async_runtime = "tokio")]
 pub async fn start_node(data_dir: String, receive_dir: String, name: String, kind: PeerKind, events: Box<dyn NodeEvents>) -> Result<Arc<FfiNode>, FfiError> {
     let (node, mut rx) = Node::start(NodeConfig { data_dir: data_dir.into(), receive_dir: receive_dir.into(), me: Peer { id: String::new(), name, kind } }).await?;
@@ -92,5 +96,10 @@ impl FfiNode {
     pub async fn send_clip(&self, peer_id: String, text: String) -> Result<(), FfiError> {
         Ok(self.node.send_clip(&peer_id, text).await?)
     }
+    /// A one-time pairing code (5 minutes) that another of the owner's devices scans with `join`.
+    pub fn invite(&self) -> FfiInvite { FfiInvite { qr: self.node.invite().to_qr_text(), expires_in_s: 300 } }
+    /// This device's clipboard changed: straight to every paired device, echoes and repeats dropped.
+    /// Returns how many devices took it.
+    pub async fn share_clip(&self, text: String) -> u32 { self.node.share_clip(text).await as u32 }
     pub async fn shutdown(&self) { self.node.shutdown().await }
 }

@@ -154,7 +154,7 @@ class App : Application(), NodeEvents {
     fun toast(s: String) = scope.launch(Dispatchers.Main) { Toast.makeText(this@App, s, Toast.LENGTH_SHORT).show() }
 
     /**
-     * Sends the clipboard text to `target`, or to every paired PC when none is given (the tile). Android only lets the foreground app read the clipboard,
+     * Sends the clipboard text to `target`, or to every paired device when none is given (the tile). Android only lets the foreground app read the clipboard,
      * so call this from a focused activity (ClipActivity for the tile, MainActivity for the button). Never logs the text.
      */
     fun sendClipboard(ctx: Context, target: FfiPeer? = null) {
@@ -165,11 +165,16 @@ class App : Application(), NodeEvents {
             val t0 = System.nanoTime()
             try {
                 val node = node.filterNotNull().first()
-                val pcs = target?.let { listOf(it) } ?: pcs(node.peers())
-                if (pcs.isEmpty()) toast("Pair with your PC first")
-                pcs.forEach { node.sendClip(it.id, text) }
-                android.util.Log.i(TAG, "clip sent to ${pcs.size} PC(s), ${text.length} chars, ${(System.nanoTime() - t0) / 1_000_000} ms")
-                if (pcs.isNotEmpty()) toast("Clipboard sent")
+                if (target != null) {
+                    node.sendClip(target.id, text)
+                    toast("Clipboard sent")
+                } else {
+                    // The tile: straight to every paired device (PCs, other phones, iPads); repeats and echoes dropped in core.
+                    if (node.peers().isEmpty()) { toast("Pair with a device first"); return@launch }
+                    val n = node.shareClip(text).toInt()
+                    android.util.Log.i(TAG, "clip shared with $n device(s), ${text.length} chars, ${(System.nanoTime() - t0) / 1_000_000} ms")
+                    toast(if (n > 0) "Clipboard sent" else "Nothing new to send, or no device answered")
+                }
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "clip send failed after ${(System.nanoTime() - t0) / 1_000_000} ms: ${e.javaClass.simpleName}")
                 toast("Clipboard did not send. Open Bridge on the PC and try again.")

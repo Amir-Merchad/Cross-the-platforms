@@ -326,3 +326,23 @@ async fn receiver_failure_after_the_last_byte_is_failed_not_sent() { // base UI 
     let e = wait_for(&mut brx, |e| matches!(e, Event::Failed { .. }) || matches!(e, Event::Progress { done, total, .. } if done == total)).await;
     assert!(matches!(e, Event::Failed { .. }), "{e:?}");
 }
+
+/// Roadmap step 8: a phone and an iPad pair with each other and share the clipboard with no PC in between.
+#[tokio::test]
+async fn phone_and_ipad_share_the_clipboard_directly() {
+    let (phone, mut prx, _pd) = node("S24+", PeerKind::Android).await;
+    let (ipad, mut irx, _id) = node("iPad Air", PeerKind::Ipad).await;
+    // The phone shows the code, the iPad scans it: no Windows device involved.
+    let peer = ipad.join(&phone.invite()).await.unwrap();
+    assert_eq!(peer.id, phone.id());
+    wait_for(&mut prx, |e| matches!(e, Event::Paired(p) if p.name == "iPad Air")).await;
+
+    assert_eq!(phone.share_clip("chapter 3 summary".into()).await, 1);
+    wait_for(&mut irx, |e| matches!(e, Event::Clip { text, .. } if text == "chapter 3 summary")).await;
+    assert_eq!(phone.share_clip("chapter 3 summary".into()).await, 0, "the same copy again is not resent");
+    // The iPad writing it to its clipboard shows up as a local change: that echo must not come back.
+    assert_eq!(ipad.share_clip("chapter 3 summary".into()).await, 0);
+    // A real new copy on the iPad does go to the phone.
+    assert_eq!(ipad.share_clip("formula".into()).await, 1);
+    wait_for(&mut prx, |e| matches!(e, Event::Clip { text, .. } if text == "formula")).await;
+}

@@ -111,7 +111,12 @@ import BridgeKit
         case .incoming(_, let files): life.transferStarted(files: files.count)
         case .received: run(life.fileFinished())
         case .failed: run(life.transferFailed())
-        case .progress, .clip, .queued, .started, .requeued: break
+        case .clip(let from, let text):
+            // Straight from another of the owner's devices (the node already dropped repeats and echoes).
+            // The PC's own sync writes the pasteboard by itself; this is for phones and other iPads.
+            UIPasteboard.general.string = text
+            say(success: "Clipboard from \(displayName(peers.first { $0.id == from }?.name))")
+        case .progress, .queued, .started, .requeued: break
         }
     }
 
@@ -217,12 +222,15 @@ import BridgeKit
         notice = nil
         success = nil
         guard let text = UIPasteboard.general.string, !text.isEmpty else { notice = "Clipboard is empty"; return }
-        withPC { pc in
-            guard let node = self.node else { return }
-            Task {
-                do { try await node.sendClip(peerId: pc.id, text: text); self.say(success: "Clipboard sent") }
-                catch { self.notice = "Could not reach the PC. Open Bridge on the PC and try again." }
-            }
+        guard let node, !peers.isEmpty else { notice = "Pair with a device to send"; return }
+        // To every paired device at once: the PC, phones, other iPads.
+        Task {
+            let n = await node.shareClip(text: text)
+            if n > 0 { self.say(success: n == 1 ? "Clipboard sent" : "Clipboard sent to \(n) devices") }
+            else { self.notice = "Nothing new to send, or no device answered. Open Bridge on the other device and try again." }
         }
     }
+
+    /// A one-time pairing code for another phone or iPad to scan. Nil while Bridge starts.
+    func invite() -> String? { node?.invite().qr }
 }
