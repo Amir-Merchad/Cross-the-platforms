@@ -21,14 +21,19 @@ pub const NOT_ANSWERING: &str = "Explorer is not answering, so nothing was sent.
 /// A worker is asking Explorer. It stays set while Explorer hangs, so presses never pile up threads.
 static BUSY: AtomicBool = AtomicBool::new(false);
 
+/// Clears `BUSY` however the worker ends, so a panic cannot leave every later press "not answering".
+struct Free;
+impl Drop for Free { fn drop(&mut self) { BUSY.store(false, Ordering::SeqCst); } }
+
 fn answer(files: Vec<PathBuf>) -> Result<Vec<PathBuf>, &'static str> { if files.is_empty() { Err(NOTHING_SELECTED) } else { Ok(files) } }
 
 /// Finds the selection of the Explorer window in front, or a plain message saying why there is none.
 pub fn find_selected(done: impl FnOnce(Result<Vec<PathBuf>, &'static str>) + Send + 'static) {
     if BUSY.swap(true, Ordering::SeqCst) { return done(Err(NOT_ANSWERING)) }
     let worker = thread::Builder::new().name("ctp-selection".into()).spawn(move || {
+        let free = Free;
         let files = selected_in(unsafe { GetForegroundWindow() });
-        BUSY.store(false, Ordering::SeqCst);
+        drop(free);
         done(answer(files));
     });
     if worker.is_err() { BUSY.store(false, Ordering::SeqCst); }

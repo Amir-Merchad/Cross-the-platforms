@@ -209,6 +209,7 @@ export function deskLine(status: Status | null, rows: Row[], devices: Device[], 
   if (!status) return "";
   const said = sendLine(status.notice);
   if (status.active) return `${restingLine(status)} ${said ? `${said} ` : ""}Push back across the edge, or press Ctrl+Alt+Q.`;
+  if (said) return said; // Answers a hotkey and expires in seconds, so it can go above lasting states.
   if (filesDown) return "File sending did not start. Quit Bridge from the tray and open it again.";
   const sending = rows.filter((r) => r.outgoing && r.state === "moving").at(-1);
   if (sending) {
@@ -218,7 +219,7 @@ export function deskLine(status: Status | null, rows: Row[], devices: Device[], 
   if (btOff) return "Keyboard and mouse sharing is paused.";
   if (selected?.hostId && !selected.connected && !selected.reachable) return `${selected.name} went offline. Bridge reconnects by itself.`;
   if (selected?.peerId && !selected.reachable && selected.waiting > 0) return `${selected.name} has Bridge closed. Files will wait.`;
-  return said ?? restingLine(status);
+  return restingLine(status);
 }
 
 /** The activity strip when no file is moving. */

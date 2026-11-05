@@ -224,12 +224,13 @@ test("a send notice keeps the way out in view while a device is in control", () 
   expect(line({ status: stat({ notice: "Paste pressed.", active: "h" }) })).toBe(`Your keyboard and mouse are on iPad Air. Paste pressed. ${way}`);
 });
 
-test("a send notice never hides what matters more", () => {
-  const status = stat({ notice: "Nothing is selected in Explorer, so nothing was sent." });
-  expect(line({ status, filesDown: true })).toBe("File sending did not start. Quit Bridge from the tray and open it again.");
-  expect(line({ status, rows: [moving()] })).toBe("Sending Site photos.zip to iPad Air at 84.0 MB/s.");
-  expect(line({ status, btOff: true })).toBe("Keyboard and mouse sharing is paused.");
-  expect(line({ status, selected: dev({ connected: false, reachable: false }) })).toBe("iPad Air went offline. Bridge reconnects by itself.");
+test("a send notice answers the hotkey over lasting states", () => {
+  const said = "Nothing is selected in Explorer, so nothing was sent.";
+  const status = stat({ notice: said });
+  expect(line({ status, filesDown: true })).toBe(said);
+  expect(line({ status, rows: [moving()] })).toBe(said);
+  expect(line({ status, btOff: true })).toBe(said);
+  expect(line({ status, selected: dev({ connected: false, reachable: false }) })).toBe(said);
 });
 
 test("deskLine never passes an engine notice through", () => {
