@@ -3,11 +3,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import HoldButton from "@/components/HoldButton";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { DEFAULT_CALIBRATION, DEFAULT_WIDTH, switchTo, type Calibration } from "@/lib/api";
 import { linkChoices, type AddKind } from "@/lib/addflow";
 import { hotkeyNumber, placementChange, screenName, whereLine } from "@/lib/desk";
 import { placedIds } from "@/lib/space";
-import { DEFAULT_COLOURS, forgetDevice, panelLines, type Device } from "@/lib/devices";
+import { DEFAULT_COLOURS, IPAD_HOST, forgetDevice, panelLines, type Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { forgetPeer, sendFiles } from "@/lib/transfer";
 import { cn } from "@/lib/utils";
@@ -109,6 +110,18 @@ function Panel({ d }: { d: Device }) {
       {host && (
         <>
           <Tune label="Pointer speed" value={cal.gain} show={(v) => `${v.toFixed(2)}×`} min={0.5} max={2} step={0.05} onCommit={(gain) => setCal({ gain })} />
+          {host === IPAD_HOST && (
+            <div>
+              <label className="flex items-center justify-between gap-3">
+                German keyboard
+                <Switch
+                  size="lg" checked={settings.keyboard_layout?.[host] === "german-to-us"}
+                  onCheckedChange={(on) => update((s) => ({ ...s, keyboard_layout: { ...s.keyboard_layout, [host]: on ? "german-to-us" : "same" } }))}
+                />
+              </label>
+              <p className="mt-1 text-[13px] text-muted-foreground">Turn this on if the iPad is set to a US keyboard and Windows is too. Leave it off if the iPad is set to German.</p>
+            </div>
+          )}
           <details>
             <summary className="cursor-pointer text-muted-foreground">Fine tuning</summary>
             <div className="mt-3 flex flex-col gap-3">

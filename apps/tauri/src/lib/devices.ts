@@ -146,6 +146,7 @@ export function forgetDevice(settings: Settings, d: Device): Settings {
     layout: (settings.layout ?? []).filter((p) => p.device_id !== d.hostId),
     device_links: without(settings.device_links, (k, v) => k === d.hostId || v === d.peerId),
     device_colors: without(settings.device_colors, (k) => k === d.hostId || k === d.peerId),
+    keyboard_layout: without(settings.keyboard_layout ?? {}, (k) => k === d.hostId),
   };
 }
 

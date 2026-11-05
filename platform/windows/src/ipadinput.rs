@@ -19,13 +19,19 @@ use idevice::{
     tcp::handle::{AdapterHandle, StreamHandle},
     xpc::XPCObject,
 };
+use bridge_core::keylayout::KeyboardLayout;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use tokio::{sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, time::timeout};
 
 use crate::{clipsync::{self, ClipCommand}, diag, ipad::{self, IpadStatus}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum IpadInputState { NotSetUp, Connecting, Ready, OnCall, NeedsUsb, NotFound, NeedsDeveloperMode }
+
+/// Outlives a session, and a command would be dropped while the link is down. Read at each key report.
+static GERMAN_TO_US: AtomicBool = AtomicBool::new(false);
+pub fn set_layout(layout: KeyboardLayout) { GERMAN_TO_US.store(layout == KeyboardLayout::GermanToUs, Relaxed) }
 
 pub enum IpadCommand { Mouse(MouseReport), Keyboard(KeyboardReport), Enter, Leave, Screenshot(Answer), Stop }
 
@@ -359,6 +365,8 @@ impl Session {
             Out::Enter => Ok(()),
             Out::Leave => self.release().await,
             Out::Keys(r) => {
+                let layout = if GERMAN_TO_US.load(Relaxed) { KeyboardLayout::GermanToUs } else { KeyboardLayout::Same };
+                for ev in self.keys.set_layout(layout) { self.key(ev).await? }
                 for ev in self.keys.apply(r) { self.key(ev).await? }
                 Ok(())
             }

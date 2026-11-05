@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{layout::{Attachment, validate}, space::{self, Placement}};
+use crate::{keylayout::KeyboardLayout, layout::{Attachment, validate}, space::{self, Placement}};
 
 /// Per-device return-edge tuning (see `edge::EdgeTracker`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -45,11 +45,14 @@ pub struct Settings {
     pub retired_names: BTreeMap<String, String>,
     /// Free layout: device rectangles in the desktop space. Empty means "made from `attachments`".
     pub layout: Vec<Placement>,
+    /// Host id → `"same"` or `"german-to-us"`. A string, so a newer build's value can't make this file look corrupt.
+    #[serde(default)]
+    pub keyboard_layout: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new(), kept_hosts: Vec::new(), retired_names: BTreeMap::new(), layout: Vec::new() }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new(), kept_hosts: Vec::new(), retired_names: BTreeMap::new(), layout: Vec::new(), keyboard_layout: BTreeMap::new() }
     }
 }
 
@@ -67,6 +70,7 @@ impl Settings {
     }
 
     pub fn calibration_for(&self, id: &str) -> Calibration { self.calibration.get(id).cloned().unwrap_or_default() }
+    pub fn keyboard_layout_for(&self, id: &str) -> KeyboardLayout { self.keyboard_layout.get(id).map_or(KeyboardLayout::Same, |l| KeyboardLayout::parse(l)) }
     pub fn width_for(&self, id: &str) -> f64 { self.remote_width.get(id).copied().unwrap_or(DEFAULT_WIDTH) }
 
     /// Missing file → defaults; corrupt/invalid → backed up as `.bak`, defaults. Any other read
@@ -182,6 +186,23 @@ mod tests {
         let r = crate::layout::Rect { left: 0, top: 0, right: 10, bottom: 10 };
         let s = Settings { layout: vec![Placement { device_id: "a".into(), rect: r }, Placement { device_id: "b".into(), rect: r }], ..Settings::default() };
         assert!(s.save(&p).is_err());
+    }
+    #[test] fn keyboard_layout_is_per_device_and_defaults_to_same() {
+        let s = Settings { keyboard_layout: [("ipad-wifi".to_string(), "german-to-us".to_string())].into(), ..Settings::default() };
+        assert_eq!(s.keyboard_layout_for("ipad-wifi"), KeyboardLayout::GermanToUs);
+        assert_eq!(s.keyboard_layout_for("s24"), KeyboardLayout::Same);
+    }
+    #[test] fn older_file_has_no_keyboard_layout() {
+        let d = tempdir().unwrap(); let p = d.path().join("s.json");
+        std::fs::write(&p, r#"{"version":1,"entry_hold_ms":500}"#).unwrap();
+        assert_eq!(Settings::load(&p).keyboard_layout_for("ipad-wifi"), KeyboardLayout::Same);
+    }
+    #[test] fn a_layout_from_a_newer_build_keeps_the_file_and_changes_nothing() {
+        let d = tempdir().unwrap(); let p = d.path().join("s.json");
+        std::fs::write(&p, r#"{"version":1,"entry_hold_ms":500,"keyboard_layout":{"ipad-wifi":"french-to-us"}}"#).unwrap();
+        let s = Settings::load(&p);
+        assert_eq!(s.entry_hold_ms, 500, "not treated as corrupt");
+        assert_eq!(s.keyboard_layout_for("ipad-wifi"), KeyboardLayout::Same);
     }
     #[test] fn clipboard_sync_defaults_on() { assert!(Settings::default().clipboard_sync); }
     #[test] fn invalid_layout_is_not_saved() {

@@ -232,6 +232,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut router = Router::new(settings.clone(), monitors::list());
     router.set_interval(IPAD_HOST, IPAD_INTERVAL_MS);
     capture::set_hotkey_count(settings.placed_ids().len() as u8);
+    ipadinput::set_layout(settings.keyboard_layout_for(IPAD_HOST));
     let clock = Instant::now();
     let now_ms = || clock.elapsed().as_millis() as u64;
 
@@ -279,6 +280,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                         status.bluetooth_off = !wants_peripheral(&s);
                     }
                     capture::set_hotkey_count(s.placed_ids().len() as u8);
+                    ipadinput::set_layout(s.keyboard_layout_for(IPAD_HOST));
                     router.set_settings(s.clone());
                     *watched.lock().unwrap() = watch_list(&s);
                     settings = s;

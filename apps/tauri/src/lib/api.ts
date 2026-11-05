@@ -25,6 +25,8 @@ export interface Settings {
   retired_names: Record<string, string>;
   /** Free layout: device rectangles in desktop pixels. Empty means "made from attachments". */
   layout: Placement[];
+  /** Host id → "same" or "german-to-us". Only the Wi-Fi iPad reads it; absent means "same". */
+  keyboard_layout?: Record<string, string>;
 }
 export interface Placement { device_id: string; rect: Rect }
 export interface Rect { left: number; top: number; right: number; bottom: number }

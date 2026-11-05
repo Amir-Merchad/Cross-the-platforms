@@ -1,6 +1,7 @@
 pub mod hid;
 pub mod androidkeys;
 pub mod ipadhid;
+pub mod keylayout;
 pub mod edge;
 pub mod names;
 pub mod transfer;

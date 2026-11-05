@@ -1,7 +1,7 @@
 //! Reports for the iPad's UniversalHID daemon over Wi-Fi, with no Bluetooth. The daemon ignores
 //! descriptors and picks a fixed format by report ID: see `docs/spikes/ipad-pointer.md`.
 
-use crate::hid::{KeyboardReport, MouseReport};
+use crate::{hid::{KeyboardReport, MouseReport}, keylayout::{KeyboardLayout, Press, german_to_us}};
 
 /// The one Wi-Fi iPad's host id, beside the Bluetooth host ids.
 pub const IPAD_HOST: &str = "ipad-wifi";
@@ -74,7 +74,12 @@ pub enum KeyEvent { Down(u8), Up(u8) }
 /// The iPad takes key down and up events, and the router sends snapshots of held keys. This compares
 /// snapshots. Modifier bits become usages `0xE0` to `0xE7`.
 #[derive(Default)]
-pub struct KeyTranslator { held: Vec<u8> }
+pub struct KeyTranslator {
+    held: Vec<u8>,
+    layout: KeyboardLayout,
+    /// With a layout: each key down on the PC, and the usage it holds on the iPad, if any.
+    pressed: Vec<(u8, Option<u8>)>,
+}
 
 fn usages(r: &KeyboardReport) -> Vec<u8> {
     let mods = (0..8).filter(|b| r.modifiers & (1 << b) != 0).map(|b| 0xE0 + b);
@@ -87,6 +92,7 @@ fn usages(r: &KeyboardReport) -> Vec<u8> {
 impl KeyTranslator {
     /// Releases first, then presses: modifiers before keys, so Shift is down before the letter.
     pub fn apply(&mut self, r: &KeyboardReport) -> Vec<KeyEvent> {
+        if self.layout == KeyboardLayout::GermanToUs { return self.apply_german(r) }
         let now = usages(r);
         let mut out: Vec<KeyEvent> = self.held.iter().filter(|u| !now.contains(u)).map(|u| KeyEvent::Up(*u)).collect();
         out.extend(now.iter().filter(|u| !self.held.contains(u)).map(|u| KeyEvent::Down(*u)));
@@ -94,8 +100,60 @@ impl KeyTranslator {
         out
     }
 
+    /// A sequence runs whole inside one call, so nothing the user lets go of can land in the middle
+    /// of it. Keys it would run over go up first, and the user's modifiers come back after it.
+    fn apply_german(&mut self, r: &KeyboardReport) -> Vec<KeyEvent> {
+        let now: Vec<u8> = usages(r).into_iter().filter(|u| *u < 0xE0).collect();
+        let mut out = vec![];
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pressed).into_iter().partition(|(k, _)| now.contains(k));
+        self.pressed = kept;
+        for u in gone.into_iter().filter_map(|(_, made)| made) { self.lift(u, &mut out) }
+        self.set_modifiers(r.modifiers, &mut out);
+        for k in now.into_iter().filter(|k| !self.pressed.iter().any(|(p, _)| p == k)).collect::<Vec<_>>() {
+            match german_to_us(k, r.modifiers) {
+                Press::Hold(u) => {
+                    self.press(u, &mut out);
+                    self.pressed.push((k, Some(u)));
+                }
+                Press::Tap(chords) => {
+                    for (_, made) in &mut self.pressed { if let Some(u) = made.take() { self.held.retain(|h| *h != u); out.push(KeyEvent::Up(u)) } }
+                    for (modifiers, u) in chords {
+                        self.set_modifiers(*modifiers, &mut out);
+                        self.press(*u, &mut out);
+                        self.lift(*u, &mut out);
+                    }
+                    self.set_modifiers(r.modifiers, &mut out);
+                    self.pressed.push((k, None));
+                }
+            }
+        }
+        out
+    }
+
+    fn press(&mut self, u: u8, out: &mut Vec<KeyEvent>) {
+        if !self.held.contains(&u) { self.held.push(u); out.push(KeyEvent::Down(u)) }
+    }
+
+    fn lift(&mut self, u: u8, out: &mut Vec<KeyEvent>) {
+        if self.held.contains(&u) { self.held.retain(|h| *h != u); out.push(KeyEvent::Up(u)) }
+    }
+
+    fn set_modifiers(&mut self, modifiers: u8, out: &mut Vec<KeyEvent>) {
+        let want = usages(&KeyboardReport { modifiers, keys: [0; 6] });
+        for u in self.held.clone() { if u >= 0xE0 && !want.contains(&u) { self.lift(u, out) } }
+        for u in want { self.press(u, out) }
+    }
+
+    /// A new layout starts clean: what the old one holds goes up now, or its release would be lost.
+    pub fn set_layout(&mut self, layout: KeyboardLayout) -> Vec<KeyEvent> {
+        if layout == self.layout { return vec![] }
+        self.layout = layout;
+        self.release_all()
+    }
+
     /// Lets go of everything held, keys before modifiers. A second call yields nothing.
     pub fn release_all(&mut self) -> Vec<KeyEvent> {
+        self.pressed.clear();
         let mut held = std::mem::take(&mut self.held);
         held.sort_by_key(|u| (*u >= 0xE0, *u));
         held.into_iter().map(KeyEvent::Up).collect()

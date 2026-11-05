@@ -83,6 +83,13 @@ test("forgetDevice removes attachment, link and colour", () => {
   expect(out.device_colors).toEqual({ other: "#222222" });
 });
 
+test("forgetDevice drops the keyboard layout, and only that device's", () => {
+  const s = settings({ keyboard_layout: { [IPAD_HOST]: "german-to-us", other: "german-to-us" } });
+  const [d] = buildDevices(status([host(IPAD_HOST, "iPad")]), [], s, [], {}, mon);
+  expect(forgetDevice(s, d).keyboard_layout).toEqual({ other: "german-to-us" });
+  expect(forgetDevice(settings(), d).keyboard_layout).toEqual({});
+});
+
 const dev = (o: Partial<Device> = {}): Device => ({
   key: "h", hostId: "h", peerId: "p", name: "iPad Air", kind: "Ipad", connected: true, reachable: true, waiting: 0,
   placement: { device_id: "h", monitor_id: "M1", edge: "Right" }, missingScreen: false, colour: "#FF7A4D", beside: null, ...o,
