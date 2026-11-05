@@ -47,7 +47,7 @@ export const openBluetoothSettings = () => invoke<void>("open_bluetooth_settings
 export const onStatus = (cb: (s: Status) => void): Promise<UnlistenFn> => listen<Status>("status", (e) => cb(e.payload));
 
 export type IpadStatus = "NotPaired" | "Connecting" | { Connected: { wifi: boolean } } | { Unavailable: string };
-export interface ClipStatus { enabled: boolean; ipad: IpadStatus | null; synced: number; skipped_too_large: number; notice: string | null }
+export interface ClipStatus { enabled: boolean; ipad: IpadStatus | null; synced: number; skipped_too_large: number; notice: string | null; history_rev: number }
 
 export const getClipStatus = () => invoke<ClipStatus>("get_clip_status");
 export const setClipboardSync = (on: boolean) => invoke<void>("set_clipboard_sync", { on });
@@ -56,3 +56,12 @@ export const pairIpad = () => invoke<void>("pair_ipad");
 export const inviteToIpad = () => invoke<void>("invite_to_ipad");
 export const onClipStatus = (cb: (s: ClipStatus) => void): Promise<UnlistenFn> => listen<ClipStatus>("clip-status", (e) => cb(e.payload));
 
+
+export interface HistoryEntry { id: number; kind: "text" | "image"; text: string | null; width: number; height: number; bytes: number; from: string; at: number; pinned: boolean }
+export interface HistoryList { enabled: boolean; entries: HistoryEntry[] }
+export const historyList = (query: string) => invoke<HistoryList>("history_list", { query });
+export const historyCopy = (id: number) => invoke<void>("history_copy", { id });
+export const historyPin = (id: number, pinned: boolean) => invoke<void>("history_pin", { id, pinned });
+export const historyDelete = (id: number) => invoke<void>("history_delete", { id });
+export const historyClear = () => invoke<void>("history_clear");
+export const historyEnable = (on: boolean) => invoke<void>("history_enable", { on });

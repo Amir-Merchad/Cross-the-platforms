@@ -111,7 +111,7 @@ test("deviceLook for devices with files only", () => {
   expect(look(dev({ hostId: null, connected: false, placement: null, waiting: 2, reachable: true }))).toEqual({ sub: "Files only", off: false });
 });
 
-const clip = (o: Partial<ClipStatus> = {}): ClipStatus => ({ enabled: true, ipad: { Connected: { wifi: true } }, synced: 0, skipped_too_large: 0, notice: null, ...o });
+const clip = (o: Partial<ClipStatus> = {}): ClipStatus => ({ enabled: true, ipad: { Connected: { wifi: true } }, synced: 0, skipped_too_large: 0, notice: null, history_rev: 0, ...o });
 const lines = (d: Device, o: { active?: string | null; btOff?: boolean; clip?: ClipStatus | null } = {}) =>
   panelLines(d, { active: o.active ?? null, btOff: o.btOff ?? false, clip: o.clip === undefined ? clip() : o.clip, where: "right of Screen 1", hotkey: 1 });
 
