@@ -45,9 +45,9 @@ The `core` workflow (Windows runner: hub tests and build, `cargo test -p bridge-
 | core 83 | `57131db` free layout engine | **success** |
 | ios 18 | `13d3fb2` | **success** |
 | ios 19 | `921ed14` direct sharing (iPad app changes) | **success** |
-| core 86 | `921ed14` Desk editor + direct sharing | see the end of this report |
-| core 88 | `94eccf0` everything | see the end of this report |
-| core 80, 81, 84, 85, 87 | | cancelled by me: superseded by a later run on the same code |
+| core 86 | `921ed14` Desk editor + direct sharing | **success** |
+| core 88 | `94eccf0` everything, incl. one-step pairing and Android keys | **success** |
+| core 80, 81, 84, 85, 87, 89 | | cancelled by me: superseded by a later run, or docs only |
 
 Locally: `cargo test -p bridge-core --lib` 157 pass; the new node test `phone_and_ipad_share_the_clipboard_directly` passes; `pnpm test` 154 pass; `tsc` clean; Windows crates pass clippy through a cross-check (`--target x86_64-pc-windows-gnu`), which compiles but cannot run Windows tests. Two older network tests (`pair_then_restart_keeps_pairing`, `queue_survives_a_pc_restart`) time out in the cloud container only; CI passes them. **Android is unbuilt**: there is no Android SDK in the cloud.
 
