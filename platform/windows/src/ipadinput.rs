@@ -9,7 +9,7 @@ use std::{path::PathBuf, thread, time::Duration};
 
 use bridge_core::{
     hid::{KeyboardReport, MouseReport, split_delta},
-    ipadhid::{KeyEvent, KeyTranslator, pointer_reports, scroll_reports},
+    ipadhid::{KeyEvent, KeyTranslator, pointer_reports, scroll_reports, scroll_steps},
 };
 use idevice::{
     ReadWrite, RemoteXpcClient, RsdService,
@@ -32,8 +32,8 @@ pub enum IpadCommand { Mouse(MouseReport), Keyboard(KeyboardReport), Enter, Leav
 pub struct IpadInputHandle { tx: UnboundedSender<IpadCommand>, thread: Option<thread::JoinHandle<()>> }
 
 impl IpadInputHandle {
-    /// Never blocks: an unbounded channel. Motion queued while the link is busy is summed on the
-    /// service side, so a slow link loses detail, not time.
+    /// Never blocks: an unbounded channel. Motion and scroll queued while the link is busy are summed
+    /// on the service side, so a slow link loses detail, not time.
     pub fn send(&self, c: IpadCommand) { let _ = self.tx.send(c); }
 }
 
@@ -98,10 +98,10 @@ impl Keepalive {
 
 /// One thing to send, after summing.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Out { Move { dx: i32, dy: i32, buttons: u8 }, Mouse(MouseReport), Keys(KeyboardReport), Enter, Leave }
+pub enum Out { Move { dx: i32, dy: i32, buttons: u8 }, Scroll { v: i32, h: i32, buttons: u8 }, Mouse(MouseReport), Keys(KeyboardReport), Enter, Leave }
 
-/// Commands waiting while the link is busy. Consecutive moves with the same buttons are summed;
-/// button changes, scrolls and keys keep their place and order, and are never dropped.
+/// Commands waiting while the link is busy. Consecutive moves with the same buttons are summed, and so
+/// are consecutive scrolls; button changes and keys keep their place and order, and are never dropped.
 #[derive(Default)]
 pub struct Pending { items: Vec<Out> }
 
@@ -116,6 +116,15 @@ impl Pending {
                     return;
                 }
                 Out::Move { dx: r.dx as i32, dy: r.dy as i32, buttons: r.buttons }
+            }
+            IpadCommand::Mouse(r) if r.dx == 0 && r.dy == 0 => {
+                if let Some(Out::Scroll { v, h, buttons }) = self.items.last_mut()
+                    && *buttons == r.buttons {
+                    *v += r.wheel as i32;
+                    *h += r.pan as i32;
+                    return;
+                }
+                Out::Scroll { v: r.wheel as i32, h: r.pan as i32, buttons: r.buttons }
             }
             IpadCommand::Mouse(r) => Out::Mouse(r),
             IpadCommand::Keyboard(r) => Out::Keys(r),
@@ -138,6 +147,7 @@ pub fn reports_for(out: &Out) -> Vec<Vec<u8>> {
             if steps.is_empty() { return pointer_reports(&MouseReport { buttons: *buttons, ..Default::default() }) }
             steps.into_iter().flat_map(|(dx, dy)| pointer_reports(&MouseReport { dx, dy, buttons: *buttons, ..Default::default() })).collect()
         }
+        Out::Scroll { v, h, .. } => scroll_steps(*v, *h).into_iter().flat_map(|(wheel, pan)| scroll_reports(&MouseReport { wheel, pan, ..Default::default() })).collect(),
         Out::Mouse(r) => {
             let mut v = if r.dx != 0 || r.dy != 0 { pointer_reports(&MouseReport { wheel: 0, pan: 0, ..*r }) } else { vec![] };
             v.extend(scroll_reports(r));
@@ -295,7 +305,7 @@ impl Session {
                 for ev in self.keys.apply(r) { self.key(ev).await? }
                 Ok(())
             }
-            Out::Move { buttons, .. } | Out::Mouse(MouseReport { buttons, .. }) => {
+            Out::Move { buttons, .. } | Out::Scroll { buttons, .. } | Out::Mouse(MouseReport { buttons, .. }) => {
                 self.buttons = *buttons;
                 for report in reports_for(out) { self.report(report).await? }
                 Ok(())
@@ -474,9 +484,28 @@ mod tests {
     #[test] fn scroll_keeps_its_place() {
         let mut p = Pending::default();
         p.push(IpadCommand::Mouse(MouseReport { dx: 1, ..Default::default() }));
-        p.push(IpadCommand::Mouse(MouseReport { wheel: -1, ..Default::default() }));
+        p.push(IpadCommand::Mouse(MouseReport { wheel: -16, ..Default::default() }));
         p.push(IpadCommand::Mouse(MouseReport { dx: 1, ..Default::default() }));
         assert_eq!(p.take().len(), 3);
+    }
+    #[test] fn adjacent_scrolls_sum() {
+        let mut p = Pending::default();
+        p.push(IpadCommand::Mouse(MouseReport { wheel: -16, pan: 3, ..Default::default() }));
+        p.push(IpadCommand::Mouse(MouseReport { wheel: -16, pan: 1, ..Default::default() }));
+        assert_eq!(p.take(), vec![Out::Scroll { v: -32, h: 4, buttons: 0 }]);
+    }
+    #[test] fn a_click_between_scrolls_keeps_its_place() {
+        let mut p = Pending::default();
+        p.push(IpadCommand::Mouse(MouseReport { wheel: 16, ..Default::default() }));
+        p.push(IpadCommand::Mouse(MouseReport { buttons: 1, ..Default::default() }));
+        p.push(IpadCommand::Mouse(MouseReport { wheel: 16, buttons: 1, ..Default::default() }));
+        assert_eq!(p.take().len(), 3);
+    }
+    #[test] fn a_summed_scroll_over_127_splits() {
+        let r = reports_for(&Out::Scroll { v: -200, h: 16, buttons: 0 });
+        assert_eq!(r.len(), 2);
+        assert_eq!(r.iter().map(|b| b[4] as i8 as i32).sum::<i32>(), -200);
+        assert_eq!(r.iter().map(|b| b[3] as i8 as i32).sum::<i32>(), -16, "pan is flipped for report 7");
     }
     #[test] fn summed_motion_beyond_i16_still_sums_exactly() {
         let r = reports_for(&Out::Move { dx: 70_000, dy: -3, buttons: 1 });
@@ -490,7 +519,7 @@ mod tests {
         assert_eq!(r[0][11], 2);
     }
     #[test] fn wheel_becomes_report_7() {
-        let r = reports_for(&Out::Mouse(MouseReport { wheel: 16, buttons: 1, ..Default::default() }));
+        let r = reports_for(&Out::Scroll { v: 16, h: 0, buttons: 1 });
         assert_eq!(r, vec![bridge_core::ipadhid::scroll_report(16, 0)]);
     }
     #[test] fn backoff_grows_to_thirty_seconds() {

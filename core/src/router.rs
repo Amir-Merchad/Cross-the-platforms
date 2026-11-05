@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     hid::{HeldInput, KeyboardReport, MouseReport, split_delta},
-    ipadhid::{IPAD_HOST, SCROLL_PER_NOTCH, scroll_steps},
+    ipadhid::{IPAD_HOST, SCROLL_MIN_UNITS, SCROLL_PER_NOTCH, scroll_steps},
     layout::{Edge, Monitor, Rect},
     settings::Settings,
     space::{self, Beyond, Placement, Tracker, opposite},
@@ -239,8 +239,8 @@ impl Router {
             Input::Wheel { v, h } => {
                 // The Wi-Fi iPad scrolls in report units, so part notches reach it. Bluetooth keeps whole notches.
                 let ipad = host == IPAD_HOST;
-                let per_notch = if ipad { SCROLL_PER_NOTCH } else { 1 };
-                let (v, h) = (wheel_steps(&mut r.wheel.0, v, per_notch), wheel_steps(&mut r.wheel.1, h, per_notch));
+                let (per_notch, min) = if ipad { (SCROLL_PER_NOTCH, SCROLL_MIN_UNITS) } else { (1, 1) };
+                let (v, h) = (wheel_steps(&mut r.wheel.0, v, per_notch, min), wheel_steps(&mut r.wheel.1, h, per_notch, min));
                 if v == 0 && h == 0 { return Vec::new() }
                 let steps = if ipad { scroll_steps(v, h) } else { vec![(v.clamp(-127, 127) as i8, h.clamp(-127, 127) as i8)] };
                 let mut out = flush(r);
@@ -304,9 +304,11 @@ impl Router {
     }
 }
 
-/// Adds `raw` wheel units and takes out the whole steps. Kept in 1/120 of a step, because a report unit is 7.5 raw.
-fn wheel_steps(acc: &mut i32, raw: i32, per_notch: i32) -> i32 {
+/// Adds `raw` wheel units and takes out the whole steps, once there are at least `min`. Kept in 1/120 of a step,
+/// because a report unit is 7.5 raw.
+fn wheel_steps(acc: &mut i32, raw: i32, per_notch: i32, min: i32) -> i32 {
     *acc += raw * per_notch;
+    if acc.abs() < min * WHEEL_DELTA { return 0 }
     let steps = *acc / WHEEL_DELTA;
     *acc -= steps * WHEEL_DELTA;
     steps
@@ -453,8 +455,14 @@ mod tests {
     }
     #[test] fn small_deltas_accumulate_to_one_unit() {
         let mut r = ipad();
-        assert!(r.on_input(Input::Wheel { v: 7, h: 0 }, 10, &up).is_empty(), "under one unit: nothing yet");
-        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: 1, h: 0 }, 20, &up)), [(1, 0)]);
+        assert!(r.on_input(Input::Wheel { v: 29, h: 0 }, 10, &up).is_empty(), "under the smallest report: nothing yet");
+        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: 1, h: 0 }, 20, &up)), [(4, 0)]);
+    }
+    #[test] fn uneven_deltas_keep_their_remainder() {
+        let mut r = ipad();
+        let mut a: Vec<_> = (0..17).flat_map(|t| r.on_input(Input::Wheel { v: 7, h: 0 }, t, &up)).collect();
+        a.extend(r.on_input(Input::Wheel { v: 1, h: 0 }, 20, &up));
+        assert_eq!(scrolls(&a), [(4, 0); 4], "119 raw and then 1 is a notch");
     }
     #[test] fn fine_deltas_add_up_to_a_notch_exactly() { // a unit is 7.5 raw, so the remainder must not round away
         let mut r = ipad();
@@ -477,11 +485,19 @@ mod tests {
     }
     #[test] fn a_partial_remainder_dies_with_control() {
         let mut r = ipad();
-        r.on_input(Input::Wheel { v: 7, h: 7 }, 10, &up);
+        r.on_input(Input::Wheel { v: 29, h: 29 }, 10, &up);
         assert!(scrolls(&r.on_input(Input::Hotkey(0), 20, &up)).is_empty(), "leaving sends no scroll");
         assert!(r.on_input(Input::Wheel { v: 1, h: 1 }, 30, &up).is_empty(), "nor does a wheel on Windows");
         r.on_input(Input::Hotkey(1), 40, &up);
         assert!(r.on_input(Input::Wheel { v: 1, h: 1 }, 50, &up).is_empty(), "the old remainder is gone");
+    }
+    #[test] fn a_lost_link_takes_the_part_notch_with_it() {
+        let mut r = ipad();
+        r.on_input(Input::Wheel { v: 29, h: 0 }, 10, &up);
+        assert!(scrolls(&r.tick(20, &down)).is_empty());
+        assert_eq!(r.active(), None);
+        r.on_input(Input::Hotkey(1), 30, &up);
+        assert!(r.on_input(Input::Wheel { v: 1, h: 0 }, 40, &up).is_empty(), "the old remainder is gone");
     }
     #[test] fn bluetooth_keeps_whole_notches() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up); // "ipad" here is a Bluetooth host

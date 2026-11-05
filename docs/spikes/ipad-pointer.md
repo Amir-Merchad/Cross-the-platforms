@@ -138,13 +138,15 @@ If this holds, the build can drop the stream, its 1.3 MB/s and the "viewed remot
 
 Negative `y` scrolls down the page, the same sign as a Windows wheel. Negative `x` moves content left. The plan's `scroll_report(wheel, pan)` puts `pan` in byte 3 and `wheel` in byte 4.
 
-| `y` | Reports | Moved | Per report |
+| Value | Reports | Moved | Per report |
 |---|---|---|---|
-| -1 | 1, 3, 30 | 6, 18, 180 px | 6 px |
-| -4 | 30 | 240 px | 8 px |
-| -16 | 1, 5, 10 | 32, 160, 320 px | 32 px |
+| `x = -1` | 1, 3, 30 | 6, 18, 180 px | 6 px |
+| -4, axis not recorded | 30 | 240 px | 8 px |
+| `y = -16` | 1, 5, 10 | 32, 160, 320 px | 32 px |
 
-So about 2 px per unit, with a floor of 6 px. No momentum followed. A usable start is one report of `y = ±16` per wheel notch, tuned in Fine tuning. Sizes above 16 were not measured cleanly. In Weather, 40 reports of `x = -127` paged to the next city.
+The 30 reports of `x = -1` and the 10 of `y = -16` are `scroll7` in `probe.rs`. The other counts and the -4 row are not in the probe now, so their axis is taken from the row they share.
+
+So about 2 px per unit, with a floor of 6 px, seen on the horizontal strip. No momentum followed. A usable start is one report of `y = ±16` per wheel notch, tuned in Fine tuning. Sizes above 16 were not measured cleanly. In Weather, 40 reports of `x = -127` paged to the next city.
 
 ### 2. Right click and drag
 

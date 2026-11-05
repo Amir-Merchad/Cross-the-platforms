@@ -15,6 +15,9 @@ const SCROLL_ID: u8 = 7;
 const SCROLL_LEN: usize = 13;
 /// About 2 px per unit on the iPad; proof 1 suggests 16 per wheel notch as a start.
 pub const SCROLL_PER_NOTCH: i32 = 16;
+/// The smallest scroll report. Proof 1 saw a floor of about 6 px a report, so one-unit reports would run
+/// about 3 times too fast, while 4 units moved 8 px, the same 2 px a unit as a notch. A tuning knob for the device.
+pub const SCROLL_MIN_UNITS: i32 = 4;
 
 fn pointer(dx: i8, dy: i8, buttons: u8) -> Vec<u8> {
     let mut r = vec![0u8; POINTER_LEN];
@@ -59,9 +62,10 @@ pub fn scroll_steps(mut v: i32, mut h: i32) -> Vec<(i8, i8)> {
 }
 
 /// The scroll report for a router report. For this host the router's wheel and pan are report units, not notches.
+/// Pan is flipped: a positive Windows HWHEEL moves content left, which is negative `x` here. Bluetooth AC Pan is not.
 pub fn scroll_reports(r: &MouseReport) -> Vec<Vec<u8>> {
     if r.wheel == 0 && r.pan == 0 { return vec![] }
-    vec![scroll_report(r.wheel, r.pan)]
+    vec![scroll_report(r.wheel, r.pan.saturating_neg())]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +135,7 @@ mod tests {
         assert_eq!(scroll_report(-16, 3), vec![7, 0, 0, 3, 0xF0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
     #[test] fn wheel_and_pan_are_report_units() {
-        assert_eq!(scroll_reports(&MouseReport { wheel: -16, pan: 1, ..Default::default() }), vec![scroll_report(-16, 1)]);
+        assert_eq!(scroll_reports(&MouseReport { wheel: -16, pan: 1, ..Default::default() }), vec![scroll_report(-16, -1)], "pan is flipped, wheel is not");
         assert!(scroll_reports(&MouseReport { dx: 4, ..Default::default() }).is_empty());
     }
     #[test] fn large_scrolls_split_and_sum() {

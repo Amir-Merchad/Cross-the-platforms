@@ -78,7 +78,7 @@ Calls: `Ctrl+Alt+V` puts the clipboard on the controlled device, then presses it
 
 **Files:** `core/src/router.rs`, `core/src/ipadhid.rs`, `platform/windows/src/capture.rs`.
 
-Calls: `Input::Wheel` carries raw `WHEEL_DELTA` units for `ipad-wifi`, summed and emitted in report 7 units at 16 per 120 raw. The Bluetooth path keeps whole notches.
+Calls: `Input::Wheel` carries raw `WHEEL_DELTA` units for `ipad-wifi`, summed and emitted in report 7 units at 16 per 120 raw, at least `SCROLL_MIN_UNITS` (4) to a report. The Bluetooth path keeps whole notches.
 
 - [ ] Tests: `small_deltas_accumulate_to_one_unit`, `full_notch_is_sixteen_units`, `direction_is_kept`. Commit.
 
