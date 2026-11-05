@@ -3,7 +3,7 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useHub, type Tab } from "@/lib/hub";
 import { RAISED } from "@/lib/utils";
 
-const TABS: [Tab, string][] = [["desk", "Desk"], ["transfers", "Transfers"], ["clipboard", "Clipboard"], ["settings", "Settings"]];
+const TABS: [Tab, string][] = [["desk", "Desk"], ["transfers", "Transfers"], ["clipboard", "Clipboard"], ["notes", "Notes"], ["settings", "Settings"]];
 
 /** Must render inside <Tabs>. */
 export default function TopBar() {

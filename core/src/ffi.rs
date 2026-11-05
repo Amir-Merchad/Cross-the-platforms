@@ -40,6 +40,7 @@ pub enum FfiEvent {
     Received { from: String, path: String, size: u64 },
     Failed { id: u64, reason: String },
     Clip { from: String, text: String },
+    Note { from: String, text: String },
     Queued { peer: String, files: u64 },
     Started { id: u64, peer: String, outgoing: bool, name: String, files: u64, total: u64 },
     Requeued { id: u64 },
@@ -54,6 +55,7 @@ impl From<Event> for FfiEvent {
             Event::Received { from, path, size } => FfiEvent::Received { from, path: path.to_string_lossy().into_owned(), size },
             Event::Failed { id, reason } => FfiEvent::Failed { id, reason },
             Event::Clip { from, text } => FfiEvent::Clip { from, text },
+            Event::Note { from, text } => FfiEvent::Note { from, text },
             Event::Queued { peer, files } => FfiEvent::Queued { peer, files: files as u64 },
             Event::Started { id, peer, outgoing, name, files, total, .. } => FfiEvent::Started { id, peer, outgoing, name, files: files as u64, total },
             Event::Requeued { id } => FfiEvent::Requeued { id },
@@ -95,6 +97,10 @@ impl FfiNode {
     }
     pub async fn send_clip(&self, peer_id: String, text: String) -> Result<(), FfiError> {
         Ok(self.node.send_clip(&peer_id, text).await?)
+    }
+    /// Sends text to the notes inbox of a paired PC.
+    pub async fn send_note(&self, peer_id: String, text: String) -> Result<(), FfiError> {
+        Ok(self.node.send_note(&peer_id, text).await?)
     }
     /// A one-time pairing code (5 minutes) that another of the owner's devices scans with `join`.
     pub fn invite(&self) -> FfiInvite { FfiInvite { qr: self.node.invite().to_qr_text(), expires_in_s: 300 } }

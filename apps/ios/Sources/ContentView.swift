@@ -91,6 +91,7 @@ struct ContentView: View {
             Button(paired ? "Send files" : "Pair with PC") { if paired { picking = true } else { pairing = true } }
                 .buttonStyle(LipButtonStyle())
             if paired { Button("Send clipboard") { m.sendClipboard() }.buttonStyle(LipButtonStyle(primary: false)) }
+            if paired { Button("Send to notes") { m.sendNote() }.buttonStyle(LipButtonStyle(primary: false)) }
         }
         .frame(maxWidth: .infinity)
     }

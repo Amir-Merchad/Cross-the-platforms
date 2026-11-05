@@ -19,8 +19,12 @@ class ShareActivity : ComponentActivity() {
         val uris = sharedUris(intent)
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
         if (uris.isEmpty() && text.isNullOrEmpty()) { app.toast("Nothing to send"); finish(); return }
+        val toNotes = intent.component?.className?.endsWith(".ShareNoteActivity") == true && uris.isEmpty()
         val send = { pc: FfiPeer ->
-            if (uris.isNotEmpty()) {
+            if (toNotes) {
+                app.sendNote(text!!, pc)
+                finish()
+            } else if (uris.isNotEmpty()) {
                 // Stay open until the files are copied: the share grant ends when this activity does.
                 setContent { BridgeTheme { SharePreparing(uris.size, pc.name) } }
                 app.sendInBackground(pc, uris) { finish() }
@@ -41,7 +45,7 @@ class ShareActivity : ComponentActivity() {
                     else -> setContent {
                         BridgeTheme {
                             SharePick(
-                                if (uris.isEmpty()) "text" else if (uris.size == 1) "1 file" else "${uris.size} files",
+                                if (toNotes) "a note" else if (uris.isEmpty()) "text" else if (uris.size == 1) "1 file" else "${uris.size} files",
                                 pcs.map { it.name }, { send(pcs[it]) }, { finish() },
                             )
                         }

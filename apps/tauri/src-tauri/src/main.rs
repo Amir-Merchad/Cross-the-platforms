@@ -67,7 +67,7 @@ fn main() {
             commands::get_clip_status, commands::set_clipboard_sync, commands::pair_ipad, commands::invite_to_ipad, commands::reachable_peers,
             commands::pair_invite, commands::paired_peers, commands::forget_peer, commands::queued_files, commands::send_files,
             commands::receive_dir, commands::set_receive_dir, commands::open_receive_dir, commands::open_bluetooth_settings,
-            commands::history_list, commands::history_copy, commands::history_pin, commands::history_delete, commands::history_clear, commands::history_enable
+            commands::history_list, commands::history_copy, commands::history_pin, commands::history_delete, commands::history_clear, commands::history_enable, commands::notes_list, commands::notes_open
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -91,6 +91,17 @@ fn main() {
                     // Clipboard text from a phone goes to the clipboard service, never to the window.
                     Event::Clip { from, text } => {
                         if let Some(c) = handle.state::<AppState>().clip.lock().unwrap().as_ref() { c.send(ClipCommand::FromPhone { id: from, text }); }
+                    }
+                    // Notes go to the inbox file off this thread; the window only hears that it changed.
+                    Event::Note { from, text } => {
+                        let handle = handle.clone();
+                        std::thread::spawn(move || {
+                            let device = transfer(&handle).and_then(|t| t.peers().into_iter().find(|p| p.id == from)).map(|p| p.name).unwrap_or_else(|| "A device".into());
+                            match ctp_windows::notes::record(&device, &text) {
+                                Ok(()) => { let _ = handle.emit("notes-changed", ()); }
+                                Err(e) => diag::log(format_args!("note not saved: {e}")),
+                            }
+                        });
                     }
                     e => {
                         if matches!(e, Event::Paired(_)) { peers_changed(&handle); }

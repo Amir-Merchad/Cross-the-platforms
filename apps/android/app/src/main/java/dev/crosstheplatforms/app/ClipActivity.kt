@@ -10,7 +10,9 @@ class ClipActivity : Activity() {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus || done) return
         done = true
-        App.get(this).sendClipboard(this)
+        if (intent.getBooleanExtra(TO_NOTES, false)) App.get(this).sendClipboardToNotes(this) else App.get(this).sendClipboard(this)
         finish()
     }
+
+    companion object { const val TO_NOTES = "to_notes" }
 }

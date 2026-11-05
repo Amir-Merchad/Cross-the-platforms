@@ -69,3 +69,8 @@ export const historyPin = (id: number, pinned: boolean) => invoke<void>("history
 export const historyDelete = (id: number) => invoke<void>("history_delete", { id });
 export const historyClear = () => invoke<void>("history_clear");
 export const historyEnable = (on: boolean) => invoke<void>("history_enable", { on });
+
+export interface Note { stamp: string; device: string; text: string }
+export const notesList = () => invoke<Note[]>("notes_list");
+export const notesOpen = () => invoke<void>("notes_open");
+export const onNotesChanged = (cb: () => void): Promise<UnlistenFn> => listen("notes-changed", () => cb());

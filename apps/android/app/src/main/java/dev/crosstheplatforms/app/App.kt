@@ -93,7 +93,7 @@ class App : Application(), NodeEvents {
             is FfiEvent.Received -> notifyFiles("Received ${formatBytes(e.size.toLong())} — Download/Bridge", ongoing = false)
             is FfiEvent.Failed -> notifyFiles("Transfer failed. ${plainError(e.reason)}", ongoing = false)
             is FfiEvent.Progress, is FfiEvent.Started, is FfiEvent.Requeued -> {}
-            is FfiEvent.Queued -> {}
+            is FfiEvent.Queued, is FfiEvent.Note -> {} // notes only matter to the PC
             // Writing the clipboard is allowed in the background (reading isn't).
             is FfiEvent.Clip -> scope.launch(Dispatchers.Main) {
                 getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bridge", e.text))
@@ -180,6 +180,30 @@ class App : Application(), NodeEvents {
                 toast("Clipboard did not send. Open Bridge on the PC and try again.")
             }
         }
+    }
+
+    /** Sends `text` to the notes inbox of `target`, or of every paired PC. Never logs the text. */
+    fun sendNote(text: String, target: FfiPeer? = null) {
+        scope.launch {
+            try {
+                val node = node.filterNotNull().first()
+                val pcs = if (target != null) listOf(target) else pcs(node.peers())
+                if (pcs.isEmpty()) { toast("Pair with your PC first (open Bridge)"); return@launch }
+                pcs.forEach { node.sendNote(it.id, text) }
+                toast(if (pcs.size == 1) "Saved to notes on ${displayName(pcs[0].name)}" else "Saved to notes")
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "note send failed: ${e.javaClass.simpleName}")
+                toast("Note did not send. Open Bridge on the PC and try again.")
+            }
+        }
+    }
+
+    /** The tile's twin of [sendClipboard]: the clipboard text becomes a note. Call from a focused activity. */
+    fun sendClipboardToNotes(ctx: Context) {
+        val text = ctx.getSystemService(ClipboardManager::class.java).primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
+        if (text.isNullOrBlank()) { toast("Clipboard is empty"); return }
+        NodeService.start(ctx)
+        sendNote(text)
     }
 
     companion object {

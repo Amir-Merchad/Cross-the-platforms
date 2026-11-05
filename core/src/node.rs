@@ -55,6 +55,8 @@ pub enum Ctl {
     Accept { id: u64, tcp: Vec<SocketAddr>, cert_sha256: String, token: String },
     Reject { id: u64, reason: String },
     Clip { text: String },
+    /// Text for the receiver's notes inbox, kept apart from the clipboard.
+    Note { text: String },
     /// A message from a newer build: skipped, the connection carries on.
     #[serde(other)]
     Unknown,
@@ -69,6 +71,8 @@ pub enum Event {
     Received { from: String, path: PathBuf, size: u64 },
     Failed { id: u64, reason: String },
     Clip { from: String, text: String },
+    /// A note from a paired device; the app files it in the inbox.
+    Note { from: String, text: String },
     /// Files currently waiting on this device for an unreachable iPad; sent every time the count
     /// changes, `files: 0` once the last batch has left.
     Queued { peer: String, files: usize },
@@ -198,6 +202,10 @@ impl Node {
 
     pub async fn send_clip(&self, peer_id: &str, text: String) -> Result<(), String> {
         self.send_ctl(peer_id, &[Ctl::Clip { text }]).await.map(|_| ())
+    }
+
+    pub async fn send_note(&self, peer_id: &str, text: String) -> Result<(), String> {
+        self.send_ctl(peer_id, &[Ctl::Note { text }]).await.map(|_| ())
     }
 
     /// This device's clipboard changed: send it straight to every paired device, unless it is an echo of
@@ -467,6 +475,12 @@ impl Node {
                 let now = self.inner.started.elapsed().as_millis() as u64;
                 let fresh = self.inner.mesh.lock().unwrap().on_remote(&text, now);
                 if fresh { let _ = self.inner.events.send(Event::Clip { from: from.to_string(), text }).await; }
+                None
+            }
+            Ctl::Note { text } => {
+                if !text.trim().is_empty() && text.len() <= crate::notes::MAX_NOTE_BYTES {
+                    let _ = self.inner.events.send(Event::Note { from: from.to_string(), text }).await;
+                }
                 None
             }
             Ctl::Offer { id, files } => Some(self.accept_offer(from, id, files).await),

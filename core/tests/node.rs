@@ -361,3 +361,15 @@ async fn unknown_control_message_is_ignored() { // Review Focus 2
     assert!(r.read_to_end(1024).await.unwrap().is_empty(), "no reply to an unknown message");
     wait_for(&mut arx, |e| matches!(e, Event::Clip { text, .. } if text == "after")).await;
 }
+
+#[tokio::test]
+async fn note_reaches_the_pc() {
+    let ((a, mut arx, _da), (b, _brx, _db)) = paired().await;
+    b.send_note(&a.id(), "remember the 3pm lab".into()).await.unwrap();
+    let e = wait_for(&mut arx, |e| matches!(e, Event::Note { .. })).await;
+    assert_eq!(e, Event::Note { from: b.id(), text: "remember the 3pm lab".into() });
+    // An empty note is not a note.
+    b.send_note(&a.id(), "  \n".into()).await.unwrap();
+    b.send_note(&a.id(), "next".into()).await.unwrap();
+    assert_eq!(wait_for(&mut arx, |e| matches!(e, Event::Note { .. })).await, Event::Note { from: b.id(), text: "next".into() });
+}

@@ -32,11 +32,25 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <!-- A second share-sheet choice for text: same screen, but the text goes to the PC's notes inbox. -->
+        <activity-alias android:name=".ShareNoteActivity" android:targetActivity=".ShareActivity" android:exported="true"
+            android:label="Send to notes" android:icon="@android:drawable/ic_menu_edit">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity-alias>
         <activity android:name=".ClipActivity" android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true" />
         <service android:name=".NodeService" android:exported="false" android:foregroundServiceType="connectedDevice" />
         <service android:name=".ClipTile" android:exported="true" android:label="Send clipboard to PC"
             android:icon="@android:drawable/ic_menu_send"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
+        </service>
+        <service android:name=".NoteTile" android:exported="true" android:label="Clipboard to notes"
+            android:icon="@android:drawable/ic_menu_edit"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE" /></intent-filter>
         </service>

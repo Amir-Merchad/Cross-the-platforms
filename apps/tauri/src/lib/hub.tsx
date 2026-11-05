@@ -10,7 +10,7 @@ import { buildDevices, deskLine, ipadBluetoothHosts, linkableHosts, migrateIpad,
 import { onTransfer, pairedPeers, queuedFiles, type Peer } from "./transfer";
 
 /** "add" is the Add a device page: reached from the top bar button and the device panel, not a tab. */
-export type Tab = "desk" | "transfers" | "clipboard" | "settings" | "add";
+export type Tab = "desk" | "transfers" | "clipboard" | "notes" | "settings" | "add";
 
 /** What Add a device opens with. `hostId` or `peerId` is a device that already has that side. */
 export type AddOpts = { kind: AddKind; hostId?: string; peerId?: string };

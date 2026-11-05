@@ -119,7 +119,7 @@ import BridgeKit
             let name = displayName(peers.first { $0.id == from }?.name)
             clips.add(text, from: name)
             say(success: "Clipboard from \(name)")
-        case .progress, .queued, .started, .requeued: break
+        case .progress, .queued, .started, .requeued, .note: break // notes only matter to the PC
         }
     }
 
@@ -232,6 +232,20 @@ import BridgeKit
             let n = await node.shareClip(text: text)
             if n > 0 { self.say(success: n == 1 ? "Clipboard sent" : "Clipboard sent to \(n) devices") }
             else { self.notice = "Nothing new to send, or no device answered. Open Bridge on the other device and try again." }
+        }
+    }
+
+    /// The pasteboard text becomes a note in the PC's inbox, not its clipboard. Never logged.
+    func sendNote() {
+        notice = nil
+        success = nil
+        guard let text = UIPasteboard.general.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { notice = "Clipboard is empty"; return }
+        guard let node, !pcs.isEmpty else { notice = "Pair with your PC to send notes"; return }
+        Task {
+            do {
+                for pc in pcs { try await node.sendNote(peerId: pc.id, text: text) }
+                self.say(success: "Saved to notes")
+            } catch { self.notice = "The note did not send. Open Bridge on the PC and try again." }
         }
     }
 
