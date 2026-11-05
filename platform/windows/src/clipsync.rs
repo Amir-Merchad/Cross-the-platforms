@@ -191,8 +191,8 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                     },
                 },
                 Endpoint::Peer(ref id) => match &c {
-                    Content::Text(t) => { to_phone(id.clone(), t.clone()); Ok(()) }
-                    Content::Image(_) => continue, // phones get text only
+                    Content::Text(t) | Content::Rich { text: t, .. } => { to_phone(id.clone(), t.clone()); Ok(()) }
+                    Content::Image(_) => continue, // phones get plain text only
                 },
             };
             match ok {

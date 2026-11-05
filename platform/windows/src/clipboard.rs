@@ -75,7 +75,13 @@ fn history_flag(format: u32) -> Result<Option<u32>, ()> {
 pub fn read() -> Option<Content> {
     if excluded() { return None }
     let mut cb = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, arboard::Clipboard::new).ok()?;
-    if let Ok(t) = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get_text()) && !t.is_empty() { return Some(Content::Text(t)) }
+    if let Ok(t) = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get_text()) && !t.is_empty() {
+        // arboard hands back just the CF_HTML fragment; plain text stays alongside it.
+        return Some(match with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get().html()) {
+            Ok(html) if !html.trim().is_empty() => Content::Rich { text: t, html },
+            _ => Content::Text(t),
+        })
+    }
     let img = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.get_image()).ok()?;
     Some(Content::Image(Image { width: img.width as u32, height: img.height as u32, rgba: img.bytes.into_owned() }))
 }
@@ -84,6 +90,7 @@ pub fn write(c: &Content) -> Result<(), String> {
     let mut cb = with_retry(BUSY_ATTEMPTS, BUSY_DELAY, arboard::Clipboard::new).map_err(|e| e.to_string())?;
     match c {
         Content::Text(t) => with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.set_text(t.as_str())),
+        Content::Rich { text, html } => with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.set_html(html.as_str(), Some(text.as_str()))),
         Content::Image(i) => with_retry(BUSY_ATTEMPTS, BUSY_DELAY, || cb.set_image(arboard::ImageData {
             width: i.width as usize, height: i.height as usize, bytes: Cow::Borrowed(&i.rgba),
         })),
@@ -160,6 +167,33 @@ mod tests {
     #[test] #[ignore] fn text_round_trip() {
         write(&Content::Text("héllo 👋 مرحبا".into())).unwrap();
         assert_eq!(read(), Some(Content::Text("héllo 👋 مرحبا".into())));
+    }
+    #[test] #[ignore] fn cf_html_round_trip() {
+        let rich = Content::Rich { text: "bold and a list".into(), html: "<b>bold</b> and a <ul><li>list</li></ul>".into() };
+        write(&rich).unwrap();
+        assert_eq!(read(), Some(rich));
+    }
+    /// The CF_HTML header offsets must point at the fragment, or Word and browsers paste nothing.
+    #[test] #[ignore] fn html_fragment_offsets_are_right() {
+        let html = "<i>héllo 👋</i>";
+        write(&Content::Rich { text: "hello".into(), html: html.into() }).unwrap();
+        let raw = unsafe {
+            let fmt = RegisterClipboardFormatW(w!("HTML Format"));
+            OpenClipboard(None).unwrap();
+            let bytes = GetClipboardData(fmt).ok().map(|h| {
+                let g = HGLOBAL(h.0);
+                let p = GlobalLock(g) as *const u8;
+                let v = std::slice::from_raw_parts(p, GlobalSize(g)).to_vec();
+                let _ = GlobalUnlock(g);
+                v
+            });
+            let _ = CloseClipboard();
+            String::from_utf8_lossy(&bytes.unwrap()).trim_end_matches('\0').to_string()
+        };
+        let off = |key: &str| -> usize { let i = raw.find(key).unwrap() + key.len(); raw[i..i + 10].parse().unwrap() };
+        let (start, end) = (off("StartFragment:"), off("EndFragment:"));
+        assert_eq!(&raw.as_bytes()[start..end], html.as_bytes());
+        assert!(off("StartHTML:") < start && end <= off("EndHTML:") && off("EndHTML:") <= raw.len());
     }
     #[test] #[ignore] fn image_round_trip_is_identical() { // Review Focus 1: Windows echo of an iPad image
         let img = Image { width: 2, height: 2, rgba: vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 9, 9, 9, 255] };

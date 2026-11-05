@@ -18,19 +18,29 @@ pub const MAX_ITEM_BYTES: usize = 64 * 1024 * 1024;
 pub struct Image { pub width: u32, pub height: u32, pub rgba: Vec<u8> }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content { Text(String), Image(Image) }
+pub enum Content {
+    Text(String),
+    /// Formatted copy (bold, lists, links): the HTML fragment plus its plain text, which is always present.
+    Rich { text: String, html: String },
+    Image(Image),
+}
 
 impl Content {
     pub fn size(&self) -> usize {
-        match self { Content::Text(t) => t.len(), Content::Image(i) => i.rgba.len() }
+        match self { Content::Text(t) => t.len(), Content::Rich { text, html } => text.len() + html.len(), Content::Image(i) => i.rgba.len() }
     }
     pub fn kind(&self) -> &'static str {
-        match self { Content::Text(_) => "text", Content::Image(_) => "image" }
+        match self { Content::Text(_) | Content::Rich { .. } => "text", Content::Image(_) => "image" }
+    }
+    /// The text every device can take; phones get nothing else.
+    pub fn plain_text(&self) -> Option<&str> {
+        match self { Content::Text(t) | Content::Rich { text: t, .. } => Some(t), Content::Image(_) => None }
     }
     fn hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         match self {
             Content::Text(t) => { h.update([0]); h.update(t.as_bytes()); }
+            Content::Rich { text, html } => { h.update([2]); h.update((text.len() as u64).to_le_bytes()); h.update(text.as_bytes()); h.update(html.as_bytes()); }
             Content::Image(i) => { h.update([1]); h.update(i.width.to_le_bytes()); h.update(i.height.to_le_bytes()); h.update(&i.rgba); }
         }
         h.finalize().into()
@@ -83,7 +93,7 @@ impl Hub {
 
     /// `from` reported a clipboard change; returns what to write where.
     pub fn observe(&mut self, from: Endpoint, content: Content) -> Vec<(Endpoint, Item)> {
-        if matches!(&content, Content::Text(t) if t.is_empty()) { return Vec::new() }
+        if content.plain_text().is_some_and(str::is_empty) { return Vec::new() }
         let hash = content.hash();
         if let Some(q) = self.pending.get_mut(&from) && let Some(i) = q.iter().position(|h| *h == hash) {
             q.remove(i);
@@ -190,6 +200,24 @@ mod tests {
         let a = h.observe(Endpoint::Windows, t("a"))[0].1.id;
         let b = h.observe(Endpoint::Windows, t("b"))[0].1.id;
         assert!(b > a);
+    }
+    #[test] fn plain_text_always_present() {
+        let r = Content::Rich { text: "bold".into(), html: "<b>bold</b>".into() };
+        assert_eq!(r.plain_text(), Some("bold"));
+        assert_eq!(Content::Text("x".into()).plain_text(), Some("x"));
+        assert_eq!(r.kind(), "text");
+        assert!(hub().observe(Endpoint::Windows, Content::Rich { text: String::new(), html: "<b></b>".into() }).is_empty());
+    }
+    #[test] fn same_text_with_other_formatting_is_a_new_copy() {
+        let mut h = hub();
+        assert_eq!(h.observe(Endpoint::Windows, t("bold")).len(), 1);
+        assert_eq!(h.observe(Endpoint::Windows, Content::Rich { text: "bold".into(), html: "<b>bold</b>".into() }).len(), 1);
+    }
+    #[test] fn huge_html_is_skipped_and_counted() { // Review Focus 3
+        let mut h = hub();
+        let big = Content::Rich { text: "a".into(), html: "x".repeat(MAX_ITEM_BYTES) };
+        assert!(h.observe(Endpoint::Windows, big).is_empty());
+        assert_eq!(h.skipped_too_large(), 1);
     }
     #[test] fn empty_text_is_ignored() { assert!(hub().observe(Endpoint::Windows, t("")).is_empty()); }
     #[test] fn too_large_is_skipped_and_counted() { // Review Focus 3

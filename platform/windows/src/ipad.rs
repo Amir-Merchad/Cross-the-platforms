@@ -21,6 +21,7 @@ const HOST_NAME: &str = "cross-the-platforms";
 const RECORD: &str = "rp-pairing.plist";
 /// iPad image types we read, best first. We always write PNG.
 const IMAGE_UTIS: [&str; 3] = ["public.png", "public.jpeg", "public.tiff"];
+const HTML_UTI: &str = "public.html";
 const TEXT_UTIS: [&str; 3] = ["public.utf8-plain-text", "public.plain-text", "public.text"];
 /// Pushes inline items up to this size and promise bigger ones (fetched on demand).
 const INLINE_LIMIT: i64 = 256 * 1024;
@@ -102,6 +103,16 @@ impl IpadLink {
     }
 }
 
+fn snap_html(snap: &idevice::core_device::PasteboardSnapshot) -> Option<String> {
+    use idevice::core_device::PasteboardPayload::Inline;
+    snap.items.iter().flat_map(|i| &i.data).find_map(|e| match &e.payload { Inline(b) if e.uti == HTML_UTI => String::from_utf8(b.clone()).ok(), _ => None })
+}
+
+/// Formatting only when there is some: an empty or blank HTML part is dropped.
+fn rich_or_text(text: String, html: Option<String>) -> Content {
+    match html.filter(|h| !h.trim().is_empty()) { Some(html) => Content::Rich { text, html }, None => Content::Text(text) }
+}
+
 impl IpadReader {
     /// Waits for the next iPad copy that has text or a readable image.
     pub async fn next_change(&mut self) -> Result<Content, String> {
@@ -109,12 +120,26 @@ impl IpadReader {
             let snap = self.watcher.recv_push().await.map_err(|e| format!("push stream ended: {e:?}"))?;
             if !is_fresh(snap.change_count, self.baseline) { continue }
             // Small items arrive inline, big ones as promises: text first, then images, either way.
-            if let Some(t) = snap.text().filter(|t| !t.is_empty()) { return Ok(Content::Text(t)) }
             let promised = snap.promised_items();
             let find = |utis: &[&str]| utis.iter().find_map(|u| promised.iter().find(|p| p.uti == *u && worth_resolving(p.size))).cloned();
-            if let Some(p) = find(&TEXT_UTIS) {
-                let bytes = self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve text: {e:?}"))?;
-                if let Some(t) = bytes.and_then(|b| String::from_utf8(b).ok()).filter(|t| !t.is_empty()) { return Ok(Content::Text(t)) }
+            let text = match snap.text().filter(|t| !t.is_empty()) {
+                Some(t) => Some(t),
+                None => match find(&TEXT_UTIS) {
+                    Some(p) => self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.map_err(|e| format!("resolve text: {e:?}"))?
+                        .and_then(|b| String::from_utf8(b).ok()).filter(|t| !t.is_empty()),
+                    None => None,
+                },
+            };
+            if let Some(text) = text {
+                // Formatting is a bonus: any trouble with the HTML and the plain text still goes through.
+                let html = match snap_html(&snap) {
+                    Some(h) => Some(h),
+                    None => match find(&[HTML_UTI]) {
+                        Some(p) => self.resolver.resolve(GENERAL_PASTEBOARD, p.item_index, &p.uti).await.ok().flatten().and_then(|b| String::from_utf8(b).ok()),
+                        None => None,
+                    },
+                };
+                return Ok(rich_or_text(text, html));
             }
             let encoded = match snap.image() {
                 Some((uti, bytes)) => Some((uti.to_string(), bytes)),
@@ -137,6 +162,12 @@ impl IpadWriter {
     pub async fn write(&mut self, c: &Content) -> Result<(), String> {
         match c {
             Content::Text(t) => self.setter.set_text(t, GENERAL_PASTEBOARD).await,
+            // The service takes one type per item here, so HTML goes alone; if it refuses, plain text still lands.
+            // Device check: docs/v1.5/checklist-features.md (keep formatting).
+            Content::Rich { text, html } => match self.setter.set_image(html.as_bytes(), HTML_UTI, GENERAL_PASTEBOARD).await {
+                Ok(()) => Ok(()),
+                Err(_) => self.setter.set_text(text, GENERAL_PASTEBOARD).await,
+            },
             Content::Image(i) => {
                 let img = i.clone();
                 let png = tokio::task::spawn_blocking(move || codec::encode_png(&img)).await.map_err(|e| e.to_string())??;
@@ -441,6 +472,12 @@ pub async fn pair_usb(dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test] fn ipad_html_is_kept_only_when_there_is_some() {
+        use super::*;
+        assert_eq!(rich_or_text("a".into(), Some("<b>a</b>".into())), Content::Rich { text: "a".into(), html: "<b>a</b>".into() });
+        assert_eq!(rich_or_text("a".into(), Some("  ".into())), Content::Text("a".into()));
+        assert_eq!(rich_or_text("a".into(), None), Content::Text("a".into()));
+    }
     use super::*;
 
     // Review Focus 4: every way the iPad can be unreachable gets a reason the owner can act on.

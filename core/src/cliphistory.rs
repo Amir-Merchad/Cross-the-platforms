@@ -24,6 +24,9 @@ pub struct Entry {
     pub id: u64,
     pub kind: Kind,
     pub text: Option<String>,
+    /// HTML of a formatted copy; entries from before this existed load without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
     /// Image file name inside the history folder.
     pub file: Option<String>,
     pub width: u32,
@@ -38,7 +41,7 @@ pub struct Entry {
 }
 
 /// An item ready to store: hashing and PNG encoding done before taking any lock.
-pub enum Prepared { Text { hash: String, text: String }, Image { hash: String, width: u32, height: u32, png: Vec<u8> } }
+pub enum Prepared { Text { hash: String, text: String, html: Option<String> }, Image { hash: String, width: u32, height: u32, png: Vec<u8> } }
 
 fn hex(d: impl AsRef<[u8]>) -> String { d.as_ref().iter().map(|b| format!("{b:02x}")).collect() }
 
@@ -46,7 +49,12 @@ fn hex(d: impl AsRef<[u8]>) -> String { d.as_ref().iter().map(|b| format!("{b:02
 pub fn prepare(c: &Content) -> Option<Prepared> {
     match c {
         Content::Text(t) if t.is_empty() || t.len() > MAX_TEXT_BYTES => None,
-        Content::Text(t) => Some(Prepared::Text { hash: hex(Sha256::new().chain_update(b"t").chain_update(t.as_bytes()).finalize()), text: t.clone() }),
+        Content::Text(t) => Some(Prepared::Text { hash: hex(Sha256::new().chain_update(b"t").chain_update(t.as_bytes()).finalize()), text: t.clone(), html: None }),
+        Content::Rich { text, html } if text.is_empty() || text.len() + html.len() > MAX_TEXT_BYTES => None,
+        Content::Rich { text, html } => Some(Prepared::Text {
+            hash: hex(Sha256::new().chain_update(b"r").chain_update((text.len() as u64).to_le_bytes()).chain_update(text.as_bytes()).chain_update(html.as_bytes()).finalize()),
+            text: text.clone(), html: Some(html.clone()),
+        }),
         Content::Image(i) => {
             let hash = hex(Sha256::new().chain_update(b"i").chain_update(i.width.to_le_bytes()).chain_update(i.height.to_le_bytes()).chain_update(&i.rgba).finalize());
             Some(Prepared::Image { hash, width: i.width, height: i.height, png: codec::encode_png(i).ok()? })
@@ -109,9 +117,9 @@ impl History {
             return true;
         }
         let id = self.s.next_id;
-        let mut e = Entry { id, kind, text: None, file: None, width: 0, height: 0, bytes: 0, from: from.into(), at, pinned: false, hash };
+        let mut e = Entry { id, kind, text: None, html: None, file: None, width: 0, height: 0, bytes: 0, from: from.into(), at, pinned: false, hash };
         match item {
-            Prepared::Text { text, .. } => { e.bytes = text.len() as u64; e.text = Some(text); }
+            Prepared::Text { text, html, .. } => { e.bytes = (text.len() + html.as_ref().map_or(0, String::len)) as u64; e.text = Some(text); e.html = html; }
             Prepared::Image { width, height, png, .. } => {
                 if png.len() as u64 > self.max_image || self.pinned_image_bytes() + png.len() as u64 > self.max_total { return false }
                 if !self.saving { return false }
@@ -174,7 +182,7 @@ impl History {
     pub fn content(&self, id: u64) -> Option<Content> {
         let e = self.s.entries.iter().find(|e| e.id == id)?;
         match (&e.text, &e.file) {
-            (Some(t), _) => Some(Content::Text(t.clone())),
+            (Some(t), _) => Some(match &e.html { Some(html) => Content::Rich { text: t.clone(), html: html.clone() }, None => Content::Text(t.clone()) }),
             (_, Some(f)) => codec::decode(&fs::read(self.dir.join(f)).ok()?).ok().map(Content::Image),
             _ => None,
         }
@@ -189,6 +197,21 @@ mod tests {
     fn text(t: &str) -> Prepared { prepare(&Content::Text(t.into())).unwrap() }
     fn hist() -> (History, tempfile::TempDir) { let d = tempfile::tempdir().unwrap(); (History::open(d.path().join("h")), d) }
 
+    #[test] fn old_history_entries_load() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("history.json"), br#"{"enabled":true,"next_id":2,"entries":[{"id":1,"kind":"text","text":"old","file":null,"width":0,"height":0,"bytes":3,"from":"PC","at":1,"pinned":false,"hash":"h"}]}"#).unwrap();
+        let h = History::open(d.path());
+        assert_eq!(h.entries().len(), 1);
+        assert_eq!(h.content(1), Some(Content::Text("old".into())));
+    }
+    #[test] fn formatted_copy_keeps_its_html_and_the_limit_counts_it() { // Review Focus 3
+        let (mut h, _d) = hist();
+        let rich = Content::Rich { text: "bold".into(), html: "<b>bold</b>".into() };
+        assert!(h.add("PC", prepare(&rich).unwrap(), 1));
+        let again = History::open(h.dir.clone());
+        assert_eq!(again.content(again.entries()[0].id), Some(rich));
+        assert!(prepare(&Content::Rich { text: "a".into(), html: "x".repeat(MAX_TEXT_BYTES) }).is_none());
+    }
     #[test] fn oldest_unpinned_goes_at_51() {
         let (mut h, _d) = hist();
         for i in 0..51 { h.add("PC", text(&format!("clip {i}")), i); }
