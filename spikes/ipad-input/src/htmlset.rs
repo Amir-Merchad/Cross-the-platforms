@@ -12,8 +12,8 @@ use idevice::{
 };
 
 const TEXT_UTIS: [&str; 3] = ["public.utf8-plain-text", "public.plain-text", "public.text"];
-const SAMPLE_TEXT: &str = "Bridge html spike";
-const SAMPLE_HTML: &str = "<b>Bridge</b> html <i>spike</i>";
+const SAMPLE_TEXT: &str = "Bridge html spike é 👋";
+const SAMPLE_HTML: &str = "<b>Bridge</b> html <i>spike</i> é 👋";
 
 /// Our own handle on the service: the same XPC channel, but we send the SET ourselves.
 struct RawPasteboard(RemoteXpcClient<Io>);

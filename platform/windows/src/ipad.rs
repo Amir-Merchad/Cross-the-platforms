@@ -161,13 +161,9 @@ impl IpadReader {
 impl IpadWriter {
     pub async fn write(&mut self, c: &Content) -> Result<(), String> {
         match c {
-            Content::Text(t) => self.setter.set_text(t, GENERAL_PASTEBOARD).await,
             // Plain text only for now: set_image would send public.html with no text type, and a plain field
             // (or Bridge's own iPad app) would get nothing. Formatted paste waits on spikes/ipad-input htmlset.
-            Content::Rich { text, .. } => {
-                crate::diag::log(format_args!("iPad write: {} (plain text)", c.kind()));
-                self.setter.set_text(text, GENERAL_PASTEBOARD).await
-            }
+            Content::Text(t) | Content::Rich { text: t, .. } => self.setter.set_text(t, GENERAL_PASTEBOARD).await,
             Content::Image(i) => {
                 let img = i.clone();
                 let png = tokio::task::spawn_blocking(move || codec::encode_png(&img)).await.map_err(|e| e.to_string())??;
