@@ -244,6 +244,13 @@ impl Session {
     }
 
     async fn create_devices(&mut self) -> Result<(), String> {
+        // A session that died with the link may have left its mouse behind, maybe with a button down.
+        // Unproven whether the iPad removes it by itself, so remove ours by name first.
+        if let Ok(Ok(list)) = timeout(Duration::from_secs(2), self.hid.list_connected_services()).await {
+            for stale in list.iter().filter(|s| s.product.as_deref() == Some(MOUSE_NAME)) {
+                let _ = timeout(WRITE_LIMIT, self.raw.send_object(service_request("removeService", stale.service_id), false)).await;
+            }
+        }
         self.keyboard = Some(self.hid.create_main_keyboard().await.map_err(|e| format!("create virtual keyboard: {e}"))?);
         self.raw.send_object(mouse_create_request(), true).await.map_err(|e| format!("create mouse: {e:?}"))?;
         let reply = timeout(Duration::from_secs(3), self.raw.recv()).await.map_err(|_| "create mouse: no reply".to_string())?.map_err(|e| format!("create mouse reply: {e:?}"))?;
@@ -372,10 +379,11 @@ const MOUSE_DESCRIPTOR: [u8; 54] = [
     0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, 0xC0, 0xC0,
 ];
 
+const MOUSE_NAME: &str = "Cross the Platforms mouse";
+
 /// The proven virtual mouse: Apple vendor and product ids, USB transport, a Universal Control service.
 fn mouse_create_request() -> XPCObject {
     const ID: u64 = 0x1_0000_2003;
-    const NAME: &str = "Cross the Platforms mouse";
     const VENDOR: i64 = 0x05AC;
     const PRODUCT: i64 = 0x0269;
     uhid_request(idevice::xpc!({
@@ -384,12 +392,12 @@ fn mouse_create_request() -> XPCObject {
                 "DeviceUsagePairs": [{ "DeviceUsage": 2_i64, "DeviceUsagePage": 1_i64 }],
                 "PrimaryUsage": 2_u64,
                 "PrimaryUsagePage": 1_u64,
-                "Product": NAME,
+                "Product": MOUSE_NAME,
                 "ProductID": PRODUCT,
                 "VendorID": VENDOR,
                 "_CoreDevice_codablePropertyStorage": {
                     "Manufacturer": { "string": "idevice" },
-                    "Product": { "string": NAME },
+                    "Product": { "string": MOUSE_NAME },
                     "ProductID": { "int": PRODUCT },
                     "VendorID": { "int": VENDOR },
                     "PrimaryUsage": { "int": 2_i64 },

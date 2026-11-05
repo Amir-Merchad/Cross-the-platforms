@@ -223,6 +223,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+        let mut ble_gone = false;
         while let Ok(c) = commands.try_recv() {
             match c {
                 Command::Stop => break 'outer,
@@ -231,7 +232,11 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                         crate::diag::log(format_args!("bluetooth switched {}", if wants_peripheral(&s) { "on" } else { "off" }));
                         // Off drops the watcher, then the peripheral: advertising stops, hosts disconnect.
                         ble = BleState::for_settings(&s);
-                        if !wants_peripheral(&s) { *snapshot.lock().unwrap() = Snapshot::default(); status.notice = None; }
+                        if !wants_peripheral(&s) {
+                            *snapshot.lock().unwrap() = Snapshot::default();
+                            ble_gone = true;
+                            status.notice = None;
+                        }
                         status.bluetooth_off = !wants_peripheral(&s);
                     }
                     capture::set_hotkey_count(s.attachments.len() as u8);
@@ -247,6 +252,11 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             }
         }
         actions.extend(router.tick(now_ms(), &is_up));
+        if ble_gone {
+            // Bluetooth hosts went with the peripheral; the tick returns input to Windows if one had it.
+            connected.retain(|id| id == IPAD_HOST);
+            actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
+        }
 
         // The iPad's link: Ready is connected. Losing it makes the router's tick return input to Windows.
         let mut ipad_changed = false;
