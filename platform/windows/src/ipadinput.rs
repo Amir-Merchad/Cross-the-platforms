@@ -45,8 +45,8 @@ impl Drop for IpadInputHandle {
 }
 
 const KEEPALIVE_EVERY: Duration = Duration::from_millis(500);
-/// A round trip is about 8 ms over Wi-Fi; a quarter second is a miss.
-const KEEPALIVE_LIMIT: Duration = Duration::from_millis(250);
+/// A round trip is about 8 ms over Wi-Fi and reaches 92 ms; 250 ms gave false drops. Two misses take 900 ms from the first probe.
+const KEEPALIVE_LIMIT: Duration = Duration::from_millis(400);
 /// A write that cannot be queued in this long means the link is gone.
 const WRITE_LIMIT: Duration = Duration::from_millis(500);
 const CONNECT_LIMIT: Duration = Duration::from_secs(20);
@@ -432,6 +432,11 @@ mod tests {
     }
     #[test] fn missing_disk_image_files_ask_for_usb() {
         assert_eq!(classify("missing C:\\x\\ipad\\ddi\\Image.dmg"), IpadInputState::NeedsUsb);
+    }
+    #[test] fn keepalive_allows_a_slow_ping_and_still_returns_in_about_a_second() {
+        assert!(KEEPALIVE_LIMIT >= Duration::from_millis(400), "Wi-Fi pings reach 92 ms, and 250 ms gave false drops");
+        // Two misses: the second probe starts one period after the first and runs to its limit.
+        assert!(KEEPALIVE_EVERY + KEEPALIVE_LIMIT <= Duration::from_secs(1));
     }
     #[test] fn missed_keepalives_mark_down() { // Review Focus 1
         let mut k = Keepalive::default();
