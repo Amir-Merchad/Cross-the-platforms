@@ -71,6 +71,7 @@ export const historyClear = () => invoke<void>("history_clear");
 export const historyEnable = (on: boolean) => invoke<void>("history_enable", { on });
 
 export interface Note { stamp: string; device: string; text: string }
-export const notesList = () => invoke<Note[]>("notes_list");
-export const notesOpen = () => invoke<void>("notes_open");
+export interface NotesView { notes: Note[]; unsaved: boolean }
+export const notesList = () => invoke<NotesView>("notes_list");
+export const notesOpen = (unsaved = false) => invoke<void>("notes_open", { unsaved });
 export const onNotesChanged = (cb: () => void): Promise<UnlistenFn> => listen("notes-changed", () => cb());

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { type Note, notesList, notesOpen, onNotesChanged } from "@/lib/api";
+import { type NotesView, notesList, notesOpen, onNotesChanged } from "@/lib/api";
 import { useHub } from "@/lib/hub";
 import { RAISED } from "@/lib/utils";
 
@@ -9,7 +9,7 @@ const ICON = "flex-none rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-mu
 
 export default function Notes() {
   const { say } = useHub();
-  const [notes, setNotes] = useState<Note[] | null>(null);
+  const [notes, setNotes] = useState<NotesView | null>(null);
   const load = useCallback(() => notesList().then(setNotes).catch(() => say("Could not load your notes. Try again.")), [say]);
   useEffect(() => {
     void load();
@@ -25,11 +25,17 @@ export default function Notes() {
           <span className="block text-xl font-semibold">Quick notes</span>
           <span className="block text-muted-foreground">Text you send to notes from the phone or iPad lands here, newest first, in Documents\Bridge\Inbox.md.</span>
         </span>
-        <Button variant="secondary" className={RAISED} disabled={!notes?.length} onClick={() => notesOpen().catch(() => say("Could not open the notes file. Try again."))}>Open file</Button>
+        <Button variant="secondary" className={RAISED} disabled={!notes?.notes.length} onClick={() => notesOpen().catch(() => say("Could not open the notes file. Try again."))}>Open file</Button>
       </section>
+      {notes?.unsaved && (
+        <section role="status" className={`${CARD} flex items-center justify-between gap-3 px-5 py-3.5`}>
+          <span className="text-destructive">Some notes could not be added to Inbox.md, so Bridge kept them in Inbox-unsaved.md. Nothing was lost.</span>
+          <Button variant="secondary" className={RAISED} onClick={() => notesOpen(true).catch(() => say("Could not open the file. Try again."))}>Open unsaved notes</Button>
+        </section>
+      )}
       <section className={`${CARD} px-5 py-3`}>
-        {notes && notes.length === 0 && <p className="py-4 text-muted-foreground">Nothing yet. Use Send to notes on the phone or iPad.</p>}
-        {notes?.map((n, i) => (
+        {notes && notes.notes.length === 0 && <p className="py-4 text-muted-foreground">Nothing yet. Use Send to notes on the phone or iPad.</p>}
+        {notes?.notes.map((n, i) => (
           <div key={`${n.stamp}-${i}`} className="flex items-start justify-between gap-3 border-t border-border py-3 first:border-t-0">
             <div className="min-w-0 flex-1">
               <div className="text-[13px] text-muted-foreground">{n.stamp} · {n.device}</div>

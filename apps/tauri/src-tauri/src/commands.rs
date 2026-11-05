@@ -161,12 +161,12 @@ pub fn history_clear(state: State<AppState>) { state.history.lock().unwrap().cle
 pub fn history_enable(state: State<AppState>, on: bool) { state.history.lock().unwrap().set_enabled(on); }
 
 #[tauri::command]
-pub fn notes_list() -> Vec<bridge_core::notes::Note> { ctp_windows::notes::list() }
+pub fn notes_list() -> ctp_windows::notes::NotesView { ctp_windows::notes::list() }
 
-/// Opens the inbox file in the default app for Markdown (or Notepad's choice), creating nothing.
+/// Opens the inbox file (or, with `unsaved`, the spill file) in its default app; creates nothing.
 #[tauri::command]
-pub fn notes_open() -> Result<(), String> {
-    let p = ctp_windows::notes::inbox_path();
+pub fn notes_open(unsaved: bool) -> Result<(), String> {
+    let p = if unsaved { ctp_windows::notes::spill_path() } else { ctp_windows::notes::inbox_path() };
     if !p.exists() { return Err("There are no notes yet.".into()); }
     std::process::Command::new("explorer.exe").arg(&p).spawn().map(|_| ()).map_err(|e| e.to_string())
 }

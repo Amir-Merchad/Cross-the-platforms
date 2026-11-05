@@ -182,15 +182,16 @@ class App : Application(), NodeEvents {
         }
     }
 
-    /** Sends `text` to the notes inbox of `target`, or of every paired PC. Never logs the text. */
+    /** Sends `text` to the notes inbox of `target`, or of every paired PC; says why when it will not go. Never logs the text. */
     fun sendNote(text: String, target: FfiPeer? = null) {
+        uniffi.bridge_core.checkNote(text)?.let { toast(it); return }
         scope.launch {
             try {
                 val node = node.filterNotNull().first()
                 val pcs = if (target != null) listOf(target) else pcs(node.peers())
                 if (pcs.isEmpty()) { toast("Pair with your PC first (open Bridge)"); return@launch }
                 pcs.forEach { node.sendNote(it.id, text) }
-                toast(if (pcs.size == 1) "Saved to notes on ${displayName(pcs[0].name)}" else "Saved to notes")
+                toast(if (pcs.size == 1) "Sent to notes on ${displayName(pcs[0].name)}" else "Sent to notes")
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "note send failed: ${e.javaClass.simpleName}")
                 toast("Note did not send. Open Bridge on the PC and try again.")

@@ -19,7 +19,7 @@ class ShareActivity : ComponentActivity() {
         val uris = sharedUris(intent)
         val text = intent.getStringExtra(Intent.EXTRA_TEXT)
         if (uris.isEmpty() && text.isNullOrEmpty()) { app.toast("Nothing to send"); finish(); return }
-        val toNotes = intent.component?.className?.endsWith(".ShareNoteActivity") == true && uris.isEmpty()
+        val toNotes = isNotesAlias(intent.component?.className) && uris.isEmpty()
         val send = { pc: FfiPeer ->
             if (toNotes) {
                 app.sendNote(text!!, pc)

@@ -26,13 +26,22 @@ fn local_stamp() -> String {
     format!("{:04}-{:02}-{:02} {:02}:{:02}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute)
 }
 
-/// Files a note from `device` at the top of the inbox.
-pub fn record(device: &str, text: &str) -> std::io::Result<()> {
+/// Files a note from `device`: top of the inbox, after a few retries (an editor or OneDrive may hold
+/// the file) the spill file next to it. Run on the notes worker, never on the engine thread.
+pub fn record(device: &str, text: &str) -> std::io::Result<notes::Saved> {
     let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    notes::append(&inbox_path(), &local_stamp(), device, text)
+    notes::save(&inbox_path(), &local_stamp(), device, text, 4, std::time::Duration::from_millis(300))
 }
 
-pub fn list() -> Vec<notes::Note> { notes::read(&inbox_path()) }
+#[derive(serde::Serialize)]
+pub struct NotesView { pub notes: Vec<notes::Note>, /** Some notes could only be kept in the spill file. */ pub unsaved: bool }
+
+pub fn list() -> NotesView {
+    let p = inbox_path();
+    NotesView { notes: notes::read(&p), unsaved: notes::spill_path(&p).exists() }
+}
+
+pub fn spill_path() -> PathBuf { notes::spill_path(&inbox_path()) }
 
 #[cfg(test)]
 mod tests {

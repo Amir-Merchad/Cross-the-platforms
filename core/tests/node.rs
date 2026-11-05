@@ -368,8 +368,15 @@ async fn note_reaches_the_pc() {
     b.send_note(&a.id(), "remember the 3pm lab".into()).await.unwrap();
     let e = wait_for(&mut arx, |e| matches!(e, Event::Note { .. })).await;
     assert_eq!(e, Event::Note { from: b.id(), text: "remember the 3pm lab".into() });
-    // An empty note is not a note.
-    b.send_note(&a.id(), "  \n".into()).await.unwrap();
+    // An empty note is not a note: the sender says so and nothing goes out.
+    assert!(b.send_note(&a.id(), "  ".into()).await.is_err());
     b.send_note(&a.id(), "next".into()).await.unwrap();
     assert_eq!(wait_for(&mut arx, |e| matches!(e, Event::Note { .. })).await, Event::Note { from: b.id(), text: "next".into() });
+}
+
+#[tokio::test]
+async fn oversize_note_is_refused_by_the_sender() {
+    let ((a, _arx, _da), (b, _brx, _db)) = paired().await;
+    assert!(b.send_note(&a.id(), "x".repeat(bridge_core::notes::MAX_NOTE_BYTES + 1)).await.is_err());
+    assert!(b.send_note(&a.id(), " ".into()).await.is_err());
 }

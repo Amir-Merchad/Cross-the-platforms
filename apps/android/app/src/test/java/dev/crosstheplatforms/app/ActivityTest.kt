@@ -142,3 +142,15 @@ class ActivityTest {
         assertEquals(null, chooseId(emptyList(), "a"))
     }
 }
+
+class NotesAliasTest {
+    @org.junit.Test fun only_the_alias_means_notes() {
+        org.junit.Assert.assertTrue(isNotesAlias("dev.crosstheplatforms.app.ShareNoteActivity"))
+        org.junit.Assert.assertFalse(isNotesAlias("dev.crosstheplatforms.app.ShareActivity"))
+        org.junit.Assert.assertFalse(isNotesAlias(null))
+    }
+    @org.junit.Test fun manifest_alias_is_named_as_the_code_expects() {
+        val manifest = java.io.File("src/main/AndroidManifest.xml").readText()
+        org.junit.Assert.assertTrue(manifest.contains("<activity-alias android:name=\".ShareNoteActivity\""))
+    }
+}

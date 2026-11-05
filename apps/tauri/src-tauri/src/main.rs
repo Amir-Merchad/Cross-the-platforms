@@ -85,6 +85,22 @@ fn main() {
             };
             *app.state::<AppState>().engine.lock().unwrap() = Some(engine::start(settings.clone(), on_status));
 
+            let (notes_tx, notes_rx) = std::sync::mpsc::sync_channel::<(String, String)>(64);
+            {
+                let handle = handle.clone();
+                std::thread::Builder::new().name("ctp-notes".into()).spawn(move || {
+                    for (from, text) in notes_rx {
+                        let device = transfer(&handle).and_then(|t| t.peers().into_iter().find(|p| p.id == from)).map(|p| p.name).unwrap_or_else(|| "A device".into());
+                        // Never logs the text, the device or the path.
+                        match ctp_windows::notes::record(&device, &text) {
+                            Ok(bridge_core::notes::Saved::Inbox) => {}
+                            Ok(bridge_core::notes::Saved::Spill) => diag::log(format_args!("a note went to the unsaved file")),
+                            Err(e) => diag::log(format_args!("a note could not be kept: {:?}", e.kind())),
+                        }
+                        let _ = handle.emit("notes-changed", ());
+                    }
+                }).expect("notes thread");
+            }
             let on_transfer = {
                 let handle = handle.clone();
                 move |e: Event| match e {
@@ -92,16 +108,9 @@ fn main() {
                     Event::Clip { from, text } => {
                         if let Some(c) = handle.state::<AppState>().clip.lock().unwrap().as_ref() { c.send(ClipCommand::FromPhone { id: from, text }); }
                     }
-                    // Notes go to the inbox file off this thread; the window only hears that it changed.
+                    // Notes go to one worker (in arrival order) that writes the file; this thread never waits on disk.
                     Event::Note { from, text } => {
-                        let handle = handle.clone();
-                        std::thread::spawn(move || {
-                            let device = transfer(&handle).and_then(|t| t.peers().into_iter().find(|p| p.id == from)).map(|p| p.name).unwrap_or_else(|| "A device".into());
-                            match ctp_windows::notes::record(&device, &text) {
-                                Ok(()) => { let _ = handle.emit("notes-changed", ()); }
-                                Err(e) => diag::log(format_args!("note not saved: {e}")),
-                            }
-                        });
+                        if notes_tx.try_send((from, text)).is_err() { diag::log(format_args!("note dropped: the notes queue is full or stopped")); }
                     }
                     e => {
                         if matches!(e, Event::Paired(_)) { peers_changed(&handle); }

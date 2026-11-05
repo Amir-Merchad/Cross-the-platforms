@@ -205,6 +205,7 @@ impl Node {
     }
 
     pub async fn send_note(&self, peer_id: &str, text: String) -> Result<(), String> {
+        crate::notes::check(&text).map_err(String::from)?;
         self.send_ctl(peer_id, &[Ctl::Note { text }]).await.map(|_| ())
     }
 
@@ -478,7 +479,7 @@ impl Node {
                 None
             }
             Ctl::Note { text } => {
-                if !text.trim().is_empty() && text.len() <= crate::notes::MAX_NOTE_BYTES {
+                if crate::notes::check(&text).is_ok() {
                     let _ = self.inner.events.send(Event::Note { from: from.to_string(), text }).await;
                 }
                 None

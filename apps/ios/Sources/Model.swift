@@ -239,12 +239,13 @@ import BridgeKit
     func sendNote() {
         notice = nil
         success = nil
-        guard let text = UIPasteboard.general.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { notice = "Clipboard is empty"; return }
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { notice = "Clipboard is empty"; return }
+        if let why = checkNote(text: text) { notice = why; return }
         guard let node, !pcs.isEmpty else { notice = "Pair with your PC to send notes"; return }
         Task {
             do {
                 for pc in pcs { try await node.sendNote(peerId: pc.id, text: text) }
-                self.say(success: "Saved to notes")
+                self.say(success: "Sent to notes")
             } catch { self.notice = "The note did not send. Open Bridge on the PC and try again." }
         }
     }

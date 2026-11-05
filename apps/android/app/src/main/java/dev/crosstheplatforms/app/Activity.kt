@@ -51,6 +51,9 @@ fun plainError(reason: String): String =
     if (Regex("not reachable", RegexOption.IGNORE_CASE).containsMatchIn(reason)) "Not reachable right now. Open Bridge on the PC, then $SEND_AGAIN."
     else "That did not finish. ${SEND_AGAIN.replaceFirstChar { it.uppercase() }}."
 
+/** The share-sheet alias "Send to notes" (AndroidManifest `.ShareNoteActivity`); the plain ShareActivity is not it. */
+fun isNotesAlias(className: String?): Boolean = className == "dev.crosstheplatforms.app.ShareNoteActivity"
+
 fun displayName(name: String?): String = name?.trim().takeUnless { it.isNullOrEmpty() } ?: "Unnamed device"
 
 fun formatBytes(n: Long): String = when {

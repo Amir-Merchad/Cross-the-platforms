@@ -81,6 +81,10 @@ pub async fn start_node(data_dir: String, receive_dir: String, name: String, kin
     Ok(Arc::new(FfiNode { node }))
 }
 
+/// Why `text` cannot be sent as a note, or nothing when it can. Senders check this before saying "Sent".
+#[uniffi::export]
+pub fn check_note(text: String) -> Option<String> { crate::notes::check(&text).err().map(String::from) }
+
 #[uniffi::export(async_runtime = "tokio")]
 impl FfiNode {
     pub fn id(&self) -> String { self.node.id() }
