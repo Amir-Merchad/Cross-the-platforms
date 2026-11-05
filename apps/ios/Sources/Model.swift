@@ -10,6 +10,7 @@ import BridgeKit
     @Published private(set) var success: String?   // a one-off good result; clears by itself
     @Published var chosen: String?          // the PC Home shows; see `shown`
     @Published private(set) var shareFolder = ""
+    @Published private(set) var clips = ClipHistory()   // clips seen while Bridge is open; memory only
 
     private var node: FfiNode?
     private var life = NodeLifecycle()
@@ -115,7 +116,9 @@ import BridgeKit
             // Straight from another of the owner's devices (the node already dropped repeats and echoes).
             // The PC's own sync writes the pasteboard by itself; this is for phones and other iPads.
             UIPasteboard.general.string = text
-            say(success: "Clipboard from \(displayName(peers.first { $0.id == from }?.name))")
+            let name = displayName(peers.first { $0.id == from }?.name)
+            clips.add(text, from: name)
+            say(success: "Clipboard from \(name)")
         case .progress, .queued, .started, .requeued: break
         }
     }
@@ -222,6 +225,7 @@ import BridgeKit
         notice = nil
         success = nil
         guard let text = UIPasteboard.general.string, !text.isEmpty else { notice = "Clipboard is empty"; return }
+        clips.add(text, from: "This iPad")
         guard let node, !peers.isEmpty else { notice = "Pair with a device to send"; return }
         // To every paired device at once: the PC, phones, other iPads.
         Task {
@@ -230,6 +234,14 @@ import BridgeKit
             else { self.notice = "Nothing new to send, or no device answered. Open Bridge on the other device and try again." }
         }
     }
+
+    func copyClip(_ item: ClipItem) {
+        UIPasteboard.general.string = item.text
+        say(success: "Copied")
+    }
+    func pinClip(_ item: ClipItem) { clips.setPinned(item.id, !item.pinned) }
+    func deleteClip(_ item: ClipItem) { clips.delete(item.id) }
+    func clearClips() { clips.clear() }
 
     /// A one-time pairing code for another phone or iPad to scan. Nil while Bridge starts.
     func invite() -> String? { node?.invite().qr }

@@ -11,6 +11,7 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var width
     @State private var picking = false
     @State private var pairing = false
+    @State private var clipQuery = ""
 
     var body: some View {
         let pc = m.shown
@@ -127,12 +128,48 @@ struct ContentView: View {
                     // The bundle id stays when the app group is unavailable, so a failed share can be diagnosed.
                     line("Sharing from other apps", m.shareFolder, p.muted)
                 }
+                clipSection
                 HoldToForget(label: "Hold to forget this PC") { m.forget(pc) }
             } else {
                 Text("On the PC, open Bridge, choose Add a device, and show the code. Then scan it here.").foregroundStyle(p.muted)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Clips seen while Bridge is open: copied from another device, or sent from here. Tap one to copy it.
+    private var clipSection: some View {
+        let shown = m.clips.search(clipQuery)
+        return section {
+            HStack {
+                Text("Clipboard history").font(.rBodyStrong)
+                Spacer(minLength: 12)
+                if !m.clips.items.isEmpty { Button("Clear") { m.clearClips() }.font(.rCaption).foregroundStyle(p.danger).frame(minHeight: 44) }
+            }
+            .padding(.top, 8)
+            TextField("Search your copies", text: $clipQuery)
+                .textFieldStyle(.plain).padding(.horizontal, 12).frame(minHeight: 44)
+                .background(RoundedRectangle(cornerRadius: 12).fill(p.tray))
+                .padding(.bottom, 6)
+            if shown.isEmpty { line(clipQuery.isEmpty ? "Nothing yet while Bridge is open" : "Nothing matches that", "", p.muted) }
+            ForEach(shown) { c in
+                HStack(spacing: 8) {
+                    Button { m.copyClip(c) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(clipTitle(c.text)).lineLimit(1).truncationMode(.tail)
+                            Text(c.from).font(.rCaption).foregroundStyle(p.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Button(c.pinned ? "Pinned" : "Pin") { m.pinClip(c) }.font(.rCaption).foregroundStyle(c.pinned ? p.ink : p.muted).frame(minWidth: 44, minHeight: 44)
+                    Button("Delete") { m.deleteClip(c) }.font(.rCaption).foregroundStyle(p.muted).frame(minWidth: 44, minHeight: 44)
+                }
+                .padding(.vertical, 2)
+                .overlay(alignment: .top) { Rectangle().fill(p.line).frame(height: 1) }
+            }
+        }
     }
 
     private func section<C: View>(@ViewBuilder _ content: () -> C) -> some View {
