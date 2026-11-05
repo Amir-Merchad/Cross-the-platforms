@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { Button } from "@/components/ui/button";
-import { pairIpad } from "@/lib/api";
+import { inviteToIpad, pairIpad } from "@/lib/api";
 import { addStep, finishLine, newHost, newLink, newPeer, stepCount, type AddKind } from "@/lib/addflow";
 import { clipNotice } from "@/lib/clip";
 import { IPAD_HOST } from "@/lib/devices";
@@ -121,6 +121,9 @@ function Guide() {
 
         {current && (
           <div className="mt-2.5 flex gap-2">
+            {i === 1 && kind === "ipad" && seen.clip && (
+              <Button variant="secondary" className="h-11 rounded-xl px-4 font-semibold" onClick={() => inviteToIpad().catch(() => say("Could not put the code on the iPad. Use the QR code instead."))}>Put the code on the iPad</Button>
+            )}
             {i === 1 && (expired || !qr) && <Button className="h-11 rounded-xl px-4 font-semibold" onClick={showQr}>{expired ? "Show a new code" : "Show pairing code"}</Button>}
             {i === 0 && kind === "ipad" && <Button className="h-11 rounded-xl px-4 font-semibold" onClick={() => pairIpad().catch(() => say("Could not pair over USB. Plug the iPad in and try again."))}>Pair over USB</Button>}
             <Button variant="secondary" className="h-11 rounded-xl px-4 font-semibold" onClick={skip}>Skip</Button>

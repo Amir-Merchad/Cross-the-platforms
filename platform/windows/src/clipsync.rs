@@ -12,6 +12,8 @@ use crate::{clipboard, diag, ipad::{self, IpadLink, IpadStatus, IpadWriter}};
 pub enum ClipCommand {
     SetEnabled(bool),
     PairIpad,
+    /// Puts a files pairing code on the iPad's clipboard (outside the sync), for Bridge there to paste.
+    InviteToIpad(String),
     /// The paired phones that get Windows/iPad text (ids), replacing the previous list.
     Phones(Vec<String>),
     /// Text a phone sent (its clipboard tile).
@@ -109,6 +111,19 @@ async fn run(enabled: bool, mut commands: UnboundedReceiver<ClipCommand>, to_pho
             c = commands.recv() => match c {
                 None | Some(ClipCommand::Stop) => break,
                 Some(ClipCommand::SetEnabled(on)) => { hub.set_paused(!on); status.enabled = on; }
+                Some(ClipCommand::InviteToIpad(code)) => {
+                    let c = Content::Text(code);
+                    status.notice = Some(match writer.as_mut() {
+                        None => "The iPad's clipboard is not connected yet. Use the QR code instead.".into(),
+                        Some(w) => {
+                            hub.written_directly(Endpoint::Ipad, &c);
+                            match tokio::time::timeout(write_timeout(c.size()), w.write(&c)).await {
+                                Ok(Ok(())) => "The code is on the iPad's clipboard. In Bridge there, tap Pair, then Paste code.".into(),
+                                _ => "Could not put the code on the iPad. Use the QR code instead.".into(),
+                            }
+                        }
+                    });
+                }
                 Some(ClipCommand::PairIpad) => {
                     status.notice = Some("Pairing… confirm on the iPad if it asks".into());
                     let tx = ev_tx.clone();

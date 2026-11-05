@@ -58,6 +58,17 @@ fn transfer(app: &AppHandle) -> Result<std::sync::Arc<ctp_windows::transfer::Tra
     crate::transfer(app).ok_or_else(|| "file transfer isn't running (see Diagnostics)".into())
 }
 
+/// One-step iPad pairing: a fresh files pairing code goes straight onto the iPad's clipboard (over the
+/// USB pairing's link), for Bridge on the iPad to paste. The answer arrives as a clipboard status notice.
+#[tauri::command]
+pub fn invite_to_ipad(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let qr = transfer(&app)?.invite().to_qr_text();
+    match state.clip.lock().unwrap().as_ref() {
+        Some(c) => { c.send(ClipCommand::InviteToIpad(qr)); Ok(()) }
+        None => Err("clipboard sync isn't running".into()),
+    }
+}
+
 /// A fresh one-time pairing code (valid 5 minutes) as QR text.
 #[tauri::command]
 pub fn pair_invite(app: AppHandle) -> Result<Invite, String> { Ok(Invite { qr: transfer(&app)?.invite().to_qr_text(), expires_in_s: 300 }) }

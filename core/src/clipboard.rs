@@ -67,6 +67,14 @@ impl Hub {
 
     pub fn skipped_too_large(&self) -> u64 { self.skipped }
 
+    /// Something was written straight to `to`, outside the sync (a pairing code put on the iPad): its echo
+    /// from `to` is swallowed, so it never spreads to the other devices.
+    pub fn written_directly(&mut self, to: Endpoint, content: &Content) {
+        let q = self.pending.entry(to).or_default();
+        if q.len() == PENDING_ECHOES { q.pop_front(); }
+        q.push_back(content.hash());
+    }
+
     /// `from` reported a clipboard change; returns what to write where.
     pub fn observe(&mut self, from: Endpoint, content: Content) -> Vec<(Endpoint, Item)> {
         if matches!(&content, Content::Text(t) if t.is_empty()) { return Vec::new() }
@@ -128,6 +136,14 @@ pub mod codec {
 
 #[cfg(test)]
 mod tests {
+    #[test] fn a_direct_write_does_not_spread() {
+        let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
+        let code = Content::Text("ctp-pair:{}".into());
+        h.written_directly(Endpoint::Ipad, &code);
+        assert!(h.observe(Endpoint::Ipad, code.clone()).is_empty(), "the iPad's echo of the code goes nowhere");
+        assert_eq!(h.observe(Endpoint::Ipad, Content::Text("real copy".into())).len(), 1);
+    }
+
     use super::*;
 
     fn hub() -> Hub { Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]) }

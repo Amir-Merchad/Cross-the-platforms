@@ -52,5 +52,7 @@ export interface ClipStatus { enabled: boolean; ipad: IpadStatus | null; synced:
 export const getClipStatus = () => invoke<ClipStatus>("get_clip_status");
 export const setClipboardSync = (on: boolean) => invoke<void>("set_clipboard_sync", { on });
 export const pairIpad = () => invoke<void>("pair_ipad");
+/** Puts a files pairing code on the iPad's clipboard; the result arrives as a clipboard notice. */
+export const inviteToIpad = () => invoke<void>("invite_to_ipad");
 export const onClipStatus = (cb: (s: ClipStatus) => void): Promise<UnlistenFn> => listen<ClipStatus>("clip-status", (e) => cb(e.payload));
 
