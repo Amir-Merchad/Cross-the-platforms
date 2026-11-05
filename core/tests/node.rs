@@ -346,3 +346,18 @@ async fn phone_and_ipad_share_the_clipboard_directly() {
     assert_eq!(ipad.share_clip("formula".into()).await, 1);
     wait_for(&mut prx, |e| matches!(e, Event::Clip { text, .. } if text == "formula")).await;
 }
+
+#[tokio::test]
+async fn unknown_control_message_is_ignored() { // Review Focus 2
+    assert_eq!(serde_json::from_str::<Ctl>(r#"{"t":"FromTheFuture","x":1}"#).unwrap(), Ctl::Unknown);
+    let ((a, mut arx, _da), (_b, _brx, db)) = paired().await;
+    // Speak as the paired phone: an unknown message first, then a clip on the same stream.
+    let key = load_or_create_key(&db.path().join("data").join("identity.key")).unwrap();
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).secret_key(key).alpns(vec![CTL_ALPN.to_vec()]).bind().await.unwrap();
+    let c = ep.connect(a.addr(), CTL_ALPN).await.unwrap();
+    let (mut s, mut r) = c.open_bi().await.unwrap();
+    s.write_all(b"{\"t\":\"FromTheFuture\",\"x\":1}\n{\"t\":\"Clip\",\"text\":\"after\"}\n").await.unwrap();
+    s.finish().unwrap();
+    assert!(r.read_to_end(1024).await.unwrap().is_empty(), "no reply to an unknown message");
+    wait_for(&mut arx, |e| matches!(e, Event::Clip { text, .. } if text == "after")).await;
+}

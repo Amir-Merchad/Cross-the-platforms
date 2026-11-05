@@ -55,6 +55,9 @@ pub enum Ctl {
     Accept { id: u64, tcp: Vec<SocketAddr>, cert_sha256: String, token: String },
     Reject { id: u64, reason: String },
     Clip { text: String },
+    /// A message from a newer build: skipped, the connection carries on.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -467,7 +470,7 @@ impl Node {
                 None
             }
             Ctl::Offer { id, files } => Some(self.accept_offer(from, id, files).await),
-            Ctl::Accept { .. } | Ctl::Reject { .. } => None,
+            Ctl::Accept { .. } | Ctl::Reject { .. } | Ctl::Unknown => None,
         }
     }
 
