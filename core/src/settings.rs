@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
-use crate::layout::{Attachment, validate};
+use crate::{layout::{Attachment, validate}, space::{self, Placement}};
 
 /// Per-device return-edge tuning (see `edge::EdgeTracker`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -39,11 +39,13 @@ pub struct Settings {
     /// Old Bluetooth host ids of a device that moved to another host (the iPad to `ipad-wifi`): hidden
     /// from the device list so one device never shows twice.
     pub retired_hosts: Vec<String>,
+    /// Free layout: device rectangles in the desktop space. Empty means "made from `attachments`".
+    pub layout: Vec<Placement>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new() }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new(), layout: Vec::new() }
     }
 }
 
@@ -53,6 +55,11 @@ impl Settings {
     /// An autosaved draft, minus what its own commands own: an older copy can't undo the clipboard toggle or the receive folder.
     pub fn keeping_owned(self, current: &Settings) -> Settings {
         Settings { clipboard_sync: current.clipboard_sync, receive_dir: current.receive_dir.clone(), ..self }
+    }
+
+    /// Every placed device, in hotkey order: the free layout's, else the edge attachments'.
+    pub fn placed_ids(&self) -> Vec<String> {
+        if self.layout.is_empty() { self.attachments.iter().map(|a| a.device_id.clone()).collect() } else { self.layout.iter().map(|p| p.device_id.clone()).collect() }
     }
 
     pub fn calibration_for(&self, id: &str) -> Calibration { self.calibration.get(id).cloned().unwrap_or_default() }
@@ -67,7 +74,7 @@ impl Settings {
             Err(e) => return Err(format!("can't read {}: {e}", path.display())),
         };
         match serde_json::from_str::<Settings>(&text) {
-            Ok(s) if validate(&s.attachments).is_ok() => Ok(s),
+            Ok(s) if validate(&s.attachments).is_ok() && space::validate(&s.layout, &[]).is_ok() => Ok(s),
             _ => {
                 let mut bak = path.as_os_str().to_owned();
                 bak.push(".bak");
@@ -89,6 +96,7 @@ impl Settings {
     /// Validates, then writes atomically (temp file + rename).
     pub fn save(&self, path: &Path) -> Result<(), String> {
         validate(&self.attachments)?;
+        space::validate(&self.layout, &[])?;
         if let Some(dir) = path.parent() { std::fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
@@ -156,6 +164,19 @@ mod tests {
         let s = Settings { bluetooth_enabled: false, retired_hosts: vec!["AA:BB".into()], ..Settings::default() };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
+    }
+    #[test] fn placed_ids_follow_the_layout_once_saved() {
+        let mut s = Settings::default();
+        s.attachments.push(Attachment { device_id: "a".into(), monitor_id: "M1".into(), edge: Edge::Right });
+        assert_eq!(s.placed_ids(), ["a"]);
+        s.layout.push(Placement { device_id: "b".into(), rect: crate::layout::Rect { left: 0, top: 0, right: 10, bottom: 10 } });
+        assert_eq!(s.placed_ids(), ["b"]);
+    }
+    #[test] fn overlapping_layout_is_not_saved() {
+        let d = tempdir().unwrap(); let p = d.path().join("s.json");
+        let r = crate::layout::Rect { left: 0, top: 0, right: 10, bottom: 10 };
+        let s = Settings { layout: vec![Placement { device_id: "a".into(), rect: r }, Placement { device_id: "b".into(), rect: r }], ..Settings::default() };
+        assert!(s.save(&p).is_err());
     }
     #[test] fn clipboard_sync_defaults_on() { assert!(Settings::default().clipboard_sync); }
     #[test] fn invalid_layout_is_not_saved() {

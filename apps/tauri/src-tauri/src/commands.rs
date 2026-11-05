@@ -21,7 +21,7 @@ pub fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings)
     settings.save(&settings_path())?;
     let autostart = app.autolaunch();
     let _ = if settings.start_with_windows { autostart.enable() } else { autostart.disable() };
-    if let Some(e) = state.engine.lock().unwrap().as_ref() { e.send(Command::Reload(settings.clone())); }
+    if let Some(e) = state.engine.lock().unwrap().as_ref() { e.send(Command::Reload(Box::new(settings.clone()))); }
     *state.settings.lock().unwrap() = settings;
     Ok(())
 }

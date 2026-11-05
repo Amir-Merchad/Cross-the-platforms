@@ -7,6 +7,7 @@ pub mod ffi;
 
 uniffi::setup_scaffolding!();
 pub mod layout;
+pub mod space;
 pub mod settings;
 pub mod router;
 pub mod keyqueue;

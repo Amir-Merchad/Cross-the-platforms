@@ -21,7 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
 use crate::{capture, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral};
 
-pub enum Command { Reload(Settings), SwitchTo(Option<String>), Stop }
+pub enum Command { Reload(Box<Settings>), SwitchTo(Option<String>), Stop }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HostStatus {
@@ -194,7 +194,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let mut capture = capture::start(input_tx);
     let mut router = Router::new(settings.clone(), monitors::list());
     router.set_interval(IPAD_HOST, IPAD_INTERVAL_MS);
-    capture::set_hotkey_count(settings.attachments.len() as u8);
+    capture::set_hotkey_count(settings.placed_ids().len() as u8);
     let clock = Instant::now();
     let now_ms = || clock.elapsed().as_millis() as u64;
 
@@ -205,7 +205,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let (mut last_conn, mut last_mon, mut last_status) = (Instant::now() - CONNECTION_POLL, Instant::now(), Instant::now());
     // Bluetooth bookkeeping runs on its own thread: WinRT calls there can take tens of ms, and every
     // ms the input loop waits is a visible hitch of the remote pointer. The loop only reads snapshots.
-    let watched: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(settings.attachments.iter().map(|a| a.device_id.clone()).collect()));
+    let watched: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(settings.placed_ids()));
     let snapshot: std::sync::Arc<Mutex<Snapshot>> = std::sync::Arc::default();
     let mut reported = Status::default();
     // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
@@ -228,6 +228,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             match c {
                 Command::Stop => break 'outer,
                 Command::Reload(s) => {
+                    let s = *s;
                     if wants_peripheral(&s) != wants_peripheral(&settings) {
                         crate::diag::log(format_args!("bluetooth switched {}", if wants_peripheral(&s) { "on" } else { "off" }));
                         // Off drops the watcher, then the peripheral: advertising stops, hosts disconnect.
@@ -239,13 +240,13 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                         }
                         status.bluetooth_off = !wants_peripheral(&s);
                     }
-                    capture::set_hotkey_count(s.attachments.len() as u8);
+                    capture::set_hotkey_count(s.placed_ids().len() as u8);
                     router.set_settings(s.clone());
-                    *watched.lock().unwrap() = s.attachments.iter().map(|a| a.device_id.clone()).collect();
+                    *watched.lock().unwrap() = s.placed_ids();
                     settings = s;
                 }
                 Command::SwitchTo(None) => actions.extend(router.on_input(Input::Hotkey(0), now_ms(), &is_up)),
-                Command::SwitchTo(Some(id)) => match settings.attachments.iter().position(|a| a.device_id == id) {
+                Command::SwitchTo(Some(id)) => match settings.placed_ids().iter().position(|d| *d == id) {
                     Some(i) => actions.extend(router.on_input(Input::Hotkey(i as u8 + 1), now_ms(), &is_up)),
                     None => status.notice = Some(format!("{} is not placed yet", display_name(names.get(&id).and_then(|n| n.as_deref())))),
                 },
@@ -314,7 +315,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     }
                 }
             }
-            status.hosts = snap.ids.iter().filter(|id| connected.contains(*id) || settings.attachments.iter().any(|a| &a.device_id == *id))
+            status.hosts = snap.ids.iter().filter(|id| connected.contains(*id) || settings.placed_ids().contains(*id))
                 .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
                 .collect();
             if let Some(h) = ipad_host(status.ipad, &settings) { status.hosts.push(h) }
@@ -398,7 +399,7 @@ const IPAD_INTERVAL_MS: u64 = 8;
 
 /// The Wi-Fi iPad as a host: listed once its service has reported, or when it is placed.
 fn ipad_host(state: Option<IpadInputState>, settings: &Settings) -> Option<HostStatus> {
-    let placed = settings.attachments.iter().any(|a| a.device_id == IPAD_HOST);
+    let placed = settings.placed_ids().iter().any(|d| d == IPAD_HOST);
     if state.is_none() && !placed { return None }
     if state.is_some_and(|s| s == IpadInputState::NotSetUp) && !placed { return None }
     let connected = state == Some(IpadInputState::Ready);

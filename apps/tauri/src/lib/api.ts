@@ -19,7 +19,10 @@ export interface Settings {
   appearance: "system" | "light" | "dark";
   bluetooth_enabled: boolean;
   retired_hosts: string[];
+  /** Free layout: device rectangles in desktop pixels. Empty means "made from attachments". */
+  layout: Placement[];
 }
+export interface Placement { device_id: string; rect: Rect }
 export interface Rect { left: number; top: number; right: number; bottom: number }
 export interface Monitor { id: string; rect: Rect }
 export interface HostStatus { id: string; name: string | null; connected: boolean; interval_ms: number; notify_avg_ms: number; notify_max_ms: number }

@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    edge::{EdgeEvent, EdgeTracker},
     hid::{HeldInput, KeyboardReport, MouseReport, split_delta},
-    layout::{Attachment, Edge, Monitor, Rect, entry, side},
+    layout::{Edge, Monitor, Rect},
     settings::Settings,
+    space::{self, Beyond, Placement, Tracker, opposite},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,10 +41,10 @@ const HOLD_GAP_MS: u64 = 180;
 const RETURN_INSET: i32 = 20;
 
 struct Remote {
-    attachment: Attachment,
-    rect: Option<Rect>,
-    by_edge: bool,
-    tracker: EdgeTracker,
+    device_id: String,
+    tracker: Tracker,
+    /// Where the Windows cursor lands on leaving: set when entered by an edge, `None` after a hotkey.
+    return_to: Option<(i32, i32)>,
     held: HeldInput,
     pending: (i32, i32),
     next_due: u64,
@@ -53,6 +53,8 @@ struct Remote {
 pub struct Router {
     settings: Settings,
     monitors: Vec<Monitor>,
+    /// The free layout in use: saved, or made from edge attachments for the current monitors.
+    layout: Vec<Placement>,
     intervals: HashMap<String, u64>,
     /// (device id, since ms, last push ms) while the cursor pushes into an attached edge.
     hold: Option<(String, u64, u64)>,
@@ -60,16 +62,34 @@ pub struct Router {
     cursor: (i32, i32),
 }
 
+/// `n` pixels past `p` in the direction of `edge`: into the screen that lies beyond that edge.
+fn inset(edge: Edge, p: (i32, i32), n: i32) -> (i32, i32) {
+    match edge { Edge::Left => (p.0 - n, p.1), Edge::Right => (p.0 + n, p.1), Edge::Top => (p.0, p.1 - n), Edge::Bottom => (p.0, p.1 + n) }
+}
+
 impl Router {
     pub fn new(settings: Settings, monitors: Vec<Monitor>) -> Self {
-        Self { settings, monitors, intervals: HashMap::new(), hold: None, remote: None, cursor: (0, 0) }
+        let mut r = Self { settings, monitors, layout: Vec::new(), intervals: HashMap::new(), hold: None, remote: None, cursor: (0, 0) };
+        r.relayout();
+        r
     }
-    pub fn set_settings(&mut self, s: Settings) { self.settings = s; self.hold = None; }
-    pub fn set_monitors(&mut self, m: Vec<Monitor>) { self.monitors = m; self.hold = None; }
+    pub fn set_settings(&mut self, s: Settings) { self.settings = s; self.hold = None; self.relayout(); }
+    pub fn set_monitors(&mut self, m: Vec<Monitor>) { self.monitors = m; self.hold = None; self.relayout(); }
     pub fn set_interval(&mut self, host: &str, ms: u64) { self.intervals.insert(host.to_string(), ms); }
-    pub fn active(&self) -> Option<&str> { self.remote.as_ref().map(|r| r.attachment.device_id.as_str()) }
+    pub fn active(&self) -> Option<&str> { self.remote.as_ref().map(|r| r.device_id.as_str()) }
     pub fn next_tick_ms(&self) -> Option<u64> {
         self.remote.as_ref().filter(|r| r.pending != (0, 0)).map(|r| r.next_due)
+    }
+
+    fn relayout(&mut self) {
+        let s = &self.settings;
+        self.layout = space::effective(&s.layout, &s.attachments, &self.monitors, |id| s.width_for(id));
+    }
+
+    /// Hotkey order: the saved layout's order, else the attachments' (a device on an unplugged screen keeps its number).
+    fn device_at(&self, n: u8) -> Option<String> {
+        let i = n as usize - 1;
+        if self.settings.layout.is_empty() { self.settings.attachments.get(i).map(|a| a.device_id.clone()) } else { self.settings.layout.get(i).map(|p| p.device_id.clone()) }
     }
 
     pub fn on_input(&mut self, input: Input, now_ms: u64, connected: &dyn Fn(&str) -> bool) -> Vec<Action> {
@@ -77,15 +97,15 @@ impl Router {
             Input::Hotkey(0) | Input::Escape => self.leave(),
             Input::Hotkey(n) => self.hotkey(n, now_ms, connected),
             _ if self.remote.is_none() => self.local(input, now_ms, connected),
-            _ => self.remote_input(input, now_ms),
+            _ => self.remote_input(input, now_ms, connected),
         }
     }
 
     pub fn tick(&mut self, now_ms: u64, connected: &dyn Fn(&str) -> bool) -> Vec<Action> {
         let Some(r) = &self.remote else { return Vec::new() };
-        if !connected(&r.attachment.device_id) { return self.leave() }
+        if !connected(&r.device_id) { return self.leave() }
         if r.pending == (0, 0) || now_ms < r.next_due { return Vec::new() }
-        let interval = self.interval_for(&r.attachment.device_id);
+        let interval = self.interval_for(&r.device_id);
         let r = self.remote.as_mut().unwrap();
         r.next_due = now_ms + interval;
         flush(r)
@@ -96,55 +116,61 @@ impl Router {
     fn local(&mut self, input: Input, now_ms: u64, connected: &dyn Fn(&str) -> bool) -> Vec<Action> {
         let Input::Move { dx, dy, cursor } = input else { return Vec::new() };
         self.cursor = cursor;
-        let target = entry(&self.settings.attachments, &self.monitors, cursor, dx, dy)
-            .filter(|a| connected(&a.device_id))
-            .cloned();
-        let Some(a) = target else { self.hold = None; return Vec::new() };
+        let target = space::entry(&self.layout, &self.monitors, cursor, dx, dy)
+            .filter(|(p, _, _)| connected(&p.device_id))
+            .map(|(p, e, a)| (p.device_id.clone(), e, a));
+        let Some((id, edge, along)) = target else { self.hold = None; return Vec::new() };
         match self.hold.clone() {
             // A continuing push (no pause longer than HOLD_GAP_MS) counts towards the hold.
-            Some((id, since, last)) if id == a.device_id && now_ms.saturating_sub(last) <= HOLD_GAP_MS => {
-                if now_ms.saturating_sub(since) >= self.settings.entry_hold_ms { return self.enter(a, true, now_ms) }
-                self.hold = Some((id, since, now_ms));
+            Some((held, since, last)) if held == id && now_ms.saturating_sub(last) <= HOLD_GAP_MS => {
+                if now_ms.saturating_sub(since) >= self.settings.entry_hold_ms {
+                    let back = inset(edge, cursor, RETURN_INSET);
+                    return self.enter(&id, edge, along, Some(back), now_ms);
+                }
+                self.hold = Some((held, since, now_ms));
                 Vec::new()
             }
-            _ => { self.hold = Some((a.device_id, now_ms, now_ms)); Vec::new() }
+            _ => { self.hold = Some((id, now_ms, now_ms)); Vec::new() }
         }
     }
 
     fn hotkey(&mut self, n: u8, now_ms: u64, connected: &dyn Fn(&str) -> bool) -> Vec<Action> {
-        let Some(a) = self.settings.attachments.get(n as usize - 1).cloned() else {
-            return vec![Action::Notice(format!("no device on hotkey {n}"))];
-        };
-        if !connected(&a.device_id) { return vec![Action::Notice("That device is not connected".into())] }
+        let Some(id) = self.device_at(n) else { return vec![Action::Notice(format!("no device on hotkey {n}"))] };
+        if !connected(&id) { return vec![Action::Notice("That device is not connected".into())] }
         let mut out = if self.remote.is_some() { self.leave() } else { Vec::new() };
-        out.extend(self.enter(a, false, now_ms));
+        let edge = self.layout.iter().find(|p| p.device_id == id).map(|p| space::home_edge(p, &self.monitors))
+            .or_else(|| self.settings.attachments.iter().find(|a| a.device_id == id).map(|a| opposite(a.edge)))
+            .unwrap_or(Edge::Left);
+        out.extend(self.enter(&id, edge, 0.5, None, now_ms));
         out
     }
 
-    fn enter(&mut self, a: Attachment, by_edge: bool, now_ms: u64) -> Vec<Action> {
+    /// Takes control of `id`, pinning its pointer against `edge` (the device's own edge) at `along`.
+    fn enter(&mut self, id: &str, edge: Edge, along: f64, return_to: Option<(i32, i32)>, now_ms: u64) -> Vec<Action> {
         self.hold = None;
-        let cal = self.settings.calibration_for(&a.device_id);
-        let mut tracker = EdgeTracker::new(side(a.edge), self.settings.width_for(&a.device_id), cal.gain, cal.min_push, cal.dwell_ms);
-        tracker.enter(now_ms);
-        let host = a.device_id.clone();
-        let vertical = matches!(a.edge, Edge::Top | Edge::Bottom);
-        let pin = tracker.pin_delta();
-        let rect = self.monitors.iter().find(|m| m.id == a.monitor_id).map(|m| m.rect);
+        let cal = self.settings.calibration_for(id);
+        let width = self.settings.width_for(id);
+        // A device on an unplugged screen still gets a shape, so hotkeys and Esc keep working.
+        let rect = self.layout.iter().find(|p| p.device_id == id).map(|p| p.rect)
+            .unwrap_or(Rect { left: 0, top: 0, right: width as i32, bottom: (width * 0.75) as i32 });
+        let mut tracker = Tracker::new(&rect, width, cal.gain, cal.min_push, cal.dwell_ms);
+        tracker.enter(edge, along, now_ms);
+        let (px, py) = tracker.pin_delta(edge);
+        let host = id.to_string();
         let mut out = vec![Action::Suppress(true)];
-        let (px, py) = if vertical { (0, pin) } else { (pin, 0) };
         out.extend(split_delta(px, py).into_iter().map(|(dx, dy)| Action::Mouse { host: host.clone(), report: MouseReport { dx, dy, ..Default::default() } }));
-        out.push(Action::Active(Some(host)));
-        self.remote = Some(Remote { attachment: a, rect, by_edge, tracker, held: HeldInput::default(), pending: (0, 0), next_due: now_ms });
+        out.push(Action::Active(Some(host.clone())));
+        self.remote = Some(Remote { device_id: host, tracker, return_to, held: HeldInput::default(), pending: (0, 0), next_due: now_ms });
         out
     }
 
-    fn remote_input(&mut self, input: Input, now_ms: u64) -> Vec<Action> {
+    fn remote_input(&mut self, input: Input, now_ms: u64, connected: &dyn Fn(&str) -> bool) -> Vec<Action> {
         let r = self.remote.as_mut().unwrap();
-        let host = r.attachment.device_id.clone();
+        let host = r.device_id.clone();
         match input {
             Input::Move { dx, dy, .. } => {
-                let axis = if matches!(r.attachment.edge, Edge::Top | Edge::Bottom) { dy } else { dx };
-                if r.tracker.on_move(axis, now_ms) == EdgeEvent::Return { return self.leave() }
+                if let Some((edge, along)) = r.tracker.on_move(dx, dy, now_ms) { return self.cross(edge, along, now_ms, connected) }
+                let r = self.remote.as_mut().unwrap();
                 r.pending.0 += dx;
                 r.pending.1 += dy;
                 Vec::new()
@@ -170,28 +196,49 @@ impl Router {
         }
     }
 
+    /// A deliberate push left the active device by `edge` at `along`: Windows, the next device, or stay.
+    fn cross(&mut self, edge: Edge, along: f64, now_ms: u64, connected: &dyn Fn(&str) -> bool) -> Vec<Action> {
+        let id = self.remote.as_ref().unwrap().device_id.clone();
+        let Some(rect) = self.layout.iter().find(|p| p.device_id == id).map(|p| p.rect) else {
+            // Unplugged screen: the edge that faced Windows still returns, to where the cursor was.
+            let faced = self.settings.attachments.iter().find(|a| a.device_id == id).map(|a| opposite(a.edge));
+            return if faced == Some(edge) { self.leave() } else { Vec::new() };
+        };
+        let p = space::point_on(&rect, edge, along);
+        match space::what_is_beyond(edge, p, &self.monitors, &self.layout, &id) {
+            Beyond::Monitor(_, q) => {
+                self.remote.as_mut().unwrap().return_to = Some(inset(edge, q, RETURN_INSET));
+                self.leave()
+            }
+            Beyond::Device(next) if connected(&next) => {
+                let Some(d) = self.layout.iter().find(|d| d.device_id == next) else { return Vec::new() };
+                let in_edge = opposite(edge);
+                let a = space::along(&d.rect, in_edge, p);
+                let back = self.remote.as_ref().unwrap().return_to;
+                let mut out = self.leave_remote();
+                out.extend(self.enter(&next, in_edge, a, back, now_ms).into_iter().filter(|x| *x != Action::Suppress(true)));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Releases everything held on the active device, without giving input back to Windows.
+    fn leave_remote(&mut self) -> Vec<Action> {
+        let Some(mut r) = self.remote.take() else { return Vec::new() };
+        let (k, m) = r.held.release_all();
+        vec![Action::Keyboard { host: r.device_id.clone(), report: k }, Action::Mouse { host: r.device_id, report: m }]
+    }
+
     /// Windows input first, then release everything held on the device.
     fn leave(&mut self) -> Vec<Action> {
-        let Some(mut r) = self.remote.take() else { return Vec::new() };
-        let host = r.attachment.device_id.clone();
-        let (k, m) = r.held.release_all();
-        let (x, y) = self.cursor;
-        let place = match (r.by_edge, r.rect) {
-            (true, Some(rect)) => match r.attachment.edge {
-                Edge::Right => (rect.right - 1 - RETURN_INSET, y),
-                Edge::Left => (rect.left + RETURN_INSET, y),
-                Edge::Top => (x, rect.top + RETURN_INSET),
-                Edge::Bottom => (x, rect.bottom - 1 - RETURN_INSET),
-            },
-            _ => (x, y),
-        };
-        vec![
-            Action::Suppress(false),
-            Action::Keyboard { host: host.clone(), report: k },
-            Action::Mouse { host, report: m },
-            Action::PlaceCursor(place.0, place.1),
-            Action::Active(None),
-        ]
+        let Some(return_to) = self.remote.as_ref().map(|r| r.return_to) else { return Vec::new() };
+        let place = return_to.unwrap_or(self.cursor);
+        let mut out = vec![Action::Suppress(false)];
+        out.extend(self.leave_remote());
+        out.push(Action::PlaceCursor(place.0, place.1));
+        out.push(Action::Active(None));
+        out
     }
 }
 
@@ -199,7 +246,7 @@ impl Router {
 fn flush(r: &mut Remote) -> Vec<Action> {
     let (dx, dy) = std::mem::take(&mut r.pending);
     let buttons = r.held.buttons();
-    let host = &r.attachment.device_id;
+    let host = &r.device_id;
     split_delta(dx, dy).into_iter()
         .map(|(dx, dy)| Action::Mouse { host: host.clone(), report: MouseReport { buttons, dx, dy, ..Default::default() } })
         .collect()
@@ -327,6 +374,56 @@ mod tests {
     #[test] fn hotkey_zero_returns_to_windows() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
         assert!(r.on_input(Input::Hotkey(0), 10, &up).contains(&Action::Active(None)));
+    }
+    // Free layout: the phone sits to the right of the iPad, which sits to the right of the screen.
+    fn chain() -> Router {
+        use crate::space::Placement;
+        let mut s = Settings::default();
+        s.layout = vec![
+            Placement { device_id: "ipad".into(), rect: Rect { left: 1920, top: 0, right: 3286, bottom: 1024 } },
+            Placement { device_id: "phone".into(), rect: Rect { left: 3286, top: 100, right: 3686, bottom: 900 } },
+        ];
+        Router::new(s, vec![Monitor { id: "M1".into(), rect: Rect { left: 0, top: 0, right: 1920, bottom: 1080 } }])
+    }
+    /// Pushes with `dx` for `n` packets 10 ms apart from `t`; returns every action.
+    fn shove(r: &mut Router, dx: i32, n: u64, t: u64) -> Vec<Action> {
+        (0..n).flat_map(|i| { let mut a = r.on_input(Input::Move { dx, dy: 0, cursor: (0, 0) }, t + i * 10, &up); a.extend(r.tick(t + i * 10, &up)); a }).collect()
+    }
+    #[test] fn pointer_walks_pc_ipad_phone_and_back() {
+        let mut r = chain();
+        for t in [0, 100, 200, 300] { r.on_input(Input::Move { dx: 3, dy: 0, cursor: (1919, 500) }, t, &up); }
+        assert_eq!(r.active(), Some("ipad"));
+        shove(&mut r, 20, 80, 2000); // across the iPad (1366 wide)
+        let a = shove(&mut r, 5, 40, 3000);
+        assert_eq!(r.active(), Some("phone"), "a push at the iPad's right edge enters the phone");
+        assert!(!a.contains(&Action::Suppress(false)), "Windows never gets input back on the way");
+        assert!(a.contains(&Action::Keyboard { host: "ipad".into(), report: KeyboardReport::default() }), "the iPad is let go of");
+        shove(&mut r, -5, 40, 5000); // pinned at the phone's left edge, so this pushes back
+        assert_eq!(r.active(), Some("ipad"));
+        shove(&mut r, -20, 80, 7000);
+        let a = shove(&mut r, -5, 40, 8000);
+        assert_eq!(r.active(), None);
+        assert!(a.contains(&Action::PlaceCursor(1899, 500)), "{a:?}");
+    }
+    #[test] fn an_edge_with_nothing_beyond_keeps_the_pointer() {
+        let mut r = chain();
+        r.on_input(Input::Hotkey(2), 0, &up); // the phone; nothing lies right of it
+        assert_eq!(r.active(), Some("phone"));
+        shove(&mut r, 20, 40, 2000);
+        shove(&mut r, 5, 40, 3000);
+        assert_eq!(r.active(), Some("phone"));
+    }
+    #[test] fn a_disconnected_neighbour_is_not_entered() {
+        let mut r = chain();
+        r.on_input(Input::Hotkey(1), 0, &up);
+        let only_ipad = |id: &str| id == "ipad";
+        for i in 0..80u64 { r.on_input(Input::Move { dx: 20, dy: 0, cursor: (0, 0) }, 2000 + i * 10, &only_ipad); }
+        for i in 0..40u64 { r.on_input(Input::Move { dx: 5, dy: 0, cursor: (0, 0) }, 3000 + i * 10, &only_ipad); }
+        assert_eq!(r.active(), Some("ipad"));
+    }
+    #[test] fn saved_layout_sets_hotkey_order() {
+        let mut r = chain();
+        assert!(r.on_input(Input::Hotkey(2), 0, &up).contains(&Action::Active(Some("phone".into()))));
     }
     // Final review I4: a pause at the edge restarts the hold.
     #[test] fn pause_at_edge_restarts_hold() {
