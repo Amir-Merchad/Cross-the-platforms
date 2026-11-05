@@ -22,15 +22,11 @@ Entry from a monitor edge maps the cursor along the device edge. A deliberate pu
 
 `Settings.layout`, validated on load and save. `placed_ids()` gives hotkey order, watched hosts and hotkey count. `Command::Reload` boxes its settings.
 
-### Task 4: Desk editor — not started
+### Task 4: Desk editor — done, in a lighter form
 
-**Files:** `apps/tauri/src/components/DeskMap.tsx`, `apps/tauri/src/lib/desk.ts`, tests in `desk.test.ts`.
+Built as an extension of today's map rather than a to-scale editor: drag a device next to any placed device to put it beside it (`apps/tauri/src/lib/space.ts`, `nearestDevice`, `deskPlan` hangs devices from their neighbour, chains included). The first such drop writes `layout` from the current edges, so nothing moves. Screen-edge moves keep the layout in step and refuse a drop that would overlap. Hotkeys, panel lines and the switch-back check follow placement order. Tests in `space.test.ts`, `desk.test.ts`, `devices.test.ts`.
 
-- [ ] Draw monitors and placements to scale from `effective` (port the derived layout to TypeScript, or have the engine return it).
-- [ ] Drag a device anywhere; snap to the nearest monitor or device edge within 24 px; refuse a drop that overlaps.
-- [ ] The first drag writes `layout` from the derived one, so nothing jumps.
-- [ ] Fine tuning gets a height (aspect) slider.
-- [ ] Tests: snapping, overlap refused, first write keeps positions, hotkey order follows the list.
+Not built: a to-scale view with free dragging anywhere, resizing, and an aspect slider. *(Call: the beside-a-device drop covers stacking and chains, which is what the owner asked for, with much less risk to the working map.)*
 
 ### Task 5: Device check
 
