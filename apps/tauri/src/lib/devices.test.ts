@@ -8,7 +8,7 @@ const host = (id: string, name: string | null, connected = true): HostStatus => 
 const status = (hosts: HostStatus[]): Status => ({ advertising: true, hosts, active: null, notice: null });
 const settings = (o: Partial<Settings> = {}): Settings => ({
   version: 1, attachments: [], calibration: {}, entry_hold_ms: 0, start_with_windows: false, remote_width: {},
-  clipboard_sync: true, receive_dir: null, device_links: {}, device_colors: {}, appearance: "system", ...o,
+  clipboard_sync: true, receive_dir: null, device_links: {}, device_colors: {}, appearance: "system", bluetooth_enabled: true, retired_hosts: [], ...o,
 });
 const peer = (id: string, name: string): Peer => ({ id, name, kind: "Ipad" });
 const mon: Monitor[] = [{ id: "M1", rect: { left: 0, top: 0, right: 100, bottom: 100 } }];

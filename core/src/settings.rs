@@ -34,11 +34,16 @@ pub struct Settings {
     pub device_colors: BTreeMap<String, String>,
     /// `"system"`, `"light"` or `"dark"`.
     pub appearance: String,
+    /// Off: the Bluetooth peripheral is never started; everything else keeps running.
+    pub bluetooth_enabled: bool,
+    /// Old Bluetooth host ids of a device that moved to another host (the iPad to `ipad-wifi`): hidden
+    /// from the device list so one device never shows twice.
+    pub retired_hosts: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into() }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new() }
     }
 }
 
@@ -138,6 +143,19 @@ mod tests {
         let s = Settings::load(&p);
         assert!(s.device_links.is_empty() && s.device_colors.is_empty());
         assert_eq!(s.appearance, "system");
+    }
+    #[test] fn older_file_keeps_bluetooth_on() {
+        let d = tempdir().unwrap(); let p = d.path().join("s.json");
+        std::fs::write(&p, r#"{"version":1,"entry_hold_ms":500}"#).unwrap();
+        let s = Settings::load(&p);
+        assert!(s.bluetooth_enabled);
+        assert!(s.retired_hosts.is_empty());
+    }
+    #[test] fn bluetooth_switch_and_retired_hosts_round_trip() {
+        let d = tempdir().unwrap(); let p = d.path().join("s.json");
+        let s = Settings { bluetooth_enabled: false, retired_hosts: vec!["AA:BB".into()], ..Settings::default() };
+        s.save(&p).unwrap();
+        assert_eq!(Settings::load(&p), s);
     }
     #[test] fn clipboard_sync_defaults_on() { assert!(Settings::default().clipboard_sync); }
     #[test] fn invalid_layout_is_not_saved() {

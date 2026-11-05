@@ -17,6 +17,8 @@ export interface Settings {
   device_links: Record<string, string>;
   device_colors: Record<string, string>;
   appearance: "system" | "light" | "dark";
+  bluetooth_enabled: boolean;
+  retired_hosts: string[];
 }
 export interface Rect { left: number; top: number; right: number; bottom: number }
 export interface Monitor { id: string; rect: Rect }

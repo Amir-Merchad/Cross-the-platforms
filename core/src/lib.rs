@@ -1,4 +1,5 @@
 pub mod hid;
+pub mod ipadhid;
 pub mod edge;
 pub mod names;
 pub mod transfer;
