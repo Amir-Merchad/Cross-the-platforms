@@ -6,6 +6,7 @@ import { Slider } from "@/components/ui/slider";
 import { DEFAULT_CALIBRATION, DEFAULT_WIDTH, switchTo, type Calibration } from "@/lib/api";
 import { linkChoices, type AddKind } from "@/lib/addflow";
 import { hotkeyNumber, placementChange, screenName, whereLine } from "@/lib/desk";
+import { placedIds } from "@/lib/space";
 import { DEFAULT_COLOURS, forgetDevice, panelLines, type Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { forgetPeer, sendFiles } from "@/lib/transfer";
@@ -52,8 +53,9 @@ function Panel({ d }: { d: Device }) {
   const active = status?.active ?? null;
   const lines = panelLines(d, {
     active, btOff, clip, ipad: status?.ipad,
-    where: d.placement ? whereLine(d.placement.edge, screenName(monitors, d.placement.monitor_id)) : "",
-    hotkey: d.hostId ? hotkeyNumber(settings.attachments, d.hostId) : null,
+    where: d.placement ? whereLine(d.placement.edge, screenName(monitors, d.placement.monitor_id))
+      : d.beside ? whereLine(d.beside.edge, devices.find((o) => o.key === d.beside!.anchor)?.name ?? "another device") : "",
+    hotkey: d.hostId ? hotkeyNumber(placedIds(settings), d.hostId) : null,
   });
   const inControl = !!d.hostId && d.hostId === active;
   const toggle = () => switchTo(inControl ? null : d.hostId).catch(() => say("Could not switch. Try again."));
@@ -67,7 +69,7 @@ function Panel({ d }: { d: Device }) {
 
   const forget = async () => {
     try {
-      if (placementChange(active, forgetDevice(settings, d).attachments) === null) await switchTo(null);
+      if (placementChange(active, placedIds(forgetDevice(settings, d))) === null) await switchTo(null);
       if (d.peerId) { await forgetPeer(d.peerId); await refreshPeers(); }
     } catch {
       say("That did not finish. Hold to forget again.");

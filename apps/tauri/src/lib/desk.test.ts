@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Attachment, Monitor, Settings } from "./api";
-import { deskPlan, deviceSize, dropCounts, edgeBar, edgeOpen, fileTarget, hotkeyNumber, keyboardScreen, magnet, moveDevice, nearestEdge, placedLine, placementChange, screenBoxes, slotFor, swapToMissing } from "./desk";
+import { deskPlan, deviceSize, dropCounts, edgeBar, edgeOpen, fileTarget, hotkeyNumber, keyboardScreen, magnet, moveDevice, nearestDevice, nearestEdge, placedLine, placementChange, screenBoxes, slotFor, swapToMissing } from "./desk";
 import { forgetDevice, type Device } from "./devices";
 
 const a = (device_id: string, monitor_id: string, edge: Attachment["edge"]): Attachment => ({ device_id, monitor_id, edge });
@@ -30,7 +30,7 @@ test("null unplaces and keeps the order of the rest", () => {
 });
 
 test("hotkeyNumber follows list order", () => {
-  const l = [a("x", "M1", "Left"), a("y", "M1", "Right")];
+  const l = ["x", "y"];
   expect(hotkeyNumber(l, "y")).toBe(2);
   expect(hotkeyNumber(l, "nope")).toBeNull();
 });
@@ -45,25 +45,27 @@ test("magnet pulls 35% of the way", () => {
   expect(magnet({ x: 0, y: 0 }, { x: 100, y: 200, w: 1, h: 1 })).toEqual({ x: 35, y: 70 });
 });
 
+const ids = (l: { device_id: string }[]) => l.map((x) => x.device_id);
+
 test("placementChange: unplacing the device in control means Windows first", () => {
   const next = moveDevice([a("x", "M1", "Left"), a("y", "M1", "Right")], "x", null);
-  expect(placementChange("x", next)).toBeNull();
+  expect(placementChange("x", ids(next))).toBeNull();
 });
 
 test("placementChange: forgetting the device in control means Windows first", () => {
   const before = { attachments: [a("x", "M1", "Left")], device_links: {}, device_colors: {} } as unknown as Settings;
   const next = forgetDevice(before, { hostId: "x", peerId: null } as Device);
-  expect(placementChange("x", next.attachments)).toBeNull();
+  expect(placementChange("x", ids(next.attachments))).toBeNull();
 });
 
 test("placementChange: losing an edge to an unplaced device means Windows first", () => {
-  expect(placementChange("y", moveDevice([a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" }))).toBeNull();
+  expect(placementChange("y", ids(moveDevice([a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" })))).toBeNull();
 });
 
 test("placementChange: a swap, another device or no device in control changes nothing", () => {
   const swapped = moveDevice([a("x", "M1", "Left"), a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" });
-  expect(placementChange("y", swapped)).toBeUndefined();
-  expect(placementChange("x", moveDevice([a("x", "M1", "Left"), a("y", "M1", "Right")], "y", null))).toBeUndefined();
+  expect(placementChange("y", ids(swapped))).toBeUndefined();
+  expect(placementChange("x", ids(moveDevice([a("x", "M1", "Left"), a("y", "M1", "Right")], "y", null)))).toBeUndefined();
   expect(placementChange(null, [])).toBeUndefined();
 });
 
@@ -75,7 +77,7 @@ test("fileTarget picks the nearest device within 34 px, and none beyond", () => 
   expect(fileTarget({ x: 150, y: 235 }, rects)).toBeNull();
 });
 
-const dev = (key: string, o: Partial<Device> = {}) => ({ key, kind: null, placement: null, ...o });
+const dev = (key: string, o: Partial<Device> = {}) => ({ key, kind: null, placement: null, beside: null, ...o });
 const stage = { w: 756, h: 572 };
 const wide: Monitor[] = [{ id: "M1", rect: { left: 0, top: 0, right: 1600, bottom: 900 } }];
 
@@ -183,4 +185,27 @@ test("swapToMissing names the device a swap would send to an unplugged screen", 
   expect(swapToMissing(list, "x", null, live)).toBeNull(); // Delete
   expect(swapToMissing([a("x", "M1", "Left"), a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" }, live)).toBeNull();
   expect(swapToMissing([a("y", "M1", "Right")], "x", { monitorId: "M1", edge: "Right" }, live)).toBeNull(); // unplaced mover
+});
+
+test("deskPlan hangs a device beside its anchor, chains included", () => {
+  const plan = deskPlan([
+    dev("ipad", { placement: a("ipad", "M1", "Right") }),
+    dev("phone", { kind: "Android", beside: { anchor: "ipad", edge: "Right" } }),
+    dev("watch", { kind: "Android", beside: { anchor: "phone", edge: "Bottom" } }),
+    dev("lost", { beside: { anchor: "gone", edge: "Left" } }),
+  ], wide, stage);
+  const ipad = plan.homes.get("ipad")!, phone = plan.homes.get("phone")!, watch = plan.homes.get("watch")!;
+  expect(phone.x).toBeGreaterThan(ipad.x + deviceSize(null).w);
+  expect(watch.y).toBeGreaterThan(phone.y + deviceSize("Android").h);
+  expect(plan.homes.get("lost")!.y).toBeGreaterThan(plan.tray.y); // an anchor that is not drawn: the tray
+});
+
+test("nearestDevice finds a free side of a placed device and skips taken ones", () => {
+  const placed = [{ key: "ipad", kind: null, home: { x: 500, y: 100 } }];
+  const size = deviceSize("Android");
+  const right = slotFor({ x: 500, y: 100, ...deviceSize(null) }, "Right", size, 10);
+  const centre = { x: right.x + right.w / 2, y: right.y + right.h / 2 };
+  expect(nearestDevice(centre, size, placed, [])).toMatchObject({ beside: "ipad", edge: "Right" });
+  expect(nearestDevice(centre, size, placed, [{ anchor: "ipad", edge: "Right" }])?.edge).not.toBe("Right");
+  expect(nearestDevice({ x: 5000, y: 5000 }, size, placed, [])).toBeNull();
 });

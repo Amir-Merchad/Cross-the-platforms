@@ -72,6 +72,21 @@ export function nearestEdge(centre: { x: number; y: number }, size: Size, screen
   return best;
 }
 
+/** The closest free side of a placed device to drop beside, within `range`, or null. */
+export function nearestDevice(centre: Point, size: Size, placed: { key: string; kind: PeerKind | null; home: Point }[], taken: { anchor: string; edge: Edge }[], range = 120): { beside: string; edge: Edge; slot: Box } | null {
+  let best: { beside: string; edge: Edge; slot: Box } | null = null;
+  let bestD = range;
+  for (const p of placed) {
+    for (const edge of EDGES) {
+      if (taken.some((t) => t.anchor === p.key && t.edge === edge)) continue;
+      const slot = slotFor({ ...p.home, ...deviceSize(p.kind) }, edge, size, 10);
+      const d = Math.hypot(centre.x - (slot.x + slot.w / 2), centre.y - (slot.y + slot.h / 2));
+      if (d <= bestD) { bestD = d; best = { beside: p.key, edge, slot }; }
+    }
+  }
+  return best;
+}
+
 /** Pulls a dragged position `pull` of the way to the top-left of the slot. */
 export function magnet(pos: { x: number; y: number }, slot: Box, pull = 0.35): { x: number; y: number } {
   return { x: pos.x + (slot.x - pos.x) * pull, y: pos.y + (slot.y - pos.y) * pull };
@@ -92,7 +107,7 @@ export function moveDevice(attachments: Attachment[], id: string, target: { moni
 }
 
 /** False when a drag ends away from every edge and the device's screen is unplugged: it keeps its place for when the screen returns. */
-export const dropCounts = (d: Pick<Device, "missingScreen">, target: { monitorId: string; edge: Edge } | null): boolean => !!target || !d.missingScreen;
+export const dropCounts = (d: Pick<Device, "missingScreen">, target: object | null): boolean => !!target || !d.missingScreen;
 
 /** The device a swap would send to a monitor that is not connected, because the mover sits on one. */
 export function swapToMissing(attachments: Attachment[], id: string, target: { monitorId: string; edge: Edge } | null, monitors: Monitor[]): string | null {
@@ -101,15 +116,15 @@ export function swapToMissing(attachments: Attachment[], id: string, target: { m
   return attachments.find((a) => a.device_id !== id && a.monitor_id === target.monitorId && a.edge === target.edge)?.device_id ?? null;
 }
 
-/** 1-based hotkey number, following list order. */
-export function hotkeyNumber(attachments: Attachment[], id: string): number | null {
-  const i = attachments.findIndex((a) => a.device_id === id);
+/** 1-based hotkey number, following placement order (space.placedIds). */
+export function hotkeyNumber(ids: string[], id: string): number | null {
+  const i = ids.indexOf(id);
   return i < 0 ? null : i + 1;
 }
 
 /** null when the device in control has lost its place: return input to Windows before saving. */
-export function placementChange(activeHostId: string | null, next: Attachment[]): null | undefined {
-  return activeHostId && !next.some((a) => a.device_id === activeHostId) ? null : undefined;
+export function placementChange(activeHostId: string | null, next: string[]): null | undefined {
+  return activeHostId && !next.includes(activeHostId) ? null : undefined;
 }
 
 /** The device nearest to `at`, measured to its edge, within `range`. */
@@ -129,7 +144,7 @@ const ROOM = { side: 170, top: 170, bottom: 200 }; // around the screens, so a d
 const TRAY = { inset: 12, h: 184, minW: 190, maxW: 290, left: 18, right: 12, bottom: 6, gap: 8 };
 
 /** Screens, the tray and where every device rests, for a map of size `stage`. */
-export function deskPlan(devices: Pick<Device, "key" | "kind" | "placement">[], monitors: Monitor[], stage: Size): { screens: Screen[]; tray: Box; homes: Map<string, Point> } {
+export function deskPlan(devices: Pick<Device, "key" | "kind" | "placement" | "beside">[], monitors: Monitor[], stage: Size): { screens: Screen[]; tray: Box; homes: Map<string, Point> } {
   const area = { w: Math.max(stage.w - 2 * ROOM.side, 1), h: Math.max(stage.h - ROOM.top - ROOM.bottom, 1) };
   const screens = screenBoxes(monitors, area).map((s) => ({ ...s, box: { ...s.box, x: s.box.x + ROOM.side, y: s.box.y + ROOM.top } }));
   const homes = new Map<string, Point>();
@@ -137,10 +152,25 @@ export function deskPlan(devices: Pick<Device, "key" | "kind" | "placement">[], 
   for (const d of devices) {
     const size = deviceSize(d.kind);
     const screen = screens.find((s) => s.id === d.placement?.monitor_id);
+    if (d.beside) continue;
     if (!screen) { loose.push({ key: d.key, size }); continue; }
     const { x, y } = slotFor(screen.box, d.placement!.edge, size);
     homes.set(d.key, { x, y });
   }
+  // Devices beside devices hang from their anchor, chains included; one whose anchor is not drawn waits in the tray.
+  const hanging = devices.filter((d) => d.beside);
+  for (let progress = true; progress;) {
+    progress = false;
+    for (const d of hanging) {
+      const at = homes.get(d.beside!.anchor);
+      const anchor = devices.find((a) => a.key === d.beside!.anchor);
+      if (homes.has(d.key) || !at || !anchor) continue;
+      const { x, y } = slotFor({ ...at, ...deviceSize(anchor.kind) }, d.beside!.edge, deviceSize(d.kind), 10);
+      homes.set(d.key, { x, y });
+      progress = true;
+    }
+  }
+  for (const d of hanging) if (!homes.has(d.key)) loose.push({ key: d.key, size: deviceSize(d.kind) });
   // ponytail: past two or three devices the tray overlaps them; make it scroll if people keep that many unplaced.
   const advance = loose.reduce((n, l) => n + l.size.w + TRAY.gap, 0);
   const last = loose.at(-1)?.size.w ?? 0;

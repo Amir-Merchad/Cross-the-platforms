@@ -2,13 +2,15 @@ import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Mo
 import DeviceObject from "@/components/DeviceObject";
 import { useDeskMotion, type Target } from "@/components/useDeskMotion";
 import { switchTo, type Edge } from "@/lib/api";
-import { deskPlan, dropCounts, EDGES, edgeBar, edgeOpen, hotkeyNumber, keyboardScreen, moveDevice, placedLine, placementChange, screenName, swapToMissing, type Box } from "@/lib/desk";
-import { deviceLook, type Device } from "@/lib/devices";
+import { deskPlan, dropCounts, EDGES, edgeBar, edgeOpen, hotkeyNumber, keyboardScreen, moveDevice, placedLine, placementChange, screenName, swapToMissing, whereLine, type Box } from "@/lib/desk";
+import { deviceLook, isPlaced, type Device } from "@/lib/devices";
+import { placeBeside, placedIds, syncLayout } from "@/lib/space";
 import { useHub } from "@/lib/hub";
 import { progressPercent } from "@/lib/transfer";
 import { cn } from "@/lib/utils";
 
 const NONE: Device[] = [];
+type ScreenTarget = { monitorId: string; edge: Edge };
 const KEYS: Record<string, Edge> = { ArrowRight: "Right", ArrowLeft: "Left", ArrowUp: "Top", ArrowDown: "Bottom" };
 
 const along = (box: Box, edge: Edge) => (edge === "Left" || edge === "Right" ? box.h : box.w);
@@ -35,21 +37,39 @@ export default function DeskMap({ over }: { over: string | null }) {
 
   const commit = async (d: Device, target: Target | null) => {
     const id = d.hostId!;
+    if (target?.beside) {
+      const next = placeBeside(settings, monitors, id, target.beside, target.edge);
+      const anchor = devices.find((o) => o.key === target.beside)?.name ?? "that device";
+      if (!next) { say(`That spot overlaps another screen or device. Pick another side of ${anchor}.`); return; }
+      update((s) => placeBeside(s, monitors, id, target.beside, target.edge) ?? s);
+      select(d.key);
+      say(`${d.name} sits ${whereLine(target.edge, anchor)}. Ctrl+Alt+${hotkeyNumber(placedIds(next), id)} jumps to it.`);
+      return;
+    }
+    return commitEdge(d, target as ScreenTarget | null);
+  };
+
+  const commitEdge = async (d: Device, target: ScreenTarget | null) => {
+    const id = d.hostId!;
     if (swapToMissing(settings.attachments, id, target, monitors)) {
       say(`Another device sits there, and it cannot swap to the screen ${d.name} was on. Pick a free edge.`);
       return;
     }
-    const next = moveDevice(settings.attachments, id, target);
+    // With a free layout saved, the layout follows; a drop that would overlap a device beside another is refused.
+    const unplace = (s: typeof settings) => (target ? s : { ...s, layout: (s.layout ?? []).filter((p) => p.device_id !== id) });
+    const apply = (s: typeof settings) => syncLayout(unplace({ ...s, attachments: moveDevice(s.attachments, id, target) }), s.attachments, monitors);
+    const after = apply(settings);
+    if (!after) { say("A device placed beside another sits there. Move it first, or pick another edge."); return; }
     try {
-      if (placementChange(active, next) === null) await switchTo(null);
+      if (placementChange(active, placedIds(after)) === null) await switchTo(null);
     } catch {
       say("Could not bring your keyboard and mouse back, so nothing changed. Try again.");
       return;
     }
-    update((s) => ({ ...s, attachments: moveDevice(s.attachments, id, target) }));
+    update((s) => apply(s) ?? s);
     select(d.key);
     say(target
-      ? placedLine(d.name, screenName(monitors, target.monitorId), target.edge, hotkeyNumber(next, id)!)
+      ? placedLine(d.name, screenName(monitors, target.monitorId), target.edge, hotkeyNumber(placedIds(after), id)!)
       : `${d.name} is not placed.${d.peerId ? " It stays paired for files and clipboard." : ""}`);
   };
 
@@ -70,12 +90,12 @@ export default function DeskMap({ over }: { over: string | null }) {
       if (edgeOpen(monitors, monitorId, edge)) commit(d, { monitorId, edge });
       else say(`Another screen sits on that side of ${screenName(monitors, monitorId)}. Pick a different edge.`);
     }
-    if (e.key === "Delete" && d.placement) commit(d, null);
+    if (e.key === "Delete" && isPlaced(d)) commit(d, null);
   };
   // Enter and Space arrive as a click with no pointer behind it; pointer selection happens on pointer up.
   const onClick = (e: MouseEvent, d: Device) => { if (e.detail === 0) select(d.key); };
 
-  const hint = !lifted && devices.find((d) => d.hostId && !d.placement);
+  const hint = !lifted && devices.find((d) => d.hostId && !isPlaced(d));
   const liftedDevice = devices.find((d) => d.key === lifted);
   const inControl = devices.find((d) => d.hostId && d.hostId === active);
   const home = inControl && plan.homes.get(inControl.key);
@@ -129,7 +149,7 @@ export default function DeskMap({ over }: { over: string | null }) {
         return (
           <DeviceObject
             key={d.key} d={d} off={off} sub={d.key === lifted ? "Placing" : sub} selected={d.key === current?.key} lifted={d.key === lifted}
-            hotkey={d.hostId && !d.missingScreen ? hotkeyNumber(settings.attachments, d.hostId) : null}
+            hotkey={d.hostId && !d.missingScreen ? hotkeyNumber(placedIds(settings), d.hostId) : null}
             ring={sending ? progressPercent(sending.done, sending.total) / 100 : null}
             onKeyDown={(e) => onKeyDown(e, d)} onClick={(e) => onClick(e, d)} {...bind(d)}
           />

@@ -1,12 +1,14 @@
 // Springs and pointer dragging for the map. Positions go straight to the DOM, so React never renders per frame.
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type RefObject } from "react";
 import type { Edge } from "@/lib/api";
-import { deviceSize, magnet, nearestEdge, screenName, slotFor, whereLine, type deskPlan } from "@/lib/desk";
+import { deviceSize, magnet, nearestDevice, nearestEdge, screenName, slotFor, whereLine, type deskPlan } from "@/lib/desk";
 import type { Device } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { step, STEP_MS, ticks } from "@/lib/spring";
 
-export type Target = { monitorId: string; edge: Edge };
+/** A screen edge, or (free layout) a side of another placed device. */
+export type Target = { monitorId: string; edge: Edge; beside?: undefined } | { beside: string; edge: Edge; monitorId?: undefined };
+const sameTarget = (a: Target | null, b: Target | null) => a?.edge === b?.edge && a?.monitorId === b?.monitorId && a?.beside === b?.beside;
 type Axis = { x: number; v: number; t: number };
 type Body = { x: Axis; y: Axis; s: Axis };
 type Drag = { key: string; ox: number; oy: number; sx: number; sy: number; moved: boolean; near: Target | null };
@@ -65,7 +67,7 @@ function makeSprings() {
 }
 
 export function useDeskMotion(stage: RefObject<HTMLDivElement | null>, plan: ReturnType<typeof deskPlan>, over: string | null, onDrop: (d: Device, target: Target | null) => void) {
-  const { select, say, monitors } = useHub();
+  const { select, say, monitors, devices } = useHub();
   const [lifted, setLifted] = useState<string | null>(null);
   const [near, setNear] = useState<Target | null>(null);
   const [springs] = useState(makeSprings);
@@ -108,16 +110,26 @@ export function useDeskMotion(stage: RefObject<HTMLDivElement | null>, plan: Ret
     }
     const size = deviceSize(d.kind);
     const pos = { x: p.x - g.ox, y: p.y - g.oy };
-    const edge = nearestEdge({ x: pos.x + size.w / 2, y: pos.y + size.h / 2 }, size, plan.screens, monitors);
+    const centre = { x: pos.x + size.w / 2, y: pos.y + size.h / 2 };
+    const edge = nearestEdge(centre, size, plan.screens, monitors);
     const screen = edge && plan.screens.find((s) => s.id === edge.monitorId);
-    const aim = edge && screen ? magnet(pos, slotFor(screen.box, edge.edge, size)) : pos;
+    // Free layout: beside any placed device (not itself, and not a side another device already hangs on).
+    const placed = devices.filter((o) => o.key !== d.key && o.hostId && (o.placement || o.beside) && plan.homes.has(o.key))
+      .map((o) => ({ key: o.key, kind: o.kind, home: plan.homes.get(o.key)! }));
+    const taken = devices.flatMap((o) => (o.beside && o.key !== d.key ? [o.beside] : []));
+    const dev = nearestDevice(centre, size, placed, taken);
+    const screenSlot = edge && screen ? slotFor(screen.box, edge.edge, size) : null;
+    const devCloser = dev && (!screenSlot || Math.hypot(centre.x - (dev.slot.x + dev.slot.w / 2), centre.y - (dev.slot.y + dev.slot.h / 2)) < Math.hypot(centre.x - (screenSlot.x + screenSlot.w / 2), centre.y - (screenSlot.y + screenSlot.h / 2)));
+    const target: Target | null = devCloser ? { beside: dev.beside, edge: dev.edge } : edge;
+    const aim = devCloser ? magnet(pos, dev.slot) : screenSlot ? magnet(pos, screenSlot) : pos;
     const b = springs.bodies.get(d.key)!;
     b.x.t = aim.x; b.y.t = aim.y;
     springs.wake();
-    if (edge?.monitorId !== g.near?.monitorId || edge?.edge !== g.near?.edge) {
-      g.near = edge;
-      setNear(edge);
-      say(edge ? `Release to place ${d.name} ${whereLine(edge.edge, screenName(monitors, edge.monitorId))}.` : "");
+    if (!sameTarget(target, g.near)) {
+      g.near = target;
+      setNear(target);
+      const anchor = target?.beside ? devices.find((o) => o.key === target.beside)?.name ?? "that device" : null;
+      say(!target ? "" : `Release to place ${d.name} ${whereLine(target.edge, anchor ?? screenName(monitors, target.monitorId!))}.`);
     }
   };
 

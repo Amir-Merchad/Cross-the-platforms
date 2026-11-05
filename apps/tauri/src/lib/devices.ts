@@ -1,12 +1,18 @@
 // One list of devices from Bluetooth hosts and file peers, merged by the stored links. No React.
 import type { Row } from "./activity";
-import type { Attachment, ClipStatus, IpadInputState, Monitor, Settings, Status } from "./api";
+import type { Attachment, ClipStatus, Edge, IpadInputState, Monitor, Settings, Status } from "./api";
+import { besideMap } from "./space";
 import { formatRate, type Peer, type PeerKind } from "./transfer";
 
 export type Device = {
   key: string; hostId: string | null; peerId: string | null; name: string; kind: PeerKind | null;
   connected: boolean; reachable: boolean; waiting: number; placement: Attachment | null; missingScreen: boolean; colour: string;
+  /** Placed beside another device (free layout) instead of at a screen edge: that device's host id and edge. */
+  beside: { anchor: string; edge: Edge } | null;
 };
+
+/** At a screen edge or beside another device. */
+export const isPlaced = (d: Pick<Device, "placement" | "beside">): boolean => !!d.placement || !!d.beside;
 
 /** The one Wi-Fi iPad's host id (core ipadhid::IPAD_HOST). */
 export const IPAD_HOST = "ipad-wifi";
@@ -42,6 +48,7 @@ export function migrateIpad(s: Settings, peers: Peer[]): Settings {
     attachments: s.attachments.filter((a) => a.device_id !== IPAD_HOST).map((a) => (a.device_id === old ? { ...a, device_id: IPAD_HOST } : a)),
     device_links: { ...links, [IPAD_HOST]: peerId },
     device_colors: colour ? { ...colours, [IPAD_HOST]: colour } : colours,
+    layout: (s.layout ?? []).filter((p) => p.device_id !== IPAD_HOST).map((p) => (p.device_id === old ? { ...p, device_id: IPAD_HOST } : p)),
     retired_hosts: [...retired, old],
   };
 }
@@ -60,6 +67,7 @@ export function linkByName(hostName: string | null, peers: Peer[]): string | nul
 export function buildDevices(
   status: Status | null, peers: Peer[], settings: Settings, reachable: string[], waiting: Record<string, number>, monitors: Monitor[],
 ): Device[] {
+  const beside = besideMap(settings, monitors);
   const make = (host: { id: string; name: string | null; connected: boolean } | null, peer: Peer | null, index: number): Device => {
     const hostId = host?.id ?? null;
     const peerId = peer?.id ?? null;
@@ -70,12 +78,13 @@ export function buildDevices(
       connected: host?.connected ?? false, reachable: !!peerId && reachable.includes(peerId), waiting: peerId ? waiting[peerId] ?? 0 : 0,
       placement, missingScreen: !!placement && !monitors.some((m) => m.id === placement.monitor_id),
       colour: settings.device_colors[key] ?? DEFAULT_COLOURS[index % DEFAULT_COLOURS.length],
+      beside: (hostId && !placement && beside.get(hostId)) || null,
     };
   };
   // The engine lists only what it sees: Bluetooth off lists nothing, and an unplaced offline host is dropped.
   const retired = settings.retired_hosts ?? [];
   const listed = (status?.hosts ?? []).filter((h) => !retired.includes(h.id));
-  const known = [...settings.attachments.map((a) => a.device_id), ...Object.keys(settings.device_links)].filter((id) => !retired.includes(id));
+  const known = [...settings.attachments.map((a) => a.device_id), ...(settings.layout ?? []).map((p) => p.device_id), ...Object.keys(settings.device_links)].filter((id) => !retired.includes(id));
   const absent = [...new Set(known)].filter((id) => !listed.some((h) => h.id === id)).map((id) => ({ id, name: null, connected: false }));
   const linked = new Set<string>();
   const out: Device[] = [];
@@ -95,6 +104,7 @@ export function forgetDevice(settings: Settings, d: Device): Settings {
   return {
     ...settings,
     attachments: settings.attachments.filter((a) => a.device_id !== d.hostId),
+    layout: (settings.layout ?? []).filter((p) => p.device_id !== d.hostId),
     device_links: without(settings.device_links, (k, v) => k === d.hostId || v === d.peerId),
     device_colors: without(settings.device_colors, (k) => k === d.hostId || k === d.peerId),
   };
@@ -109,7 +119,7 @@ export function deviceLook(d: Device, active: string | null, btOff: boolean): { 
   if (d.missingScreen) return { sub: "Screen not connected", off: !d.connected || closed };
   if (!d.connected) return { sub: "Offline", off: true };
   if (closed) return { sub: "Bridge closed", off: true };
-  return { sub: d.placement ? "Connected" : "Not placed", off: false };
+  return { sub: isPlaced(d) ? "Connected" : "Not placed", off: false };
 }
 
 function clipLine(d: Device, clip: ClipStatus | null): string {
@@ -135,12 +145,12 @@ export function panelLines(d: Device, c: { active: string | null; btOff: boolean
   const inControl = !!d.hostId && d.hostId === c.active;
   const offline = !!d.hostId && !d.connected && !c.btOff;
   const why = inControl || offline ? "" : !d.hostId ? "It needs Bluetooth first." : c.btOff ? "Keyboard and mouse sharing is paused."
-    : !d.placement ? "Put it next to a screen edge first." : "";
+    : !isPlaced(d) ? "Put it next to a screen edge first." : "";
   const link = isWifi(d) ? "Wi-Fi" : "Bluetooth";
   const hid = inControl ? "In control" : !d.hostId ? "Needs Bluetooth" : c.btOff ? "Bluetooth is off" : !d.connected ? (isWifi(d) ? ipadLine(c.ipad) : "Not connected")
-    : d.missingScreen ? `${link}, screen not connected` : d.placement ? `${link}, ${c.where}` : `${link}, not placed`;
+    : d.missingScreen ? `${link}, screen not connected` : isPlaced(d) ? `${link}, ${c.where}` : `${link}, not placed`;
   return {
-    key: d.missingScreen ? "Screen not connected" : d.placement ? `Ctrl+Alt+${c.hotkey}` : "Not placed",
+    key: d.missingScreen ? "Screen not connected" : isPlaced(d) ? `Ctrl+Alt+${c.hotkey}` : "Not placed",
     button: inControl ? "Back to Windows" : offline ? `${d.name} is offline` : `Switch to ${d.name}`,
     canSwitch: inControl || (!offline && !why), why, hid, files: filesLine(d), clip: clipLine(d, c.clip),
   };

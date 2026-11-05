@@ -85,7 +85,7 @@ test("forgetDevice removes attachment, link and colour", () => {
 
 const dev = (o: Partial<Device> = {}): Device => ({
   key: "h", hostId: "h", peerId: "p", name: "iPad Air", kind: "Ipad", connected: true, reachable: true, waiting: 0,
-  placement: { device_id: "h", monitor_id: "M1", edge: "Right" }, missingScreen: false, colour: "#FF7A4D", ...o,
+  placement: { device_id: "h", monitor_id: "M1", edge: "Right" }, missingScreen: false, colour: "#FF7A4D", beside: null, ...o,
 });
 const look = (d: Device, active: string | null = null, btOff = false) => deviceLook(d, active, btOff);
 
@@ -234,6 +234,8 @@ test("migrate_moves_the_ipad_once", () => {
   expect(after.retired_hosts).toEqual(["BT:IPAD"]);
   expect(after.calibration[IPAD_HOST]).toBeUndefined();
   expect(migrateIpad(after, peers)).toBe(after);
+  const laid = migrateIpad({ ...before, layout: [{ device_id: "BT:IPAD", rect: { left: 0, top: 0, right: 1, bottom: 1 } }] }, peers);
+  expect(laid.layout.map((p) => p.device_id)).toEqual([IPAD_HOST]);
 });
 
 test("migrate_without_a_link_does_nothing", () => {
@@ -264,4 +266,19 @@ test("the Wi-Fi iPad ignores Bluetooth being off", () => {
   expect(l.canSwitch).toBe(true);
   const [off] = buildDevices(status([host(IPAD_HOST, "iPad", false)]), [], settings(), [], {}, mon);
   expect(panelLines(off, { active: null, btOff: false, clip: null, where: "", hotkey: null, ipad: "NotFound" }).hid).toBe("iPad not found on Wi-Fi");
+});
+
+test("a device beside another reads as placed, with its neighbour named", () => {
+  const s = settings({
+    attachments: [{ device_id: "AA:1", monitor_id: "M1", edge: "Right" }],
+    layout: [
+      { device_id: "AA:1", rect: { left: 100, top: 0, right: 200, bottom: 100 } },
+      { device_id: "BB:2", rect: { left: 200, top: 0, right: 300, bottom: 100 } },
+    ],
+  });
+  const d = buildDevices(status([host("AA:1", "iPad"), host("BB:2", "Pixel")]), [], s, [], {}, mon);
+  const pixel = d.find((x) => x.hostId === "BB:2")!;
+  expect(pixel.beside).toEqual({ anchor: "AA:1", edge: "Right" });
+  expect(deviceLook(pixel, null, false).sub).toBe("Connected");
+  expect(panelLines(pixel, { active: null, btOff: false, clip: null, where: "right of iPad", hotkey: 2 }).key).toBe("Ctrl+Alt+2");
 });

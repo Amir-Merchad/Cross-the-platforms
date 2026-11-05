@@ -93,7 +93,7 @@ describe("nameLinks", () => {
 });
 
 describe("linkChoices", () => {
-  const dev = (o: Partial<Device>): Device => ({ key: "k", hostId: null, peerId: null, name: "n", kind: null, connected: false, reachable: false, waiting: 0, placement: null, missingScreen: false, colour: "", ...o });
+  const dev = (o: Partial<Device>): Device => ({ key: "k", hostId: null, peerId: null, name: "n", kind: null, connected: false, reachable: false, waiting: 0, placement: null, missingScreen: false, colour: "", beside: null, ...o });
   const hostOnly = dev({ key: "a", hostId: "a" }), peerOnly = dev({ key: "p", peerId: "p" }), both = dev({ key: "b", hostId: "b", peerId: "q" });
   it("a Bluetooth-only device chooses among file-only devices", () => expect(linkChoices(hostOnly, [hostOnly, peerOnly, both])).toEqual([peerOnly]));
   it("a files-only device chooses among Bluetooth-only devices", () => expect(linkChoices(peerOnly, [hostOnly, peerOnly, both])).toEqual([hostOnly]));
