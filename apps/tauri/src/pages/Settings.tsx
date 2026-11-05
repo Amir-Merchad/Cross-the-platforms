@@ -11,7 +11,7 @@ import { useHub } from "@/lib/hub";
 
 const CARD = "flex-none rounded-[20px] bg-card px-5";
 const LINE = "flex min-h-14 items-center justify-between gap-3 border-t border-border first:border-t-0";
-const HOTKEYS = [["Jump to a device", "Ctrl+Alt+1 to 9"], ["Back to Windows", "Ctrl+Alt+Q"], ["Paste the clipboard on the device in control", "Ctrl+Alt+V"], ["Send Explorer's selected files to it", "Ctrl+Alt+F"], ["Emergency, always returns", "Esc Esc Esc"]];
+const HOTKEYS = [["Jump to a device", "Ctrl+Alt+1 to 9"], ["Back to Windows", "Ctrl+Alt+Q"], ["Paste the clipboard on the device in control", "Ctrl+Alt+V"], ["Send Explorer's selected files to it", "Ctrl+Alt+F"], ["Copy a screenshot of the iPad", "Ctrl+Alt+S"], ["Emergency, always returns", "Esc Esc Esc"]];
 const LOOKS: [Prefs["appearance"], string][] = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
 const DIAG = "grid grid-cols-[2fr_1fr_1fr_1fr] items-center gap-3";
 

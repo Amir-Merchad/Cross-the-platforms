@@ -7,7 +7,7 @@ use bridge_core::{cliphistory::{self, History}, clipboard::{Content, Endpoint, H
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::{clipboard, diag, ipad::{self, IpadLink, IpadStatus, IpadWriter}, transfer};
+use crate::{clipboard, diag, ipad::{self, IpadLink, IpadStatus, IpadWriter}, ipadinput::Answer, transfer};
 
 pub enum ClipCommand {
     SetEnabled(bool),
@@ -20,6 +20,8 @@ pub enum ClipCommand {
     FromPhone { id: String, text: String },
     /// The hotkey: the clipboard, read now, to one device. Goes even with sync off: the owner asked.
     ToDevice { route: ClipRoute, done: Done },
+    /// The iPad's screen, for the Windows clipboard. Goes even with sync off: the owner asked.
+    Screenshot { image: Content, answer: Answer },
     Stop,
 }
 
@@ -36,6 +38,8 @@ pub const TEXT_ONLY: &str = "Phones take text only, so nothing was sent.";
 pub const IMAGE_NEEDS_LINK: &str = "Images need the iPad's clipboard link, which is down, so nothing was sent.";
 pub const TOO_LARGE: &str = "That copy is too large, so nothing was sent.";
 pub const NO_ANSWER: &str = "The device did not answer, so nothing was pasted.";
+pub const SHOT_COPIED: &str = "iPad screenshot copied to the clipboard.";
+pub const SHOT_NOT_COPIED: &str = "The Windows clipboard is busy, so the screenshot was not copied.";
 
 /// What the hotkey may send: `read` is `None` for a secret, so a secret stops here. Devices take plain
 /// text only (`Hub::observe` does the same), and the iPad's echo must match what it was given.
@@ -205,6 +209,12 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                         }),
                     }
                 }
+                Some(ClipCommand::Screenshot { image, answer }) => {
+                    keep_screenshot(&mut hub, &history, &ev_tx, &image);
+                    let written = tokio::task::spawn_blocking(move || clipboard::write(&image)).await.unwrap_or_else(|e| Err(e.to_string()));
+                    if let Err(e) = &written { diag::log(format_args!("screenshot not copied: {e}")); }
+                    answer.say(if written.is_ok() { SHOT_COPIED } else { SHOT_NOT_COPIED });
+                }
             },
             Some(c) = from_windows.recv() => writes = route(&mut hub, &history, &ev_tx, Endpoint::Windows, c),
             Some(ev) = events.recv() => match ev {
@@ -282,6 +292,13 @@ fn route(hub: &mut Hub, history: &Arc<Mutex<History>>, ev: &UnboundedSender<Even
     hub.observe(from, c).into_iter().map(|(to, item)| (to, item.content)).collect()
 }
 
+/// A screenshot stays out of the sync: the watcher would take it for a Windows copy and send it to the
+/// iPad it came from, so its echo is swallowed and history gets it once, as the iPad's.
+fn keep_screenshot(hub: &mut Hub, history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, c: &Content) {
+    hub.written_directly(Endpoint::Windows, c);
+    record(history, ev, &Endpoint::Ipad, c.clone());
+}
+
 /// Hashing, PNG encoding and the file writes happen on the blocking pool, never in this loop.
 fn record(history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, from: &Endpoint, c: Content) {
     let (history, ev) = (history.clone(), ev.clone());
@@ -331,6 +348,17 @@ mod tests {
     #[test] fn a_copy_over_the_limit_is_not_sent() { // Review Focus 3
         let big = "x".repeat(MAX_ITEM_BYTES + 1);
         assert_eq!(ready_for(&ipad(), true, text(&big)), Err(TOO_LARGE.to_string()));
+    }
+    #[tokio::test] async fn a_screenshot_is_kept_as_the_ipads_and_never_goes_back_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = Arc::new(Mutex::new(History::open(dir.path())));
+        let (tx, mut rx) = unbounded_channel();
+        let mut hub = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
+        keep_screenshot(&mut hub, &history, &tx, &image());
+        assert!(matches!(rx.recv().await, Some(Event::Recorded)));
+        assert!(route(&mut hub, &history, &tx, Endpoint::Windows, image()).is_empty(), "the watcher's echo goes nowhere");
+        let h = history.lock().unwrap();
+        assert_eq!(h.entries().iter().map(|e| e.from.as_str()).collect::<Vec<_>>(), ["iPad"], "one entry, not a second from This PC");
     }
     #[test] fn write_timeout_grows_with_size() { // Final review I5
         assert_eq!(write_timeout(10), Duration::from_secs(5));

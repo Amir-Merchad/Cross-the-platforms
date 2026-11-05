@@ -11,6 +11,8 @@ pub enum Verdict {
     SendClipboard,
     /// Ctrl+Alt+F, in both states. The key is swallowed.
     SendFiles,
+    /// Ctrl+Alt+S, in both states. The key is swallowed.
+    Screenshot,
     /// Swallowed and not forwarded: hotkey repeats/releases, repeats of a key held on Windows.
     Drop,
 }
@@ -48,9 +50,9 @@ impl KeyGate {
             self.hotkey_down[i] = true;
             return Verdict::Hotkey((vk - 0x30) as u8);
         }
-        if down && combo && (vk == 0x56 || vk == 0x46) {
+        if down && combo && matches!(vk, 0x56 | 0x46 | 0x53) {
             self.hotkey_down[i] = true;
-            return if vk == 0x56 { Verdict::SendClipboard } else { Verdict::SendFiles };
+            return match vk { 0x56 => Verdict::SendClipboard, 0x46 => Verdict::SendFiles, _ => Verdict::Screenshot };
         }
         // The release of a hotkey key never reaches Windows or the device.
         if !down && std::mem::take(&mut self.hotkey_down[i]) { return Verdict::Drop }
@@ -117,6 +119,22 @@ mod tests {
             assert_eq!(g.on_key(0x46, true, suppress), Verdict::SendFiles);
             assert_eq!(g.on_key(0x46, false, suppress), Verdict::Drop);
         }
+    }
+    #[test] fn ctrl_alt_s_is_caught_local_and_remote() {
+        for suppress in [false, true] {
+            let mut g = KeyGate::default();
+            g.on_key(LCTRL, true, suppress); g.on_key(LALT, true, suppress);
+            assert_eq!(g.on_key(0x53, true, suppress), Verdict::Screenshot);
+            assert_eq!(g.on_key(0x53, true, suppress), Verdict::Drop, "auto-repeat takes one");
+            assert_eq!(g.on_key(0x53, false, suppress), Verdict::Drop);
+        }
+    }
+    #[test] fn plain_s_and_altgr_s_are_not_the_hotkey() {
+        let mut g = KeyGate::default();
+        assert_eq!(g.on_key(0x53, true, false), Verdict::PassToWindows);
+        g.on_key(0x53, false, false);
+        g.on_key(LCTRL, true, false); g.on_key(0xA5, true, false);
+        assert_eq!(g.on_key(0x53, true, false), Verdict::PassToWindows);
     }
     #[test] fn plain_v_and_altgr_v_are_not_the_hotkey() {
         let mut g = KeyGate::default();

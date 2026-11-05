@@ -218,6 +218,19 @@ test("deskLine says what a send hotkey did, and only that", () => {
   expect(line({ status: stat({ notice: "Bluetooth not ready: 0x80070005" }) })).toBe("Your keyboard and mouse are on Windows.");
 });
 
+test("deskLine shows every screenshot answer", () => {
+  for (const said of [
+    "Taking a screenshot of the iPad.",
+    "iPad screenshot copied to the clipboard.",
+    "The iPad is not ready, so no screenshot was taken.",
+    "The iPad did not answer, so no screenshot was taken.",
+    "The iPad took too long, so no screenshot was taken.",
+    "The Windows clipboard is busy, so the screenshot was not copied.",
+  ]) {
+    expect(line({ status: stat({ notice: said }) })).toBe(said);
+  }
+});
+
 test("a send notice keeps the way out in view while a device is in control", () => {
   const way = "Push back across the edge, or press Ctrl+Alt+Q.";
   expect(line({ status: stat({ notice: "Sending the selected files.", active: "h" }) })).toBe(`Your keyboard and mouse are on iPad Air. Sending the selected files. ${way}`);

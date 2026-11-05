@@ -19,7 +19,7 @@ use bridge_core::{
 use serde::Serialize;
 use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
-use crate::{capture, clipsync::{self, ClipCommand, ClipRoute, NOT_LINKED}, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral, selection, transfer};
+use crate::{capture, clipsync::{self, ClipCommand, ClipRoute, NOT_LINKED}, ipadinput::{self, Answer, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral, selection, transfer};
 
 pub enum Command { Reload(Box<Settings>), SwitchTo(Option<String>), Stop }
 
@@ -421,6 +421,10 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                         Some(peer) => if transfer::send_files_to(peer.clone(), paths) { SENDING } else { FILES_NOT_RUNNING },
                     };
                     said.say(&mut status, line, Instant::now());
+                }
+                Action::Screenshot => {
+                    let tx = answers.clone();
+                    ipad.send(IpadCommand::Screenshot(Answer::new(move |line| { let _ = tx.send(Input::Shot(line)); })));
                 }
             }
         }

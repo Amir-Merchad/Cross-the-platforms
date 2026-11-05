@@ -233,6 +233,7 @@ fn route_key(vk: u16, down: bool) -> bool {
         Verdict::Hotkey(n) => { send(Input::Hotkey(n)); true }
         Verdict::SendClipboard => { send(Input::SendClipboard); true }
         Verdict::SendFiles => { send(Input::SendFiles); true }
+        Verdict::Screenshot => { send(Input::Screenshot); true }
         Verdict::Drop => true,
         Verdict::Remote => unsafe {
             if down && vk == VK_ESCAPE.0 {

@@ -8,12 +8,13 @@
 use std::{path::PathBuf, thread, time::Duration};
 
 use bridge_core::{
+    clipboard::Content,
     hid::{KeyboardReport, MouseReport, split_delta},
     ipadhid::{KeyEvent, KeyTranslator, pointer_reports, scroll_reports, scroll_steps},
 };
 use idevice::{
     ReadWrite, RemoteXpcClient, RsdService,
-    core_device::hid::{KeyboardUsage, MainKeyboardError, MainKeyboardService, UniversalHidServiceClient},
+    core_device::{ImageFormat, ScreenCaptureServiceClient, hid::{KeyboardUsage, MainKeyboardError, MainKeyboardService, UniversalHidServiceClient}},
     rsd::RsdHandshake,
     tcp::handle::{AdapterHandle, StreamHandle},
     xpc::XPCObject,
@@ -21,13 +22,28 @@ use idevice::{
 use serde::Serialize;
 use tokio::{sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel}, time::timeout};
 
-use crate::{diag, ipad::{self, IpadStatus}};
+use crate::{clipsync::{self, ClipCommand}, diag, ipad::{self, IpadStatus}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum IpadInputState { NotSetUp, Connecting, Ready, OnCall, NeedsUsb, NotFound, NeedsDeveloperMode }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum IpadCommand { Mouse(MouseReport), Keyboard(KeyboardReport), Enter, Leave, Stop }
+pub enum IpadCommand { Mouse(MouseReport), Keyboard(KeyboardReport), Enter, Leave, Screenshot(Answer), Stop }
+
+pub const NO_SHOT: &str = "The iPad did not answer, so no screenshot was taken.";
+pub const SHOT_TOO_SLOW: &str = "The iPad took too long, so no screenshot was taken.";
+
+/// The one plain answer to a screenshot press. Dropped unsaid, wherever the link or a service lost it,
+/// it says `NO_SHOT`, so the router's running flag always ends.
+pub struct Answer(Option<Box<dyn FnOnce(String) + Send>>);
+
+impl Answer {
+    pub fn new(f: impl FnOnce(String) + Send + 'static) -> Self { Self(Some(Box::new(f))) }
+    pub fn say(mut self, line: impl Into<String>) { if let Some(f) = self.0.take() { f(line.into()) } }
+}
+
+impl Drop for Answer {
+    fn drop(&mut self) { if let Some(f) = self.0.take() { f(NO_SHOT.into()) } }
+}
 
 pub struct IpadInputHandle { tx: UnboundedSender<IpadCommand>, thread: Option<thread::JoinHandle<()>> }
 
@@ -54,6 +70,8 @@ const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// Bounded cleanup: a dead tunnel must not hang Quit.
 const CLEANUP_LIMIT: Duration = Duration::from_secs(2);
+/// A capture takes about 2 s (docs/spikes/ipad-pointer.md).
+const SHOT_LIMIT: Duration = Duration::from_secs(10);
 
 pub fn start(dir: PathBuf, on_state: impl Fn(IpadInputState) + Send + 'static) -> IpadInputHandle {
     let (tx, rx) = unbounded_channel();
@@ -130,7 +148,8 @@ impl Pending {
             IpadCommand::Keyboard(r) => Out::Keys(r),
             IpadCommand::Enter => Out::Enter,
             IpadCommand::Leave => Out::Leave,
-            IpadCommand::Stop => return,
+            // `serve` takes screenshots before they get here; one that does has no link, and answers by dropping.
+            IpadCommand::Stop | IpadCommand::Screenshot(_) => return,
         };
         self.items.push(out);
     }
@@ -214,7 +233,34 @@ enum End { Stop, Down(String) }
 
 /// Returns on Stop or a closed channel; input that arrives meanwhile has no link to go to.
 async fn until_stop(rx: &mut UnboundedReceiver<IpadCommand>) {
-    while let Some(c) = rx.recv().await { if c == IpadCommand::Stop { return } }
+    while let Some(c) = rx.recv().await { if matches!(c, IpadCommand::Stop) { return } }
+}
+
+type ShotClient = ScreenCaptureServiceClient<Box<dyn ReadWrite>>;
+
+/// `limit` covers the whole capture. Service errors are logged, the owner gets a plain line.
+async fn within(limit: Duration, capture: impl Future<Output = Result<Content, String>>) -> Result<Content, &'static str> {
+    match timeout(limit, capture).await {
+        Ok(Ok(image)) => Ok(image),
+        Ok(Err(e)) => { diag::log(format_args!("iPad screenshot failed: {e}")); Err(NO_SHOT) }
+        Err(_) => Err(SHOT_TOO_SLOW),
+    }
+}
+
+/// The raw buffer as the service gives it, a bare PNG. It says nothing about orientation, so nothing
+/// here can tell a landscape screen from a portrait one, and no crop is applied (checklist row).
+async fn capture(mut adapter: AdapterHandle, port: u16) -> Result<Content, String> {
+    let stream = adapter.connect(port).await.map_err(|e| format!("capture connect: {e}"))?;
+    let mut client = ShotClient::from_stream(Box::new(stream)).await.map_err(|e| format!("screen capture service: {e:?}"))?;
+    let png = client.take_screenshot(None, ImageFormat::Png).await.map_err(|e| format!("screenshot: {e:?}"))?;
+    Ok(Content::Image(ipad::decode_off_thread(png).await?))
+}
+
+async fn shoot(adapter: AdapterHandle, port: u16, answer: Answer) {
+    match within(SHOT_LIMIT, capture(adapter, port)).await {
+        Ok(image) => { clipsync::request(ClipCommand::Screenshot { image, answer }); }
+        Err(line) => answer.say(line),
+    }
 }
 
 const UHID_SERVICE: &str = "com.apple.coredevice.hid.universalhidservice";
@@ -230,6 +276,8 @@ struct Session {
     mouse: Option<u64>,
     keys: KeyTranslator,
     buttons: u8,
+    /// The screen capture service, when the iPad lists it.
+    shot_port: Option<u16>,
 }
 
 impl Session {
@@ -245,8 +293,9 @@ impl Session {
             }
             Err(e) => { let _ = timeout(CLEANUP_LIMIT, adapter.close()).await; return Err(format!("universal HID: {e:?}")) }
         };
+        let shot_port = handshake.services.get(ShotClient::rsd_service_name().as_ref()).map(|s| s.port);
         let mut s = match open_raw(&mut adapter, &handshake).await {
-            Ok(raw) => Session { adapter, hid, raw, keyboard: None, mouse: None, keys: KeyTranslator::default(), buttons: 0 },
+            Ok(raw) => Session { adapter, hid, raw, keyboard: None, mouse: None, keys: KeyTranslator::default(), buttons: 0, shot_port },
             Err(e) => { let _ = timeout(CLEANUP_LIMIT, adapter.close()).await; return Err(e) }
         };
         if let Err(e) = s.create_devices().await { s.close().await; return Err(e) }
@@ -279,11 +328,14 @@ impl Session {
             tokio::select! {
                 c = rx.recv() => {
                     let Some(c) = c else { return End::Stop };
-                    if c == IpadCommand::Stop { return End::Stop }
-                    pending.push(c);
-                    while let Ok(c) = rx.try_recv() {
-                        if c == IpadCommand::Stop { return End::Stop }
-                        pending.push(c);
+                    let mut next = Some(c);
+                    while let Some(c) = next {
+                        match c {
+                            IpadCommand::Stop => return End::Stop,
+                            IpadCommand::Screenshot(answer) => self.shoot(answer),
+                            c => pending.push(c),
+                        }
+                        next = rx.try_recv().ok();
                     }
                     for out in pending.take() {
                         if let Err(e) = self.send(&out).await { return End::Down(e) }
@@ -295,6 +347,11 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// On its own task over the same tunnel: a capture takes seconds, and input and the keepalive go on.
+    fn shoot(&self, answer: Answer) {
+        if let Some(port) = self.shot_port { tokio::task::spawn_local(shoot(self.adapter.clone(), port, answer)); }
     }
 
     async fn send(&mut self, out: &Out) -> Result<(), String> {
@@ -474,6 +531,25 @@ mod tests {
         ]);
         assert!(p.is_empty());
     }
+    fn listening() -> (Answer, std::sync::mpsc::Receiver<String>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Answer::new(move |line| { let _ = tx.send(line); }), rx)
+    }
+    #[test] fn an_answer_is_given_once() {
+        let (a, rx) = listening();
+        a.say("Done.");
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), ["Done."]);
+    }
+    #[test] fn a_screenshot_the_link_drops_still_answers() { // the router would stay busy for good
+        let (a, rx) = listening();
+        Pending::default().push(IpadCommand::Screenshot(a));
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [NO_SHOT]);
+    }
+    #[tokio::test] async fn a_capture_that_hangs_says_it_took_too_long() {
+        let r = within(Duration::from_millis(1), std::future::pending()).await;
+        assert_eq!(r, Err(SHOT_TOO_SLOW));
+    }
+    #[test] fn a_capture_gets_about_ten_seconds() { assert_eq!(SHOT_LIMIT, Duration::from_secs(10)); }
     #[test] fn press_and_release_are_never_merged_away() {
         let mut p = Pending::default();
         let m = |buttons| IpadCommand::Mouse(MouseReport { buttons, ..Default::default() });

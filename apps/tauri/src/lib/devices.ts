@@ -202,7 +202,7 @@ function restingLine(status: Status): string {
 }
 
 /** What a send hotkey just did: fixed phrases only, as other engine notices can carry raw errors and ids. */
-const sendLine = (notice: string | null) => (notice && /(, so (nothing was (sent|pasted)|paste was not pressed)|^Sending the selected files|^Paste pressed)\.$/.test(notice) ? notice : null);
+const sendLine = (notice: string | null) => (notice && /(, so (nothing was (sent|pasted)|paste was not pressed|no screenshot was taken|the screenshot was not copied)|^Sending the selected files|^Paste pressed|^Taking a screenshot of the iPad|^iPad screenshot copied to the clipboard)\.$/.test(notice) ? notice : null);
 
 /** The top bar's line when nothing has just been said. Input comes first: that is what must never surprise. */
 export function deskLine(status: Status | null, rows: Row[], devices: Device[], selected: Device | null, btOff: boolean, filesDown: boolean): string {

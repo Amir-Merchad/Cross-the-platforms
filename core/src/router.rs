@@ -33,6 +33,10 @@ pub enum Input {
     Files { host: String, paths: Vec<PathBuf> },
     /// A worker's plain message.
     Say(String),
+    /// Ctrl+Alt+S: the iPad's screen to the Windows clipboard, whichever device is in control.
+    Screenshot,
+    /// The screenshot's plain answer, which frees the next press.
+    Shot(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +53,8 @@ pub enum Action {
     SendFiles { host: String },
     /// The selection, checked against the device in control: send these to `host`.
     SendPaths { host: String, paths: Vec<PathBuf> },
+    /// Off the engine thread: capture the iPad, then come back with `Input::Shot`.
+    Screenshot,
 }
 
 pub const NO_DEVICE: &str = "No device is in control, so nothing was sent.";
@@ -56,6 +62,8 @@ pub const NOT_PRESSED: &str = "That device is no longer in control, so paste was
 pub const TOO_LATE: &str = "That took too long, so paste was not pressed.";
 pub const LEFT_DEVICE: &str = "That device is no longer in control, so nothing was sent.";
 pub const PASTED: &str = "Paste pressed.";
+pub const NO_IPAD: &str = "The iPad is not ready, so no screenshot was taken.";
+pub const SHOOTING: &str = "Taking a screenshot of the iPad.";
 /// Older than this, whatever has focus on the device is not what the owner pressed the hotkey for.
 pub const PASTE_MAX_AGE_MS: u64 = 10_000;
 
@@ -95,6 +103,8 @@ pub struct Router {
     hold: Option<(String, u64, u64)>,
     remote: Option<Remote>,
     cursor: (i32, i32),
+    /// A screenshot is out, until its `Input::Shot`.
+    shooting: bool,
 }
 
 /// `n` pixels past `p` in the direction of `edge`: into the screen that lies beyond that edge.
@@ -104,7 +114,7 @@ fn inset(edge: Edge, p: (i32, i32), n: i32) -> (i32, i32) {
 
 impl Router {
     pub fn new(settings: Settings, monitors: Vec<Monitor>) -> Self {
-        let mut r = Self { settings, monitors, layout: Vec::new(), intervals: HashMap::new(), hold: None, remote: None, cursor: (0, 0) };
+        let mut r = Self { settings, monitors, layout: Vec::new(), intervals: HashMap::new(), hold: None, remote: None, cursor: (0, 0), shooting: false };
         r.relayout();
         r
     }
@@ -138,6 +148,10 @@ impl Router {
             Input::Paste { host, cmd, at } => self.paste(host, cmd, now_ms.saturating_sub(at)),
             Input::Files { host, paths } => vec![if self.active() == Some(&host) { Action::SendPaths { host, paths } } else { Action::Notice(LEFT_DEVICE.into()) }],
             Input::Say(s) => vec![Action::Notice(s)],
+            Input::Screenshot if !connected(IPAD_HOST) => vec![Action::Notice(NO_IPAD.into())],
+            Input::Screenshot if self.shooting => vec![Action::Notice(SHOOTING.into())],
+            Input::Screenshot => { self.shooting = true; vec![Action::Notice(SHOOTING.into()), Action::Screenshot] }
+            Input::Shot(s) => { self.shooting = false; vec![Action::Notice(s)] }
             _ if self.remote.is_none() => self.local(input, now_ms, connected),
             _ => self.remote_input(input, now_ms, connected),
         }
@@ -254,7 +268,7 @@ impl Router {
                 out.push(Action::Keyboard { host, report });
                 out
             }
-            Input::Hotkey(_) | Input::Escape | Input::SendClipboard | Input::SendFiles | Input::Paste { .. } | Input::Files { .. } | Input::Say(_) => unreachable!("handled in on_input"),
+            Input::Hotkey(_) | Input::Escape | Input::SendClipboard | Input::SendFiles | Input::Paste { .. } | Input::Files { .. } | Input::Say(_) | Input::Screenshot | Input::Shot(_) => unreachable!("handled in on_input"),
         }
     }
 
@@ -568,6 +582,30 @@ mod tests {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
         assert_eq!(r.on_input(Input::SendClipboard, 10, &up), vec![Action::SendClipboard { host: "ipad".into() }]);
         assert_eq!(r.on_input(Input::SendFiles, 10, &up), vec![Action::SendFiles { host: "ipad".into() }]);
+    }
+    fn ipad_ready(id: &str) -> bool { id == IPAD_HOST }
+    #[test] fn screenshot_hotkey_needs_a_ready_ipad() { // Review Focus 5
+        let mut r = r();
+        assert_eq!(r.on_input(Input::Screenshot, 0, &down), vec![Action::Notice(NO_IPAD.into())]);
+        assert_eq!(r.on_input(Input::Screenshot, 0, &|id: &str| id == "s24"), vec![Action::Notice(NO_IPAD.into())], "another device is no iPad");
+        assert_eq!(r.on_input(Input::Screenshot, 0, &ipad_ready), vec![Action::Notice(SHOOTING.into()), Action::Screenshot], "a refused press leaves nothing running");
+    }
+    #[test] fn a_press_while_a_screenshot_runs_only_says_so() {
+        let mut r = r();
+        r.on_input(Input::Screenshot, 0, &ipad_ready);
+        assert_eq!(r.on_input(Input::Screenshot, 10, &ipad_ready), vec![Action::Notice(SHOOTING.into())]);
+        assert_eq!(r.on_input(Input::Shot("Done.".into()), 20, &ipad_ready), vec![Action::Notice("Done.".into())]);
+        assert!(r.on_input(Input::Screenshot, 30, &ipad_ready).contains(&Action::Screenshot), "the answer frees the next press");
+    }
+    #[test] fn a_screenshot_leaves_control_where_it_is() {
+        let mut r = r();
+        assert!(r.on_input(Input::Screenshot, 0, &up).contains(&Action::Screenshot), "no device in control");
+        r.on_input(Input::Shot("Done.".into()), 5, &up);
+        r.on_input(Input::Hotkey(2), 10, &up);
+        assert_eq!(r.active(), Some("s24"));
+        assert!(r.on_input(Input::Screenshot, 20, &up).contains(&Action::Screenshot), "another device in control");
+        r.on_input(Input::Shot("Done.".into()), 30, &up);
+        assert_eq!(r.active(), Some("s24"));
     }
     fn keyboards(a: &[Action]) -> Vec<(u8, u8)> {
         a.iter().filter_map(|x| if let Action::Keyboard { report, .. } = x { Some((report.modifiers, report.keys[0])) } else { None }).collect()

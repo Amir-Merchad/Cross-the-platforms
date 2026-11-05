@@ -175,7 +175,7 @@ impl IpadWriter {
 }
 
 /// Image codecs take seconds on big screenshots: keep them off the async thread.
-async fn decode_off_thread(bytes: Vec<u8>) -> Result<Image, String> {
+pub(crate) async fn decode_off_thread(bytes: Vec<u8>) -> Result<Image, String> {
     tokio::task::spawn_blocking(move || codec::decode(&bytes)).await.map_err(|e| e.to_string())?
 }
 
