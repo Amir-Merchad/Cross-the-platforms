@@ -48,7 +48,7 @@ function History({ rev }: { rev: number }) {
               <span className="block truncate font-medium">{entryTitle(e)}</span>
               <span className="block text-[13px] text-muted-foreground">{e.from} · {whenLabel(e.at, now)}</span>
             </button>
-            <button type="button" className={cn(ICON, e.pinned && "text-foreground")} aria-pressed={e.pinned} onClick={() => act(historyPin(e.id, !e.pinned), "Could not pin that. Try again.")}>{e.pinned ? "Pinned" : "Pin"}</button>
+            <button type="button" className={cn(ICON, e.pinned && "text-foreground")} aria-label={`${e.pinned ? "Unpin" : "Pin"} ${entryTitle(e)}`} aria-pressed={e.pinned} onClick={() => act(historyPin(e.id, !e.pinned), "Could not pin that. Try again.")}>{e.pinned ? "Pinned" : "Pin"}</button>
             <button type="button" className={ICON} aria-label={`Delete ${entryTitle(e)}`} onClick={() => act(historyDelete(e.id), "Could not delete that. Try again.")}>Delete</button>
           </div>
         ))}

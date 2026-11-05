@@ -59,7 +59,8 @@ pub fn prepare(c: &Content) -> Option<Prepared> {
 struct Stored { enabled: bool, next_id: u64, entries: Vec<Entry> }
 impl Default for Stored { fn default() -> Self { Self { enabled: true, next_id: 1, entries: Vec::new() } } }
 
-pub struct History { dir: PathBuf, s: Stored, max_image: u64, max_total: u64 }
+/// `saving` is off when a file we couldn't read or move aside is still in the way: writing would destroy it.
+pub struct History { dir: PathBuf, s: Stored, max_image: u64, max_total: u64, saving: bool }
 
 impl History {
     pub fn open(dir: impl Into<PathBuf>) -> Self { Self::open_with(dir, MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES) }
@@ -68,16 +69,18 @@ impl History {
         let dir = dir.into();
         let _ = fs::create_dir_all(&dir);
         let file = dir.join("history.json");
-        let s = match fs::read(&file) {
-            Ok(b) => serde_json::from_slice(&b).unwrap_or_else(|_| {
-                let bak = dir.join("history.json.bak");
-                let _ = fs::remove_file(&bak);
-                let _ = fs::rename(&file, bak);
-                Stored::default()
-            }),
-            Err(_) => Stored::default(),
+        let aside = || {
+            let bak = dir.join("history.json.bak");
+            let _ = fs::remove_file(&bak);
+            fs::rename(&file, bak).is_ok()
         };
-        Self { dir, s, max_image, max_total }
+        let (mut saving, mut s) = (true, Stored::default());
+        match fs::read(&file) {
+            Ok(b) => match serde_json::from_slice(&b) { Ok(v) => s = v, Err(_) => saving = aside() },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => saving = aside(),
+        }
+        Self { dir, s, max_image, max_total, saving }
     }
 
     pub fn enabled(&self) -> bool { self.s.enabled }
@@ -86,6 +89,7 @@ impl History {
     pub fn set_enabled(&mut self, on: bool) { self.s.enabled = on; self.save(); }
 
     fn save(&self) {
+        if !self.saving { return }
         let tmp = self.dir.join("history.json.tmp");
         if let Ok(b) = serde_json::to_vec(&self.s) && fs::write(&tmp, b).is_ok() { let _ = fs::rename(tmp, self.dir.join("history.json")); }
     }
@@ -109,7 +113,8 @@ impl History {
         match item {
             Prepared::Text { text, .. } => { e.bytes = text.len() as u64; e.text = Some(text); }
             Prepared::Image { width, height, png, .. } => {
-                if png.len() as u64 > self.max_image { return false }
+                if png.len() as u64 > self.max_image || self.pinned_image_bytes() + png.len() as u64 > self.max_total { return false }
+                if !self.saving { return false }
                 let name = format!("img-{id}.png");
                 if fs::write(self.dir.join(&name), &png).is_err() { return false }
                 (e.file, e.width, e.height, e.bytes) = (Some(name), width, height, png.len() as u64);
@@ -121,6 +126,8 @@ impl History {
         self.save();
         true
     }
+
+    fn pinned_image_bytes(&self) -> u64 { self.s.entries.iter().filter(|e| e.pinned && e.file.is_some()).map(|e| e.bytes).sum() }
 
     /// Oldest unpinned go first, by count and by total image size.
     fn trim(&mut self) {
@@ -138,7 +145,10 @@ impl History {
     }
 
     pub fn pin(&mut self, id: u64, pinned: bool) {
-        if let Some(e) = self.s.entries.iter_mut().find(|e| e.id == id) { e.pinned = pinned; }
+        let room = self.max_total;
+        let held = self.pinned_image_bytes();
+        // Pinning an image that would take pinned images over the total is refused: pins can't be trimmed.
+        if let Some(e) = self.s.entries.iter_mut().find(|e| e.id == id) && !(pinned && !e.pinned && e.file.is_some() && held + e.bytes > room) { e.pinned = pinned; }
         self.trim();
         self.save();
     }
@@ -220,6 +230,44 @@ mod tests {
         assert_eq!(fs::read(d.path().join("history.json.bak")).unwrap(), b"{not json");
         assert!(h.add("PC", text("fresh"), 1));
         assert_eq!(History::open(d.path()).entries().len(), 1);
+    }
+    #[test] fn unreadable_file_is_kept_aside_like_a_corrupt_one() { // Review Focus 4, non-parse read error
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir(d.path().join("history.json")).unwrap(); // reading it fails, and it is not a parse error
+        let mut h = History::open(d.path());
+        assert!(h.entries().is_empty());
+        assert!(d.path().join("history.json.bak").exists(), "moved aside");
+        assert!(h.add("PC", text("fresh"), 1));
+        assert_eq!(History::open(d.path()).entries().len(), 1);
+    }
+    #[test] fn file_that_cannot_be_moved_is_left_alone_and_nothing_is_saved() {
+        let d = tempfile::tempdir().unwrap();
+        fs::create_dir(d.path().join("history.json")).unwrap();
+        fs::create_dir_all(d.path().join("history.json.bak").join("x")).unwrap(); // blocks the move
+        let mut h = History::open(d.path());
+        assert!(h.add("PC", text("kept in memory"), 1));
+        assert!(d.path().join("history.json").is_dir(), "original untouched");
+        assert!(!d.path().join("history.json.tmp").exists());
+    }
+    #[test] fn pinned_images_never_push_the_total_over_the_cap() { // Review Focus 3
+        let d = tempfile::tempdir().unwrap();
+        let img = |n: u8| prepare(&Content::Image(Image { width: 1, height: 1, rgba: vec![n, 0, 0, 255] })).unwrap();
+        let size = match img(1) { Prepared::Image { png, .. } => png.len() as u64, _ => unreachable!() };
+        let mut h = History::open_with(d.path(), 1000, size * 2);
+        for n in 1..=2 { assert!(h.add("PC", img(n), n as u64)); let id = h.entries()[0].id; h.pin(id, true); }
+        assert!(!h.add("PC", img(3), 3), "no room even after evicting every unpinned image");
+        assert_eq!(h.entries().len(), 2);
+        let total: u64 = h.entries().iter().map(|e| e.bytes).sum();
+        assert!(total <= size * 2);
+        assert_eq!(fs::read_dir(d.path()).unwrap().filter(|f| f.as_ref().unwrap().file_name().to_string_lossy().ends_with(".png")).count(), 2);
+    }
+    #[test] fn clear_removes_pinned_entries_too() {
+        let (mut h, _d) = hist();
+        h.add("PC", text("pinned"), 1);
+        let id = h.entries()[0].id;
+        h.pin(id, true);
+        h.clear();
+        assert!(h.entries().is_empty());
     }
     #[test] fn oversize_image_is_skipped() { // Review Focus 3
         let (mut h, _d) = hist();
