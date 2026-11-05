@@ -7,7 +7,7 @@ use bridge_core::{cliphistory::{self, History}, clipboard::{Content, Endpoint, H
 use serde::Serialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::{clipboard, diag, ipad::{self, IpadLink, IpadStatus, IpadWriter}};
+use crate::{clipboard, diag, ipad::{self, IpadLink, IpadStatus, IpadWriter}, transfer};
 
 pub enum ClipCommand {
     SetEnabled(bool),
@@ -18,7 +18,26 @@ pub enum ClipCommand {
     Phones(Vec<String>),
     /// Text a phone sent (its clipboard tile).
     FromPhone { id: String, text: String },
+    /// The hotkey: the clipboard, read now, to one device. Goes even with sync off: the owner asked.
+    ToDevice { to: Endpoint, done: Done },
     Stop,
+}
+
+/// `Ok` once the device has the clipboard, else a plain message.
+pub type Done = Box<dyn FnOnce(Result<(), String>) + Send>;
+
+pub const NOTHING_ON_CLIPBOARD: &str = "The clipboard is empty or private, so nothing was sent.";
+pub const TEXT_ONLY: &str = "Phones take text only, so nothing was sent.";
+pub const TOO_LARGE: &str = "That copy is too large, so nothing was sent.";
+pub const NO_ANSWER: &str = "The device did not answer, so nothing was pasted.";
+
+/// What the hotkey may send: `read` is `None` for a secret, so a secret stops here. Devices take plain
+/// text only (`Hub::observe` does the same), and the iPad's echo must match what it was given.
+fn ready_for(to: &Endpoint, read: Option<Content>) -> Result<Content, String> {
+    let c = match read.ok_or(NOTHING_ON_CLIPBOARD)? { Content::Rich { text, .. } => Content::Text(text), c => c };
+    if c.size() > MAX_ITEM_BYTES { return Err(TOO_LARGE.into()) }
+    if matches!(to, Endpoint::Peer(_)) && c.plain_text().is_none() { return Err(TEXT_ONLY.into()) }
+    Ok(c)
 }
 
 /// Delivers text to a phone (the transfer service's `send_clip`). Text only: phones get no images.
@@ -37,12 +56,19 @@ pub struct ClipStatus {
 
 pub struct ClipHandle { tx: UnboundedSender<ClipCommand>, thread: Option<thread::JoinHandle<()>> }
 
+/// The running service, for the send hotkeys: the hub owns the handle and the engine starts before it.
+static RUNNING: Mutex<Option<UnboundedSender<ClipCommand>>> = Mutex::new(None);
+
+/// `ClipHandle::send` from the engine. False when the service is not running.
+pub fn request(c: ClipCommand) -> bool { RUNNING.lock().unwrap().as_ref().is_some_and(|tx| tx.send(c).is_ok()) }
+
 impl ClipHandle {
     pub fn send(&self, c: ClipCommand) { let _ = self.tx.send(c); }
 }
 
 impl Drop for ClipHandle {
     fn drop(&mut self) {
+        *RUNNING.lock().unwrap() = None;
         let _ = self.tx.send(ClipCommand::Stop);
         if let Some(t) = self.thread.take() { let _ = t.join(); }
     }
@@ -57,6 +83,7 @@ fn write_timeout(size: usize) -> Duration { Duration::from_secs(5 + (size / (102
 
 pub fn start(enabled: bool, history: Arc<Mutex<History>>, to_phone: ToPhone, on_status: impl Fn(ClipStatus) + Send + 'static) -> ClipHandle {
     let (tx, rx) = unbounded_channel();
+    *RUNNING.lock().unwrap() = Some(tx.clone());
     let thread = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
         // Single-threaded on purpose: idevice futures don't prove Send, and nothing here needs more threads.
@@ -135,6 +162,23 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
                 }
                 Some(ClipCommand::Phones(ids)) => hub.set_endpoints([Endpoint::Windows, Endpoint::Ipad].into_iter().chain(ids.into_iter().map(Endpoint::Peer)).collect()),
                 Some(ClipCommand::FromPhone { id, text }) => writes = route(&mut hub, &history, &ev_tx, Endpoint::Peer(id), Content::Text(text)),
+                Some(ClipCommand::ToDevice { to, done }) => {
+                    let read = tokio::task::spawn_blocking(clipboard::read).await.unwrap_or(None);
+                    match (ready_for(&to, read), to) {
+                        (Err(e), _) => done(Err(e)),
+                        (Ok(c), Endpoint::Peer(id)) => transfer::send_clip_then(id, c.plain_text().unwrap_or_default().to_string(), done),
+                        (Ok(c), _) => done(match writer.as_mut() {
+                            None => Err(NO_ANSWER.into()),
+                            Some(w) => {
+                                hub.written_directly(Endpoint::Ipad, &c);
+                                match tokio::time::timeout(write_timeout(c.size()), w.write(&c)).await {
+                                    Ok(Ok(())) => Ok(()),
+                                    _ => Err(NO_ANSWER.into()),
+                                }
+                            }
+                        }),
+                    }
+                }
             },
             Some(c) = from_windows.recv() => writes = route(&mut hub, &history, &ev_tx, Endpoint::Windows, c),
             Some(ev) = events.recv() => match ev {
@@ -235,6 +279,24 @@ fn record(history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, from: &End
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn nothing_to_read_sends_nothing() { // Review Focus 1, 5: `read` gives `None` for a secret
+        assert_eq!(ready_for(&Endpoint::Ipad, None), Err(NOTHING_ON_CLIPBOARD.to_string()));
+    }
+    #[test] fn phones_take_text_only() {
+        let img = Content::Image(bridge_core::clipboard::Image { width: 1, height: 1, rgba: vec![0; 4] });
+        assert_eq!(ready_for(&Endpoint::Peer("p".into()), Some(img.clone())), Err(TEXT_ONLY.to_string()));
+        assert_eq!(ready_for(&Endpoint::Ipad, Some(img.clone())), Ok(img));
+        assert!(ready_for(&Endpoint::Peer("p".into()), Some(Content::Text("x".into()))).is_ok());
+    }
+    #[test] fn a_formatted_copy_goes_as_its_text() { // same rule as the sync, oversize HTML included
+        for html in ["<b>x</b>".to_string(), "y".repeat(MAX_ITEM_BYTES)] {
+            assert_eq!(ready_for(&Endpoint::Ipad, Some(Content::Rich { text: "x".into(), html })), Ok(Content::Text("x".into())));
+        }
+    }
+    #[test] fn a_copy_over_the_limit_is_not_sent() { // Review Focus 3
+        let big = Content::Text("x".repeat(MAX_ITEM_BYTES + 1));
+        assert_eq!(ready_for(&Endpoint::Ipad, Some(big)), Err(TOO_LARGE.to_string()));
+    }
     #[test] fn write_timeout_grows_with_size() { // Final review I5
         assert_eq!(write_timeout(10), Duration::from_secs(5));
         assert_eq!(write_timeout(33 * 1024 * 1024), Duration::from_secs(5 + 33));

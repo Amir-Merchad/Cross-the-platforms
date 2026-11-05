@@ -11,5 +11,6 @@ pub mod keys;
 pub mod monitors;
 pub mod notes;
 pub mod peripheral;
+pub mod selection;
 pub mod sendto;
 pub mod transfer;

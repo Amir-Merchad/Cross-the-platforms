@@ -201,10 +201,15 @@ function restingLine(status: Status): string {
   return status.advertising || status.bluetooth_off ? "Your keyboard and mouse are on Windows." : "Starting Bluetooth…";
 }
 
+/** What a send hotkey just did: fixed phrases only, as other engine notices can carry raw errors and ids. */
+const sendLine = (notice: string | null) => (notice && /(, so (nothing was (sent|pasted)|paste was not pressed)|^Sending the selected files|^Clipboard sent and pasted)\.$/.test(notice) ? notice : null);
+
 /** The top bar's line when nothing has just been said. Input comes first: that is what must never surprise. */
 export function deskLine(status: Status | null, rows: Row[], devices: Device[], selected: Device | null, btOff: boolean, filesDown: boolean): string {
   if (!status) return "";
-  if (status.active) return `${restingLine(status)} Push back across the edge, or press Ctrl+Alt+Q.`;
+  const said = sendLine(status.notice);
+  if (status.active) return `${restingLine(status)} ${said ?? "Push back across the edge, or press Ctrl+Alt+Q."}`;
+  if (said) return said;
   if (filesDown) return "File sending did not start. Quit Bridge from the tray and open it again.";
   const sending = rows.filter((r) => r.outgoing && r.state === "moving").at(-1);
   if (sending) {

@@ -240,6 +240,8 @@ fn route_key(vk: u16, down: bool) -> bool {
         Verdict::PassToWindows => false,
         Verdict::Hotkey(0) => { back_to_windows(Input::Hotkey(0)); true }
         Verdict::Hotkey(n) => { send(Input::Hotkey(n)); true }
+        Verdict::SendClipboard => { send(Input::SendClipboard); true }
+        Verdict::SendFiles => { send(Input::SendFiles); true }
         Verdict::Drop => true,
         Verdict::Remote => unsafe {
             if down && vk == VK_ESCAPE.0 {

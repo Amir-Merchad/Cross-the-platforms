@@ -93,7 +93,7 @@ pub fn vk_to_hid(vk: u16) -> Option<u8> {
 pub struct HeldInput { modifiers: u8, keys: [u8; 6], buttons: u8 }
 
 impl HeldInput {
-    fn report(&self) -> KeyboardReport { KeyboardReport { modifiers: self.modifiers, keys: self.keys } }
+    pub fn report(&self) -> KeyboardReport { KeyboardReport { modifiers: self.modifiers, keys: self.keys } }
 
     pub fn key_down(&mut self, vk: u16) -> KeyboardReport {
         if let Some(m) = vk_to_modifier(vk) {

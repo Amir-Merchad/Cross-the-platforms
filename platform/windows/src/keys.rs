@@ -7,6 +7,10 @@ pub enum Verdict {
     Remote,
     /// Ctrl+Alt+Q (0, while remote) or Ctrl+Alt+1…n (in both states). The key is swallowed.
     Hotkey(u8),
+    /// Ctrl+Alt+V, in both states. The key is swallowed.
+    SendClipboard,
+    /// Ctrl+Alt+F, in both states. The key is swallowed.
+    SendFiles,
     /// Swallowed and not forwarded: hotkey repeats/releases, repeats of a key held on Windows.
     Drop,
 }
@@ -43,6 +47,10 @@ impl KeyGate {
         if down && combo && (0x31..0x31 + self.hotkeys as u16).contains(&vk) {
             self.hotkey_down[i] = true;
             return Verdict::Hotkey((vk - 0x30) as u8);
+        }
+        if down && combo && (vk == 0x56 || vk == 0x46) {
+            self.hotkey_down[i] = true;
+            return if vk == 0x56 { Verdict::SendClipboard } else { Verdict::SendFiles };
         }
         // The release of a hotkey key never reaches Windows or the device.
         if !down && std::mem::take(&mut self.hotkey_down[i]) { return Verdict::Drop }
@@ -98,6 +106,24 @@ mod tests {
         let mut g = KeyGate::default();
         assert_eq!(g.on_key(A, true, false), Verdict::PassToWindows);
         assert_eq!(g.on_key(A, false, false), Verdict::PassToWindows);
+    }
+    #[test] fn ctrl_alt_v_and_f_are_caught_local_and_remote() {
+        for suppress in [false, true] {
+            let mut g = KeyGate::default();
+            g.on_key(LCTRL, true, suppress); g.on_key(LALT, true, suppress);
+            assert_eq!(g.on_key(0x56, true, suppress), Verdict::SendClipboard);
+            assert_eq!(g.on_key(0x56, true, suppress), Verdict::Drop, "auto-repeat sends once");
+            assert_eq!(g.on_key(0x56, false, suppress), Verdict::Drop);
+            assert_eq!(g.on_key(0x46, true, suppress), Verdict::SendFiles);
+            assert_eq!(g.on_key(0x46, false, suppress), Verdict::Drop);
+        }
+    }
+    #[test] fn plain_v_and_altgr_v_are_not_the_hotkey() {
+        let mut g = KeyGate::default();
+        assert_eq!(g.on_key(0x56, true, false), Verdict::PassToWindows);
+        g.on_key(0x56, false, false);
+        g.on_key(LCTRL, true, false); g.on_key(0xA5, true, false); // AltGr
+        assert_eq!(g.on_key(0x56, true, false), Verdict::PassToWindows);
     }
     #[test] fn ctrl_alt_q_escapes_while_suppressed() {
         let mut g = KeyGate::default();

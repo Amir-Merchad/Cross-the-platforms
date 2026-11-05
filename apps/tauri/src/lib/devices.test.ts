@@ -212,6 +212,14 @@ test("deviceLook: a Bluetooth device reachable only for files reads Offline, bec
   expect(look(dev({ connected: false, reachable: true, placement: null }))).toEqual({ sub: "Offline", off: true });
 });
 
+test("deskLine says what a send hotkey did, and only that", () => {
+  const nothing = "No device is in control, so nothing was sent.";
+  expect(line({ status: stat({ notice: nothing }) })).toBe(nothing);
+  expect(line({ status: stat({ notice: "Sending the selected files.", active: "h" }) })).toBe("Your keyboard and mouse are on iPad Air. Sending the selected files.");
+  expect(line({ status: stat({ notice: "Clipboard sent and pasted.", active: "h" }) })).toBe("Your keyboard and mouse are on iPad Air. Clipboard sent and pasted.");
+  expect(line({ status: stat({ notice: "Bluetooth not ready: 0x80070005" }) })).toBe("Your keyboard and mouse are on Windows.");
+});
+
 test("deskLine never passes an engine notice through", () => {
   const raw = "advertising failed: HRESULT(0x80070005) BluetoothLE#BluetoothLE00:11:22";
   expect(line({ status: stat({ notice: raw }) })).toBe("Your keyboard and mouse are on Windows.");

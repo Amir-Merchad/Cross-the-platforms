@@ -10,16 +10,17 @@ use std::{
 };
 
 use bridge_core::{
+    clipboard::Endpoint,
     ipadhid::IPAD_HOST,
     keyqueue::KeyQueue,
     names::display_name,
-    router::{Action, Input, Router},
+    router::{Action, Input, Router, pastes_with_cmd},
     settings::Settings,
 };
 use serde::Serialize;
 use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
-use crate::{capture, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral};
+use crate::{capture, clipsync::{self, ClipCommand}, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral, selection};
 
 pub enum Command { Reload(Box<Settings>), SwitchTo(Option<String>), Stop }
 
@@ -50,7 +51,8 @@ pub struct Status {
 pub fn status_line(s: &Status) -> String {
     let name = |id: &str| display_name(s.hosts.iter().find(|h| h.id == id).and_then(|h| h.name.as_deref()));
     match (&s.active, &s.notice) {
-        (Some(id), _) => format!("Controlling {}", name(id)),
+        (Some(id), Some(n)) => format!("Controlling {}. {n}", name(id)),
+        (Some(id), None) => format!("Controlling {}", name(id)),
         (None, Some(n)) => n.clone(),
         (None, None) if !s.advertising && !s.bluetooth_off => "Starting Bluetooth…".into(),
         (None, None) => format!("{} device(s) connected", s.hosts.iter().filter(|h| h.connected).count()),
@@ -148,6 +150,14 @@ fn watch_list(s: &Settings) -> Vec<String> { s.placed_ids().into_iter().filter(|
 /// The watcher's ids that are Bluetooth hosts to count.
 fn ble_ids<'a>(snap: &'a Snapshot, s: &Settings) -> Vec<&'a String> { snap.ids.iter().filter(|id| is_ble_host(id, s)).collect() }
 
+/// Where the clipboard goes for a host: the iPad's own link, else the files peer it is linked to.
+fn clip_target(host: &str, s: &Settings) -> Option<Endpoint> {
+    if sink_for(host) == Sink::Ipad { Some(Endpoint::Ipad) } else { s.device_links.get(host).cloned().map(Endpoint::Peer) }
+}
+
+const NOT_LINKED: &str = "That device is not linked for files yet, so nothing was sent.";
+const NOT_RUNNING: &str = "The clipboard service is not running, so nothing was sent.";
+
 /// Whether to run the Bluetooth peripheral at all.
 pub fn wants_peripheral(s: &Settings) -> bool { s.bluetooth_enabled }
 
@@ -203,6 +213,8 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let ipad: IpadInputHandle = ipadinput::start(crate::ipad::ipad_dir(), move |s| { let _ = ipad_tx.send(s); });
 
     let (input_tx, input_rx) = mpsc::channel::<Input>();
+    // Workers answer on the input channel, so the loop never waits for them.
+    let answers = input_tx.clone();
     let mut capture = capture::start(input_tx);
     let mut router = Router::new(settings.clone(), monitors::list());
     router.set_interval(IPAD_HOST, IPAD_INTERVAL_MS);
@@ -377,6 +389,18 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     status.notice = None;
                 }
                 Action::Notice(n) => status.notice = Some(n),
+                Action::SendClipboard { host } => {
+                    let Some(to) = clip_target(&host, &settings) else { status.notice = Some(NOT_LINKED.into()); continue };
+                    let cmd = pastes_with_cmd(&host, names.get(&host).and_then(|n| n.as_deref()));
+                    let tx = answers.clone();
+                    let done = Box::new(move |r: Result<(), String>| { let _ = tx.send(r.map_or_else(Input::Say, |()| Input::Paste { host, cmd })); });
+                    if !clipsync::request(ClipCommand::ToDevice { to, done }) { status.notice = Some(NOT_RUNNING.into()); }
+                }
+                Action::SendFiles { host } => {
+                    let Some(peer) = settings.device_links.get(&host).cloned() else { status.notice = Some(NOT_LINKED.into()); continue };
+                    let tx = answers.clone();
+                    selection::send_selected(peer, move |line| { let _ = tx.send(Input::Say(line.into())); });
+                }
             }
         }
 
@@ -469,6 +493,17 @@ mod tests {
         assert_eq!(ble_ids(&snap, &s), ["AA:BB"], "it may still subscribe, but it is no host of ours");
     }
 
+    #[test] fn the_clipboard_goes_to_the_ipad_link_or_the_linked_peer() {
+        let mut s = Settings::default();
+        s.device_links.insert("AA:BB".into(), "peer".into());
+        assert_eq!(clip_target(IPAD_HOST, &s), Some(Endpoint::Ipad));
+        assert_eq!(clip_target("AA:BB", &s), Some(Endpoint::Peer("peer".into())));
+        assert_eq!(clip_target("CC:DD", &s), None, "no files link: nowhere to put it");
+    }
+    #[test] fn a_notice_shows_while_a_device_is_in_control() { // Review Focus 5: the owner is on the device then
+        let s = Status { hosts: vec![host(Some("iPad Air"))], active: Some("AA:BB".into()), notice: Some("Nothing was sent.".into()), ..Status::default() };
+        assert_eq!(status_line(&s), "Controlling iPad Air. Nothing was sent.");
+    }
     #[test] fn status_line_never_shows_a_raw_id_or_a_blank_name() {
         assert_eq!(line(Some("iPad Air")), "Controlling iPad Air");
         assert_eq!(line(None), "Controlling Unnamed device");
