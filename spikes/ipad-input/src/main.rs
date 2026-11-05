@@ -48,6 +48,7 @@ use idevice::{
 };
 use tokio::{task::JoinHandle, time::{sleep, timeout}};
 
+mod htmlset;
 mod probe;
 
 type Io = Box<dyn ReadWrite>;
@@ -866,7 +867,7 @@ async fn run() -> ExitCode {
     args.retain(|a| a != "--usb");
     let cmd = args.first().map(String::as_str).unwrap_or("");
     if cmd == "diff" { return probe::diff_cmd(&args[1..]) }
-    if !["wifidiag", "rppair", "check", "keys", "touch", "scrollold", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo", "typed", "do", "scroll", "rightdrag", "streamtime", "callcheck", "twotunnels", "wifimount", "idle", "keyboard"].contains(&cmd) {
+    if !["wifidiag", "rppair", "check", "keys", "touch", "scrollold", "latency", "pointer", "shot", "dump", "probe", "home", "ids", "raw", "bytes", "demo", "typed", "do", "scroll", "rightdrag", "streamtime", "callcheck", "twotunnels", "wifimount", "idle", "keyboard", "htmlset"].contains(&cmd) {
         eprintln!("usage: ipad-input <check|keys|touch|scroll|latency [uhid|indigo|touch]|pointer> [--usb]");
         return ExitCode::from(2);
     }
@@ -894,6 +895,11 @@ async fn run() -> ExitCode {
         std::process::exit(0); // The log tap task has no stop.
     }
 
+    if cmd == "htmlset" {
+        let r = timeout(Duration::from_secs(90), htmlset::htmlset(&dir, usb)).await.unwrap_or_else(|_| Err("no connection within 90 s".into()));
+        if let Err(e) = &r { eprintln!("FAILED: {e}"); }
+        return if r.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
     if cmd == "wifimount" {
         let r = probe::wifimount(&dir, args.get(1).is_some_and(|a| a == "dry")).await;
         println!("{r:?}");

@@ -50,7 +50,8 @@ pub fn prepare(c: &Content) -> Option<Prepared> {
     match c {
         Content::Text(t) if t.is_empty() || t.len() > MAX_TEXT_BYTES => None,
         Content::Text(t) => Some(Prepared::Text { hash: hex(Sha256::new().chain_update(b"t").chain_update(t.as_bytes()).finalize()), text: t.clone(), html: None }),
-        Content::Rich { text, html } if text.is_empty() || text.len() + html.len() > MAX_TEXT_BYTES => None,
+        Content::Rich { text, html } if text.len() + html.len() > MAX_TEXT_BYTES => prepare(&Content::Text(text.clone())), // the text alone may still fit
+        Content::Rich { text, .. } if text.is_empty() => None,
         Content::Rich { text, html } => Some(Prepared::Text {
             hash: hex(Sha256::new().chain_update(b"r").chain_update((text.len() as u64).to_le_bytes()).chain_update(text.as_bytes()).chain_update(html.as_bytes()).finalize()),
             text: text.clone(), html: Some(html.clone()),
@@ -210,7 +211,8 @@ mod tests {
         assert!(h.add("PC", prepare(&rich).unwrap(), 1));
         let again = History::open(h.dir.clone());
         assert_eq!(again.content(again.entries()[0].id), Some(rich));
-        assert!(prepare(&Content::Rich { text: "a".into(), html: "x".repeat(MAX_TEXT_BYTES) }).is_none());
+        assert!(matches!(prepare(&Content::Rich { text: "a".into(), html: "x".repeat(MAX_TEXT_BYTES) }), Some(Prepared::Text { html: None, .. })), "text alone fits, so it is kept");
+        assert!(prepare(&Content::Rich { text: "x".repeat(MAX_TEXT_BYTES + 1), html: "<b></b>".into() }).is_none());
     }
     #[test] fn oldest_unpinned_goes_at_51() {
         let (mut h, _d) = hist();

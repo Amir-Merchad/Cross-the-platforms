@@ -36,6 +36,15 @@ impl Content {
     pub fn plain_text(&self) -> Option<&str> {
         match self { Content::Text(t) | Content::Rich { text: t, .. } => Some(t), Content::Image(_) => None }
     }
+    /// A formatted copy whose HTML pushes it over the size limit still syncs, as plain text.
+    pub fn fit(self) -> Content {
+        match self { Content::Rich { text, html } if text.len() + html.len() > MAX_ITEM_BYTES && text.len() <= MAX_ITEM_BYTES => Content::Text(text), c => c }
+    }
+    /// What `to` actually receives: only Windows takes formatting. The iPad and phones get plain text
+    /// until the iPad can take both types in one write (spikes/ipad-input htmlset).
+    fn for_endpoint(&self, to: &Endpoint) -> Content {
+        match (self, to) { (Content::Rich { text, .. }, Endpoint::Ipad | Endpoint::Peer(_)) => Content::Text(text.clone()), _ => self.clone() }
+    }
     fn hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         match self {
@@ -93,6 +102,7 @@ impl Hub {
 
     /// `from` reported a clipboard change; returns what to write where.
     pub fn observe(&mut self, from: Endpoint, content: Content) -> Vec<(Endpoint, Item)> {
+        let content = content.fit();
         if content.plain_text().is_some_and(str::is_empty) { return Vec::new() }
         let hash = content.hash();
         if let Some(q) = self.pending.get_mut(&from) && let Some(i) = q.iter().position(|h| *h == hash) {
@@ -104,15 +114,19 @@ impl Hub {
         self.last = Some(hash);
         if self.paused { return Vec::new() }
         if content.size() > MAX_ITEM_BYTES { self.skipped += 1; return Vec::new() }
-        let item = Item { id: self.next_id, origin: from.clone(), content };
+        let id = self.next_id;
         self.next_id += 1;
         let targets: Vec<Endpoint> = self.endpoints.iter().filter(|e| **e != from).cloned().collect();
-        for e in &targets {
+        let mut out = Vec::new();
+        for e in targets {
+            // The echo to expect is of what this endpoint receives, not of what was copied.
+            let sent = content.for_endpoint(&e);
             let q = self.pending.entry(e.clone()).or_default();
             if q.len() == PENDING_ECHOES { q.pop_front(); }
-            q.push_back(hash);
+            q.push_back(sent.hash());
+            out.push((e, Item { id, origin: from.clone(), content: sent }));
         }
-        targets.into_iter().map(|e| (e, item.clone())).collect()
+        out
     }
 }
 
@@ -213,11 +227,30 @@ mod tests {
         assert_eq!(h.observe(Endpoint::Windows, t("bold")).len(), 1);
         assert_eq!(h.observe(Endpoint::Windows, Content::Rich { text: "bold".into(), html: "<b>bold</b>".into() }).len(), 1);
     }
-    #[test] fn huge_html_is_skipped_and_counted() { // Review Focus 3
+    #[test] fn huge_html_downgrades_to_text_and_still_syncs() { // Review Focus 3
         let mut h = hub();
         let big = Content::Rich { text: "a".into(), html: "x".repeat(MAX_ITEM_BYTES) };
-        assert!(h.observe(Endpoint::Windows, big).is_empty());
+        let out = h.observe(Endpoint::Windows, big);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].1.content, t("a"));
+        assert_eq!(h.skipped_too_large(), 0);
+        let huge_text = Content::Rich { text: "x".repeat(MAX_ITEM_BYTES + 1), html: "<b></b>".into() };
+        assert!(h.observe(Endpoint::Windows, huge_text).is_empty());
         assert_eq!(h.skipped_too_large(), 1);
+    }
+    #[test] fn ipad_and_phones_get_plain_text_and_their_echo_is_dropped() {
+        let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad, Endpoint::Peer("s24".into())]);
+        let rich = Content::Rich { text: "bold".into(), html: "<b>bold</b>".into() };
+        let out = h.observe(Endpoint::Windows, rich);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|(_, i)| i.content == t("bold")));
+        assert!(h.observe(Endpoint::Ipad, t("bold")).is_empty(), "the iPad's plain echo must not overwrite the formatted copy");
+        assert!(h.observe(Endpoint::Peer("s24".into()), t("bold")).is_empty(), "nor the phone's");
+    }
+    #[test] fn windows_still_gets_formatting_from_the_ipad() {
+        let mut h = hub();
+        let rich = Content::Rich { text: "bold".into(), html: "<b>bold</b>".into() };
+        assert_eq!(h.observe(Endpoint::Ipad, rich.clone())[0].1.content, rich);
     }
     #[test] fn empty_text_is_ignored() { assert!(hub().observe(Endpoint::Windows, t("")).is_empty()); }
     #[test] fn too_large_is_skipped_and_counted() { // Review Focus 3

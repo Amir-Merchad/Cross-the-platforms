@@ -162,12 +162,12 @@ impl IpadWriter {
     pub async fn write(&mut self, c: &Content) -> Result<(), String> {
         match c {
             Content::Text(t) => self.setter.set_text(t, GENERAL_PASTEBOARD).await,
-            // The service takes one type per item here, so HTML goes alone; if it refuses, plain text still lands.
-            // Device check: docs/v1.5/checklist-features.md (keep formatting).
-            Content::Rich { text, html } => match self.setter.set_image(html.as_bytes(), HTML_UTI, GENERAL_PASTEBOARD).await {
-                Ok(()) => Ok(()),
-                Err(_) => self.setter.set_text(text, GENERAL_PASTEBOARD).await,
-            },
+            // Plain text only for now: set_image would send public.html with no text type, and a plain field
+            // (or Bridge's own iPad app) would get nothing. Formatted paste waits on spikes/ipad-input htmlset.
+            Content::Rich { text, .. } => {
+                crate::diag::log(format_args!("iPad write: {} (plain text)", c.kind()));
+                self.setter.set_text(text, GENERAL_PASTEBOARD).await
+            }
             Content::Image(i) => {
                 let img = i.clone();
                 let png = tokio::task::spawn_blocking(move || codec::encode_png(&img)).await.map_err(|e| e.to_string())??;
@@ -472,13 +472,13 @@ pub async fn pair_usb(dir: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test] fn ipad_html_is_kept_only_when_there_is_some() {
-        use super::*;
         assert_eq!(rich_or_text("a".into(), Some("<b>a</b>".into())), Content::Rich { text: "a".into(), html: "<b>a</b>".into() });
         assert_eq!(rich_or_text("a".into(), Some("  ".into())), Content::Text("a".into()));
         assert_eq!(rich_or_text("a".into(), None), Content::Text("a".into()));
     }
-    use super::*;
 
     // Review Focus 4: every way the iPad can be unreachable gets a reason the owner can act on.
     #[test] fn missing_record_means_not_paired() { assert_eq!(classify("pairing record: NotFound"), IpadStatus::NotPaired); }

@@ -138,7 +138,7 @@ pub struct HistoryList { enabled: bool, entries: Vec<Entry> }
 #[tauri::command]
 pub fn history_list(state: State<AppState>, query: String) -> HistoryList {
     let h = state.history.lock().unwrap();
-    HistoryList { enabled: h.enabled(), entries: h.search(&query).into_iter().cloned().collect() }
+    HistoryList { enabled: h.enabled(), entries: h.search(&query).into_iter().cloned().map(|mut e| { e.html = None; e }).collect() } // the UI never shows the HTML
 }
 
 /// Puts the item back on the clipboard; the clipboard service then syncs it like any copy.
