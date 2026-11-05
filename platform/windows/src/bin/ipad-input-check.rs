@@ -43,7 +43,7 @@ fn main() {
         pause(30);
     };
     key(0x29);
-    for wheel in [-1, -1, -1, 1, 1, 1] { mouse(MouseReport { wheel, ..Default::default() }); pause(120); }
+    for wheel in [-16, -16, -16, 16, 16, 16] { mouse(MouseReport { wheel, ..Default::default() }); pause(120); }
     eprintln!("typing \"hello\" into the focused field");
     for k in [0x0B, 0x08, 0x0F, 0x0F, 0x12] { key(k) }
     pause(500);

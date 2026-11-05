@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(r[0][11], 2);
     }
     #[test] fn wheel_becomes_report_7() {
-        let r = reports_for(&Out::Mouse(MouseReport { wheel: 1, buttons: 1, ..Default::default() }));
+        let r = reports_for(&Out::Mouse(MouseReport { wheel: 16, buttons: 1, ..Default::default() }));
         assert_eq!(r, vec![bridge_core::ipadhid::scroll_report(16, 0)]);
     }
     #[test] fn backoff_grows_to_thirty_seconds() {

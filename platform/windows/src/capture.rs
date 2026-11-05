@@ -131,10 +131,6 @@ const RI_MOUSE_MIDDLE_BUTTON_UP: u32 = 0x0020;
 const RI_MOUSE_WHEEL: u32 = 0x0400;
 const RI_MOUSE_HWHEEL: u32 = 0x0800;
 const MOUSE_MOVE_ABSOLUTE: u16 = 0x0001;
-const WHEEL_DELTA: i32 = 120;
-
-/// Hi-res wheels and precision touchpads send sub-notch deltas; keep the remainder per axis.
-static mut WHEEL_ACC: (i32, i32) = (0, 0);
 
 #[allow(static_mut_refs)]
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -170,21 +166,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let _ = GetCursorPos(&mut p);
             send(Input::Move { dx, dy, cursor: (p.x, p.y) });
         }
-        if !SUPPRESS.load(Ordering::SeqCst) { WHEEL_ACC = (0, 0); return LRESULT(0) }
+        if !SUPPRESS.load(Ordering::SeqCst) { return LRESULT(0) }
         let flags = m.Anonymous.Anonymous.usButtonFlags as u32;
         for (i, (down, up)) in [(RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP), (RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP), (RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP)].iter().enumerate() {
             if flags & *down != 0 { send(Input::Button { mask: 1 << i, down: true }); }
             if flags & *up != 0 { send(Input::Button { mask: 1 << i, down: false }); }
         }
         let data = m.Anonymous.Anonymous.usButtonData as i16 as i32;
-        if flags & RI_MOUSE_WHEEL != 0 { WHEEL_ACC.0 += data }
-        if flags & RI_MOUSE_HWHEEL != 0 { WHEEL_ACC.1 += data }
-        let (v, h) = (WHEEL_ACC.0 / WHEEL_DELTA, WHEEL_ACC.1 / WHEEL_DELTA);
-        if v != 0 || h != 0 {
-            WHEEL_ACC.0 -= v * WHEEL_DELTA;
-            WHEEL_ACC.1 -= h * WHEEL_DELTA;
-            send(Input::Wheel { v: v.clamp(-127, 127) as i8, h: h.clamp(-127, 127) as i8 });
-        }
+        // Raw units: hi-res wheels and precision touchpads send part notches, and the router sums them per device.
+        let (v, h) = (if flags & RI_MOUSE_WHEEL != 0 { data } else { 0 }, if flags & RI_MOUSE_HWHEEL != 0 { data } else { 0 });
+        if v != 0 || h != 0 { send(Input::Wheel { v, h }); }
     }
     LRESULT(0)
 }

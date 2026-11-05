@@ -46,18 +46,22 @@ pub fn scroll_report(wheel: i8, pan: i8) -> Vec<u8> {
     r
 }
 
-/// The scroll reports for a router report's wheel and pan, in notches, scaled for the iPad.
-pub fn scroll_reports(r: &MouseReport) -> Vec<Vec<u8>> {
-    if r.wheel == 0 && r.pan == 0 { return vec![] }
-    let (mut v, mut h) = (r.wheel as i32 * SCROLL_PER_NOTCH, r.pan as i32 * SCROLL_PER_NOTCH);
+/// A scroll in report units, split into (wheel, pan) steps of signed 8 bits that sum exactly.
+pub fn scroll_steps(mut v: i32, mut h: i32) -> Vec<(i8, i8)> {
     let mut out = vec![];
     while v != 0 || h != 0 {
         let (y, x) = (v.clamp(-127, 127), h.clamp(-127, 127));
-        out.push(scroll_report(y as i8, x as i8));
+        out.push((y as i8, x as i8));
         v -= y;
         h -= x;
     }
     out
+}
+
+/// The scroll report for a router report. For this host the router's wheel and pan are report units, not notches.
+pub fn scroll_reports(r: &MouseReport) -> Vec<Vec<u8>> {
+    if r.wheel == 0 && r.pan == 0 { return vec![] }
+    vec![scroll_report(r.wheel, r.pan)]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,14 +130,15 @@ mod tests {
     #[test] fn scroll_report_layout() {
         assert_eq!(scroll_report(-16, 3), vec![7, 0, 0, 3, 0xF0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
-    #[test] fn one_notch_is_sixteen_units() {
-        assert_eq!(scroll_reports(&MouseReport { wheel: -1, ..Default::default() }), vec![scroll_report(-16, 0)]);
+    #[test] fn wheel_and_pan_are_report_units() {
+        assert_eq!(scroll_reports(&MouseReport { wheel: -16, pan: 1, ..Default::default() }), vec![scroll_report(-16, 1)]);
         assert!(scroll_reports(&MouseReport { dx: 4, ..Default::default() }).is_empty());
     }
-    #[test] fn many_notches_split_and_sum() {
-        let r = scroll_reports(&MouseReport { wheel: 10, pan: -9, ..Default::default() });
-        assert_eq!(r.iter().map(|b| b[4] as i8 as i32).sum::<i32>(), 160);
-        assert_eq!(r.iter().map(|b| b[3] as i8 as i32).sum::<i32>(), -144);
+    #[test] fn large_scrolls_split_and_sum() {
+        let s = scroll_steps(160, -144);
+        assert_eq!(s.iter().map(|x| x.0 as i32).sum::<i32>(), 160);
+        assert_eq!(s.iter().map(|x| x.1 as i32).sum::<i32>(), -144);
+        assert!(scroll_steps(0, 0).is_empty());
     }
     #[test] fn press_and_release_yield_events() {
         let mut t = KeyTranslator::default();

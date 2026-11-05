@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
     hid::{HeldInput, KeyboardReport, MouseReport, split_delta},
-    ipadhid::IPAD_HOST,
+    ipadhid::{IPAD_HOST, SCROLL_PER_NOTCH, scroll_steps},
     layout::{Edge, Monitor, Rect},
     settings::Settings,
     space::{self, Beyond, Placement, Tracker, opposite},
@@ -16,7 +16,8 @@ pub enum Input {
     /// Raw mouse delta plus the local cursor position (used while local for edge entry).
     Move { dx: i32, dy: i32, cursor: (i32, i32) },
     Button { mask: u8, down: bool },
-    Wheel { v: i8, h: i8 },
+    /// Raw `WHEEL_DELTA` units, 120 to a notch; a precision touchpad sends less.
+    Wheel { v: i32, h: i32 },
     Key { vk: u16, down: bool },
     /// 0 = back to Windows, 1..=9 = n-th attachment in settings order.
     Hotkey(u8),
@@ -69,6 +70,8 @@ const DEFAULT_INTERVAL_MS: u64 = 8;
 const HOLD_GAP_MS: u64 = 180;
 /// How far inside the edge the Windows cursor lands on return.
 const RETURN_INSET: i32 = 20;
+/// Raw wheel units in a notch.
+const WHEEL_DELTA: i32 = 120;
 
 struct Remote {
     device_id: String,
@@ -78,6 +81,8 @@ struct Remote {
     held: HeldInput,
     pending: (i32, i32),
     next_due: u64,
+    /// What is left of the wheel per axis, in 1/120 of a step. It lives here so it ends with control.
+    wheel: (i32, i32),
 }
 
 pub struct Router {
@@ -210,7 +215,7 @@ impl Router {
         let mut out = vec![Action::Suppress(true)];
         out.extend(split_delta(px, py).into_iter().map(|(dx, dy)| Action::Mouse { host: host.clone(), report: MouseReport { dx, dy, ..Default::default() } }));
         out.push(Action::Active(Some(host.clone())));
-        self.remote = Some(Remote { device_id: host, tracker, return_to, held: HeldInput::default(), pending: (0, 0), next_due: now_ms });
+        self.remote = Some(Remote { device_id: host, tracker, return_to, held: HeldInput::default(), pending: (0, 0), next_due: now_ms, wheel: (0, 0) });
         out
     }
 
@@ -232,8 +237,15 @@ impl Router {
                 out
             }
             Input::Wheel { v, h } => {
+                // The Wi-Fi iPad scrolls in report units, so part notches reach it. Bluetooth keeps whole notches.
+                let ipad = host == IPAD_HOST;
+                let per_notch = if ipad { SCROLL_PER_NOTCH } else { 1 };
+                let (v, h) = (wheel_steps(&mut r.wheel.0, v, per_notch), wheel_steps(&mut r.wheel.1, h, per_notch));
+                if v == 0 && h == 0 { return Vec::new() }
+                let steps = if ipad { scroll_steps(v, h) } else { vec![(v.clamp(-127, 127) as i8, h.clamp(-127, 127) as i8)] };
                 let mut out = flush(r);
-                out.push(Action::Mouse { host, report: MouseReport { buttons: r.held.buttons(), wheel: v, pan: h, ..Default::default() } });
+                let buttons = r.held.buttons();
+                out.extend(steps.into_iter().map(|(wheel, pan)| Action::Mouse { host: host.clone(), report: MouseReport { buttons, wheel, pan, ..Default::default() } }));
                 out
             }
             Input::Key { vk, down } => {
@@ -290,6 +302,14 @@ impl Router {
         out.push(Action::Active(None));
         out
     }
+}
+
+/// Adds `raw` wheel units and takes out the whole steps. Kept in 1/120 of a step, because a report unit is 7.5 raw.
+fn wheel_steps(acc: &mut i32, raw: i32, per_notch: i32) -> i32 {
+    *acc += raw * per_notch;
+    let steps = *acc / WHEEL_DELTA;
+    *acc -= steps * WHEEL_DELTA;
+    steps
 }
 
 /// Emits pending motion as reports (with held buttons, so drags keep the button down).
@@ -418,8 +438,60 @@ mod tests {
     #[test] fn wheel_keeps_held_buttons() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
         r.on_input(Input::Button { mask: 1, down: true }, 10, &up);
-        let a = r.on_input(Input::Wheel { v: -1, h: 0 }, 20, &up);
+        let a = r.on_input(Input::Wheel { v: -120, h: 0 }, 20, &up);
         assert!(a.iter().any(|x| matches!(x, Action::Mouse { report, .. } if report.buttons == 1 && report.wheel == -1)));
+    }
+    fn ipad() -> Router {
+        let s = Settings { attachments: vec![Attachment { device_id: IPAD_HOST.into(), monitor_id: "M1".into(), edge: Edge::Right }], ..Default::default() };
+        let mut r = Router::new(s, vec![Monitor { id: "M1".into(), rect: Rect { left: 0, top: 0, right: 1920, bottom: 1080 } }]);
+        r.on_input(Input::Hotkey(1), 0, &up);
+        r
+    }
+    /// The (wheel, pan) of every scroll in `a`.
+    fn scrolls(a: &[Action]) -> Vec<(i8, i8)> {
+        a.iter().filter_map(|x| match x { Action::Mouse { report, .. } if report.wheel != 0 || report.pan != 0 => Some((report.wheel, report.pan)), _ => None }).collect()
+    }
+    #[test] fn small_deltas_accumulate_to_one_unit() {
+        let mut r = ipad();
+        assert!(r.on_input(Input::Wheel { v: 7, h: 0 }, 10, &up).is_empty(), "under one unit: nothing yet");
+        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: 1, h: 0 }, 20, &up)), [(1, 0)]);
+    }
+    #[test] fn fine_deltas_add_up_to_a_notch_exactly() { // a unit is 7.5 raw, so the remainder must not round away
+        let mut r = ipad();
+        let a: Vec<_> = (0..24).flat_map(|t| r.on_input(Input::Wheel { v: 5, h: 0 }, t, &up)).collect();
+        assert_eq!(scrolls(&a).iter().map(|s| s.0 as i32).sum::<i32>(), 16);
+    }
+    #[test] fn full_notch_is_sixteen_units() {
+        assert_eq!(scrolls(&ipad().on_input(Input::Wheel { v: 120, h: 0 }, 10, &up)), [(16, 0)]);
+    }
+    #[test] fn direction_is_kept() {
+        let mut r = ipad();
+        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: -120, h: 60 }, 10, &up)), [(-16, 8)]);
+        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: 60, h: -120 }, 20, &up)), [(8, -16)]);
+    }
+    #[test] fn a_large_delta_splits_to_signed_bytes() {
+        let s = scrolls(&ipad().on_input(Input::Wheel { v: -1200, h: 1200 }, 10, &up));
+        assert!(s.len() > 1);
+        assert_eq!(s.iter().map(|x| x.0 as i32).sum::<i32>(), -160);
+        assert_eq!(s.iter().map(|x| x.1 as i32).sum::<i32>(), 160);
+    }
+    #[test] fn a_partial_remainder_dies_with_control() {
+        let mut r = ipad();
+        r.on_input(Input::Wheel { v: 7, h: 7 }, 10, &up);
+        assert!(scrolls(&r.on_input(Input::Hotkey(0), 20, &up)).is_empty(), "leaving sends no scroll");
+        assert!(r.on_input(Input::Wheel { v: 1, h: 1 }, 30, &up).is_empty(), "nor does a wheel on Windows");
+        r.on_input(Input::Hotkey(1), 40, &up);
+        assert!(r.on_input(Input::Wheel { v: 1, h: 1 }, 50, &up).is_empty(), "the old remainder is gone");
+    }
+    #[test] fn bluetooth_keeps_whole_notches() {
+        let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up); // "ipad" here is a Bluetooth host
+        r.on_input(Input::Move { dx: 5, dy: 0, cursor: (0, 0) }, 2000, &up);
+        assert!(r.on_input(Input::Wheel { v: -119, h: 0 }, 2001, &up).is_empty(), "a part notch sends nothing, not even pending motion");
+        let a = r.on_input(Input::Wheel { v: -1, h: 0 }, 2002, &up);
+        let sent: Vec<_> = a.iter().filter_map(|x| match x { Action::Mouse { report, .. } => Some((report.dx, report.wheel)), _ => None }).collect();
+        assert_eq!(sent, [(5, 0), (0, -1)], "motion first, then one notch");
+        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: 360, h: 0 }, 2003, &up)), [(3, 0)]);
+        assert_eq!(scrolls(&r.on_input(Input::Wheel { v: 120 * 200, h: 0 }, 2004, &up)), [(127, 0)], "clamped to one report");
     }
     #[test] fn hotkey_zero_returns_to_windows() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
