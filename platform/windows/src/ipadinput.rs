@@ -158,14 +158,18 @@ async fn run(dir: PathBuf, mut rx: UnboundedReceiver<IpadCommand>, on_state: imp
     let mut backoff = BACKOFF_MIN;
     let _ = report(IpadInputState::Connecting);
     loop {
-        let attempt = timeout(CONNECT_LIMIT, Session::open(&dir)).await.unwrap_or_else(|_| Err("iPad didn't answer in time".into()));
+        // Stop wins over a slow connect, so Quit never waits on the network.
+        let attempt = tokio::select! {
+            r = timeout(CONNECT_LIMIT, Session::open(&dir)) => r.unwrap_or_else(|_| Err("iPad didn't answer in time".into())),
+            () = until_stop(&mut rx) => return,
+        };
         let wait = match attempt {
             Ok(mut s) => {
                 diag::log("iPad input connected over Wi-Fi");
                 backoff = BACKOFF_MIN;
                 let _ = report(IpadInputState::Ready);
                 let end = s.serve(&mut rx).await;
-                s.close().await;
+                let _ = timeout(CLEANUP_LIMIT * 2, s.close()).await;
                 match end {
                     End::Stop => return,
                     End::Down(e) => {
@@ -197,6 +201,11 @@ async fn run(dir: PathBuf, mut rx: UnboundedReceiver<IpadCommand>, on_state: imp
 }
 
 enum End { Stop, Down(String) }
+
+/// Returns on Stop or a closed channel; input that arrives meanwhile has no link to go to.
+async fn until_stop(rx: &mut UnboundedReceiver<IpadCommand>) {
+    while let Some(c) = rx.recv().await { if c == IpadCommand::Stop { return } }
+}
 
 const UHID_SERVICE: &str = "com.apple.coredevice.hid.universalhidservice";
 const UHID_FEATURE: &str = "com.apple.coredevice.feature.remote.universalhidservice";

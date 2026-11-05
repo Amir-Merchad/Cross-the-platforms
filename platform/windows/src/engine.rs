@@ -1,4 +1,5 @@
-//! The engine thread: captured input → `Router` → BLE HID reports, plus connection upkeep.
+//! The engine thread: captured input → `Router` → BLE HID reports or the iPad's Wi-Fi input service,
+//! plus connection upkeep. Bluetooth is optional: capture, hotkeys and the iPad run without it.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -9,6 +10,7 @@ use std::{
 };
 
 use bridge_core::{
+    ipadhid::IPAD_HOST,
     keyqueue::KeyQueue,
     names::display_name,
     router::{Action, Input, Router},
@@ -17,7 +19,7 @@ use bridge_core::{
 use serde::Serialize;
 use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
-use crate::{capture, monitors, peripheral::HidPeripheral};
+use crate::{capture, ipadinput::{self, IpadCommand, IpadInputHandle, IpadInputState}, monitors, peripheral::HidPeripheral};
 
 pub enum Command { Reload(Settings), SwitchTo(Option<String>), Stop }
 
@@ -38,6 +40,10 @@ pub struct Status {
     pub hosts: Vec<HostStatus>,
     pub active: Option<String>,
     pub notice: Option<String>,
+    /// The Wi-Fi iPad's input link; `None` before the service reports.
+    pub ipad: Option<IpadInputState>,
+    /// The owner switched Bluetooth off in Settings.
+    pub bluetooth_off: bool,
 }
 
 /// The tray's one line about what is happening.
@@ -46,7 +52,7 @@ pub fn status_line(s: &Status) -> String {
     match (&s.active, &s.notice) {
         (Some(id), _) => format!("Controlling {}", name(id)),
         (None, Some(n)) => n.clone(),
-        (None, None) if !s.advertising => "Starting Bluetooth…".into(),
+        (None, None) if !s.advertising && !s.bluetooth_off => "Starting Bluetooth…".into(),
         (None, None) => format!("{} device(s) connected", s.hosts.iter().filter(|h| h.connected).count()),
     }
 }
@@ -124,6 +130,53 @@ impl Drop for Watcher {
     }
 }
 
+/// Where a host's reports go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sink { Ipad, Ble }
+
+pub fn sink_for(host: &str) -> Sink { if host == IPAD_HOST { Sink::Ipad } else { Sink::Ble } }
+
+/// Whether to run the Bluetooth peripheral at all.
+pub fn wants_peripheral(s: &Settings) -> bool { s.bluetooth_enabled }
+
+/// Starts the peripheral off the input thread, retrying until it comes up or is no longer wanted.
+/// Each failure is reported so the Desk can say why.
+struct PeripheralStarter { rx: mpsc::Receiver<Result<std::sync::Arc<HidPeripheral>, String>>, stop: std::sync::Arc<std::sync::atomic::AtomicBool> }
+
+impl PeripheralStarter {
+    fn start() -> Self {
+        let (tx, rx) = mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = stop.clone();
+        thread::Builder::new().name("ctp-ble-start".into()).spawn(move || {
+            while !flag.load(Ordering::SeqCst) {
+                match HidPeripheral::start() {
+                    Ok(p) => { let _ = tx.send(Ok(std::sync::Arc::new(p))); return }
+                    Err(e) => if tx.send(Err(e.message().to_string())).is_err() { return },
+                }
+                let until = Instant::now() + ADVERTISE_RETRY;
+                while Instant::now() < until && !flag.load(Ordering::SeqCst) { thread::sleep(Duration::from_millis(100)) }
+            }
+        }).expect("spawn ble starter");
+        Self { rx, stop }
+    }
+}
+
+impl Drop for PeripheralStarter {
+    fn drop(&mut self) { self.stop.store(true, Ordering::SeqCst) }
+}
+
+/// The running peripheral and its watcher; dropped together, watcher first.
+struct Ble { watcher: Watcher, peripheral: std::sync::Arc<HidPeripheral> }
+
+/// Bluetooth is off, starting, or running.
+enum BleState { Off, Starting(PeripheralStarter), Running(Ble) }
+
+impl BleState {
+    fn for_settings(s: &Settings) -> Self { if wants_peripheral(s) { BleState::Starting(PeripheralStarter::start()) } else { BleState::Off } }
+    fn peripheral(&self) -> Option<&HidPeripheral> { match self { BleState::Running(b) => Some(&b.peripheral), _ => None } }
+}
+
 pub fn start(settings: Settings, on_status: impl Fn(Status) + Send + 'static) -> EngineHandle {
     let (tx, rx) = mpsc::channel();
     let thread = thread::spawn(move || run(settings, rx, on_status));
@@ -131,29 +184,16 @@ pub fn start(settings: Settings, on_status: impl Fn(Status) + Send + 'static) ->
 }
 
 fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: impl Fn(Status)) {
-    let mut status = Status::default();
-    // Advertise first; retry until the adapter is available (Bluetooth off, adapter busy…).
-    let peripheral = loop {
-        match HidPeripheral::start() {
-            Ok(p) => break std::sync::Arc::new(p),
-            Err(e) => {
-                status.notice = Some(format!("Bluetooth not ready: {}", e.message()));
-                on_status(status.clone());
-                // Keep settings saved meanwhile; drop switches (nothing to switch to yet).
-                match commands.recv_timeout(ADVERTISE_RETRY) {
-                    Ok(Command::Stop) => return,
-                    Ok(Command::Reload(s)) => settings = s,
-                    _ => {}
-                }
-            }
-        }
-    };
-    status.advertising = true;
-    status.notice = None;
+    let mut status = Status { bluetooth_off: !wants_peripheral(&settings), ..Status::default() };
+    // Capture, router and hotkeys start at once; Bluetooth comes up in the background, if wanted.
+    let mut ble = BleState::for_settings(&settings);
+    let (ipad_tx, ipad_states) = mpsc::channel::<IpadInputState>();
+    let ipad: IpadInputHandle = ipadinput::start(crate::ipad::ipad_dir(), move |s| { let _ = ipad_tx.send(s); });
 
     let (input_tx, input_rx) = mpsc::channel::<Input>();
     let mut capture = capture::start(input_tx);
     let mut router = Router::new(settings.clone(), monitors::list());
+    router.set_interval(IPAD_HOST, IPAD_INTERVAL_MS);
     capture::set_hotkey_count(settings.attachments.len() as u8);
     let clock = Instant::now();
     let now_ms = || clock.elapsed().as_millis() as u64;
@@ -167,7 +207,6 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     // ms the input loop waits is a visible hitch of the remote pointer. The loop only reads snapshots.
     let watched: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(settings.attachments.iter().map(|a| a.device_id.clone()).collect()));
     let snapshot: std::sync::Arc<Mutex<Snapshot>> = std::sync::Arc::default();
-    let watcher = Watcher::start(peripheral.clone(), watched.clone(), snapshot.clone());
     let mut reported = Status::default();
     // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
     let mut keys = KeyQueue::default();
@@ -188,6 +227,13 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             match c {
                 Command::Stop => break 'outer,
                 Command::Reload(s) => {
+                    if wants_peripheral(&s) != wants_peripheral(&settings) {
+                        crate::diag::log(format_args!("bluetooth switched {}", if wants_peripheral(&s) { "on" } else { "off" }));
+                        // Off drops the watcher, then the peripheral: advertising stops, hosts disconnect.
+                        ble = BleState::for_settings(&s);
+                        if !wants_peripheral(&s) { *snapshot.lock().unwrap() = Snapshot::default(); status.notice = None; }
+                        status.bluetooth_off = !wants_peripheral(&s);
+                    }
                     capture::set_hotkey_count(s.attachments.len() as u8);
                     router.set_settings(s.clone());
                     *watched.lock().unwrap() = s.attachments.iter().map(|a| a.device_id.clone()).collect();
@@ -201,6 +247,34 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             }
         }
         actions.extend(router.tick(now_ms(), &is_up));
+
+        // The iPad's link: Ready is connected. Losing it makes the router's tick return input to Windows.
+        let mut ipad_changed = false;
+        while let Ok(st) = ipad_states.try_recv() {
+            if status.ipad != Some(st) { crate::diag::log(format_args!("iPad input {st:?}")); }
+            status.ipad = Some(st);
+            ipad_changed = true;
+        }
+        if ipad_changed {
+            if status.ipad == Some(IpadInputState::Ready) { connected.insert(IPAD_HOST.to_string()); } else { connected.remove(IPAD_HOST); }
+            actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
+        }
+
+        if let BleState::Starting(starter) = &ble {
+            let mut started = None;
+            while let Ok(r) = starter.rx.try_recv() {
+                match r {
+                    Ok(p) => started = Some(p),
+                    Err(e) => status.notice = Some(format!("Bluetooth not ready: {e}")),
+                }
+            }
+            if let Some(p) = started {
+                crate::diag::log("bluetooth peripheral started");
+                status.advertising = true;
+                status.notice = None;
+                ble = BleState::Running(Ble { watcher: Watcher::start(p.clone(), watched.clone(), snapshot.clone()), peripheral: p });
+            }
+        }
 
         if last_conn.elapsed() >= CONNECTION_POLL {
             last_conn = Instant::now();
@@ -222,18 +296,25 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
             }
             for (id, n) in &snap.names { names.insert(id.clone(), n.clone()); }
             actions.extend(router.tick(now_ms(), &|id: &str| connected.contains(id)));
-            for id in &snap.keyboard_ready {
-                if keys.pending(id) > 0 {
-                    for r in keys.drain(id, now_ms()) { peripheral.send_keyboard(id, r); }
-                    status.notice = None;
+            if let Some(p) = ble.peripheral() {
+                for id in &snap.keyboard_ready {
+                    if keys.pending(id) > 0 {
+                        for r in keys.drain(id, now_ms()) { p.send_keyboard(id, r); }
+                        status.notice = None;
+                    }
                 }
             }
             status.hosts = snap.ids.iter().filter(|id| connected.contains(*id) || settings.attachments.iter().any(|a| &a.device_id == *id))
                 .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
                 .collect();
+            if let Some(h) = ipad_host(status.ipad, &settings) { status.hosts.push(h) }
             status.hosts.sort_by(|a, b| a.id.cmp(&b.id));
-            status.advertising = snap.advertising;
-            if !status.advertising && status.notice.is_none() { status.notice = Some("Bluetooth advertising restarting…".into()) }
+            if let BleState::Running(_) = ble {
+                status.advertising = snap.advertising;
+                if !status.advertising && status.notice.is_none() { status.notice = Some("Bluetooth advertising restarting…".into()) }
+            } else {
+                status.advertising = false;
+            }
         }
         if last_clock.elapsed() >= CLOCK_LOG {
             last_clock = Instant::now();
@@ -251,23 +332,33 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     if on { capture::release_own_focus(); }
                     capture::SUPPRESS.store(on, Ordering::SeqCst);
                 }
-                Action::Mouse { host, report } => { peripheral.send_mouse(&host, report); }
+                Action::Mouse { host, report } => match sink_for(&host) {
+                    Sink::Ipad => ipad.send(IpadCommand::Mouse(report)),
+                    Sink::Ble => { if let Some(p) = ble.peripheral() { p.send_mouse(&host, report); } }
+                },
+                Action::Keyboard { host, report } if sink_for(&host) == Sink::Ipad => ipad.send(IpadCommand::Keyboard(report)),
                 Action::Keyboard { host, report } => {
                     // Keep order: once something is queued for this host, queue behind it.
-                    if keys.pending(&host) > 0 || !peripheral.send_keyboard(&host, report) {
+                    if keys.pending(&host) > 0 || !ble.peripheral().is_some_and(|p| p.send_keyboard(&host, report)) {
                         keys.push(&host, report, now_ms());
                         status.notice = Some(format!("Keyboard on {} is still connecting…", display_name(names.get(&host).and_then(|n| n.as_deref()))));
                     }
                 }
                 Action::PlaceCursor(x, y) => unsafe { let _ = SetCursorPos(x, y); },
-                Action::Active(a) => { crate::diag::log(format_args!("active -> {a:?}")); status.active = a; status.notice = None; }
+                Action::Active(a) => {
+                    crate::diag::log(format_args!("active -> {a:?}"));
+                    if status.active.as_deref() == Some(IPAD_HOST) && a.as_deref() != Some(IPAD_HOST) { ipad.send(IpadCommand::Leave); }
+                    if a.as_deref() == Some(IPAD_HOST) && status.active.as_deref() != Some(IPAD_HOST) { ipad.send(IpadCommand::Enter); }
+                    status.active = a;
+                    status.notice = None;
+                }
                 Action::Notice(n) => status.notice = Some(n),
             }
         }
 
         if status.active.is_some() && last_status.elapsed() >= STATUS_REFRESH {
             last_status = Instant::now();
-            let (_, avg, max) = peripheral.take_stats();
+            let (_, avg, max) = ble.peripheral().map_or((0, 0.0, 0.0), |p| p.take_stats());
             if let Some(h) = status.hosts.iter_mut().find(|h| Some(&h.id) == status.active.as_ref()) { h.notify_avg_ms = avg; h.notify_max_ms = max; }
         }
         if status != reported { reported = status.clone(); on_status(status.clone()); }
@@ -277,13 +368,31 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     capture.stop();
     for a in router.on_input(Input::Hotkey(0), now_ms(), &|_: &str| true) {
         match a {
-            Action::Mouse { host, report } => { peripheral.send_mouse(&host, report); }
-            Action::Keyboard { host, report } => { peripheral.send_keyboard(&host, report); }
+            Action::Mouse { host, report } if sink_for(&host) == Sink::Ipad => ipad.send(IpadCommand::Mouse(report)),
+            Action::Keyboard { host, report } if sink_for(&host) == Sink::Ipad => ipad.send(IpadCommand::Keyboard(report)),
+            Action::Mouse { host, report } => { if let Some(p) = ble.peripheral() { p.send_mouse(&host, report); } }
+            Action::Keyboard { host, report } => { if let Some(p) = ble.peripheral() { p.send_keyboard(&host, report); } }
+            Action::Active(None) if status.active.as_deref() == Some(IPAD_HOST) => ipad.send(IpadCommand::Leave),
             _ => {}
         }
     }
-    drop(watcher); // joins the watcher, releasing its handle on the peripheral
-    drop(peripheral);
+    drop(ipad); // releases everything held on the iPad, removes its virtual devices, closes the tunnel
+    if let BleState::Running(Ble { watcher, peripheral }) = ble {
+        drop(watcher); // joins the watcher, releasing its handle on the peripheral
+        drop(peripheral);
+    }
+}
+
+/// The iPad's pointer pacing: reports are tiny and the link takes them at about 8 ms.
+const IPAD_INTERVAL_MS: u64 = 8;
+
+/// The Wi-Fi iPad as a host: listed once its service has reported, or when it is placed.
+fn ipad_host(state: Option<IpadInputState>, settings: &Settings) -> Option<HostStatus> {
+    let placed = settings.attachments.iter().any(|a| a.device_id == IPAD_HOST);
+    if state.is_none() && !placed { return None }
+    if state.is_some_and(|s| s == IpadInputState::NotSetUp) && !placed { return None }
+    let connected = state == Some(IpadInputState::Ready);
+    Some(HostStatus { id: IPAD_HOST.into(), name: Some("iPad".into()), connected, interval_ms: if connected { IPAD_INTERVAL_MS } else { 0 }, notify_avg_ms: 0.0, notify_max_ms: 0.0 })
 }
 
 #[cfg(test)]
@@ -293,7 +402,30 @@ mod tests {
     fn host(name: Option<&str>) -> HostStatus {
         HostStatus { id: "AA:BB".into(), name: name.map(Into::into), connected: true, interval_ms: 0, notify_avg_ms: 0.0, notify_max_ms: 0.0 }
     }
-    fn line(name: Option<&str>) -> String { status_line(&Status { advertising: true, hosts: vec![host(name)], active: Some("AA:BB".into()), notice: None }) }
+    fn line(name: Option<&str>) -> String { status_line(&Status { advertising: true, hosts: vec![host(name)], active: Some("AA:BB".into()), notice: None, ..Status::default() }) }
+
+    #[test] fn ipad_wifi_goes_to_the_service() {
+        assert_eq!(sink_for(IPAD_HOST), Sink::Ipad);
+        assert_eq!(sink_for("AA:BB:CC:DD:EE:FF"), Sink::Ble);
+    }
+    #[test] fn bluetooth_switch_decides_the_peripheral() { // Review Focus 3
+        assert!(wants_peripheral(&Settings::default()));
+        assert!(!wants_peripheral(&Settings { bluetooth_enabled: false, ..Settings::default() }));
+    }
+    #[test] fn bluetooth_off_does_not_say_starting() {
+        let s = Status { bluetooth_off: true, ..Status::default() };
+        assert_eq!(status_line(&s), "0 device(s) connected");
+        assert_eq!(status_line(&Status::default()), "Starting Bluetooth…");
+    }
+    #[test] fn ipad_host_is_connected_only_when_ready() {
+        let s = Settings::default();
+        assert_eq!(ipad_host(None, &s), None, "nothing to show before the service reports");
+        assert_eq!(ipad_host(Some(IpadInputState::NotSetUp), &s), None, "not set up and not placed: hidden");
+        assert!(!ipad_host(Some(IpadInputState::NotFound), &s).unwrap().connected);
+        assert!(ipad_host(Some(IpadInputState::Ready), &s).unwrap().connected);
+        let placed = Settings { attachments: vec![bridge_core::layout::Attachment { device_id: IPAD_HOST.into(), monitor_id: "M1".into(), edge: bridge_core::layout::Edge::Right }], ..Settings::default() };
+        assert!(ipad_host(None, &placed).is_some(), "placed: always listed");
+    }
 
     #[test] fn status_line_never_shows_a_raw_id_or_a_blank_name() {
         assert_eq!(line(Some("iPad Air")), "Controlling iPad Air");

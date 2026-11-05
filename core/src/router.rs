@@ -271,6 +271,20 @@ mod tests {
         assert_eq!(moves, vec![10]); // coalesced into one report
         assert!(r.tick(2020, &up).is_empty(), "next report not before 2031");
     }
+    #[test] fn ipad_wifi_disconnect_returns_to_windows() { // Review Focus 1
+        use crate::ipadhid::IPAD_HOST;
+        let mut s = Settings::default();
+        s.attachments = vec![Attachment { device_id: IPAD_HOST.into(), monitor_id: "M1".into(), edge: Edge::Right }];
+        let mut r = Router::new(s, vec![Monitor { id: "M1".into(), rect: Rect { left: 0, top: 0, right: 1920, bottom: 1080 } }]);
+        let a = r.on_input(Input::Hotkey(1), 0, &up);
+        assert!(a.contains(&Action::Active(Some(IPAD_HOST.into()))));
+        r.on_input(Input::Key { vk: 0x41, down: true }, 5, &up);
+        let a = r.tick(10, &down);
+        assert_eq!(a.first(), Some(&Action::Suppress(false)), "Windows gets input back first");
+        assert!(a.contains(&Action::Keyboard { host: IPAD_HOST.into(), report: KeyboardReport::default() }), "held key released");
+        assert_eq!(a.last(), Some(&Action::Active(None)));
+        assert_eq!(r.active(), None);
+    }
     #[test] fn disconnect_on_tick_leaves() {
         let mut r = r(); r.on_input(Input::Hotkey(1), 0, &up);
         let a = r.tick(100, &down);
