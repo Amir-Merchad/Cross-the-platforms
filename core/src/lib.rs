@@ -19,3 +19,4 @@ pub mod pairing;
 pub mod node;
 pub mod bulk;
 pub mod outbox;
+pub mod cliphistory;
