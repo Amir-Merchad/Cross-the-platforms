@@ -110,7 +110,8 @@ impl Watcher {
                 for id in watched.lock().unwrap().iter() { if !ids.contains(id) { ids.push(id.clone()) } }
                 let up: HashSet<String> = ids.iter().filter(|id| p.connected(id)).cloned().collect();
                 let intervals = up.iter().map(|id| (id.clone(), p.report_interval_ms(id))).collect();
-                for id in &up { names.entry(id.clone()).or_insert_with(|| p.host_name(id)); }
+                // Keep asking until Windows knows the name: the hub spots the iPad's host by it.
+                for id in &up { if !matches!(names.get(id), Some(Some(_))) { names.insert(id.clone(), p.host_name(id)); } }
                 let keyboard_ready = up.iter().filter(|id| p.keyboard_ready(id)).cloned().collect();
                 if last_adv.elapsed() >= MONITOR_POLL { last_adv = Instant::now(); advertising = p.ensure_advertising(!up.is_empty()); }
                 *out.lock().unwrap() = Snapshot { ids, up, intervals, names: names.clone(), keyboard_ready, advertising };
@@ -135,6 +136,17 @@ impl Drop for Watcher {
 pub enum Sink { Ipad, Ble }
 
 pub fn sink_for(host: &str) -> Sink { if host == IPAD_HOST { Sink::Ipad } else { Sink::Ble } }
+
+/// Whether the Bluetooth side tracks this id: never the Wi-Fi iPad (its link comes from its service, and polling it as a
+/// Bluetooth host marks it down) and never a retired host. A retired iPad can still connect: the peripheral has no call to
+/// refuse one bonded central. But it is not counted, listed or placed, so it gets no reports.
+pub fn is_ble_host(id: &str, s: &Settings) -> bool { id != IPAD_HOST && !s.retired_hosts.iter().any(|r| r == id) }
+
+/// The ids the watcher polls even when they have not subscribed.
+fn watch_list(s: &Settings) -> Vec<String> { s.placed_ids().into_iter().filter(|id| is_ble_host(id, s)).collect() }
+
+/// The watcher's ids that are Bluetooth hosts to count.
+fn ble_ids<'a>(snap: &'a Snapshot, s: &Settings) -> Vec<&'a String> { snap.ids.iter().filter(|id| is_ble_host(id, s)).collect() }
 
 /// Whether to run the Bluetooth peripheral at all.
 pub fn wants_peripheral(s: &Settings) -> bool { s.bluetooth_enabled }
@@ -205,7 +217,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
     let (mut last_conn, mut last_mon, mut last_status) = (Instant::now() - CONNECTION_POLL, Instant::now(), Instant::now());
     // Bluetooth bookkeeping runs on its own thread: WinRT calls there can take tens of ms, and every
     // ms the input loop waits is a visible hitch of the remote pointer. The loop only reads snapshots.
-    let watched: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(settings.placed_ids()));
+    let watched: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(watch_list(&settings)));
     let snapshot: std::sync::Arc<Mutex<Snapshot>> = std::sync::Arc::default();
     let mut reported = Status::default();
     // Keyboard reports for a host that hasn't subscribed to the keyboard report yet.
@@ -242,7 +254,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     }
                     capture::set_hotkey_count(s.placed_ids().len() as u8);
                     router.set_settings(s.clone());
-                    *watched.lock().unwrap() = s.placed_ids();
+                    *watched.lock().unwrap() = watch_list(&s);
                     settings = s;
                 }
                 Command::SwitchTo(None) => actions.extend(router.on_input(Input::Hotkey(0), now_ms(), &is_up)),
@@ -290,7 +302,8 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
         if last_conn.elapsed() >= CONNECTION_POLL {
             last_conn = Instant::now();
             let snap = snapshot.lock().unwrap().clone();
-            for id in &snap.ids {
+            connected.retain(|id| !settings.retired_hosts.contains(id)); // retired while up: the tick below returns input
+            for id in ble_ids(&snap, &settings) {
                 let up = snap.up.contains(id);
                 if up && !connected.contains(id) {
                     crate::diag::log(format_args!("{id} connected; interval {} ms; keyboard subscribed: {}", snap.intervals.get(id).copied().unwrap_or(0), snap.keyboard_ready.contains(id)));
@@ -315,7 +328,7 @@ fn run(mut settings: Settings, commands: mpsc::Receiver<Command>, on_status: imp
                     }
                 }
             }
-            status.hosts = snap.ids.iter().filter(|id| connected.contains(*id) || settings.placed_ids().contains(*id))
+            status.hosts = ble_ids(&snap, &settings).into_iter().filter(|id| connected.contains(*id) || settings.placed_ids().contains(*id))
                 .map(|id| HostStatus { id: id.clone(), name: names.get(id).cloned().flatten(), connected: connected.contains(id), interval_ms: intervals.get(id).copied().unwrap_or(0), notify_avg_ms: 0.0, notify_max_ms: 0.0 })
                 .collect();
             if let Some(h) = ipad_host(status.ipad, &settings) { status.hosts.push(h) }
@@ -436,6 +449,24 @@ mod tests {
         assert!(ipad_host(Some(IpadInputState::Ready), &s).unwrap().connected);
         let placed = Settings { attachments: vec![bridge_core::layout::Attachment { device_id: IPAD_HOST.into(), monitor_id: "M1".into(), edge: bridge_core::layout::Edge::Right }], ..Settings::default() };
         assert!(ipad_host(None, &placed).is_some(), "placed: always listed");
+    }
+
+    fn placed(ids: &[&str]) -> Settings {
+        Settings { attachments: ids.iter().map(|id| bridge_core::layout::Attachment { device_id: (*id).into(), monitor_id: "M1".into(), edge: bridge_core::layout::Edge::Right }).collect(), ..Settings::default() }
+    }
+
+    // engine.log 188514 ms: Bluetooth came up, the placed ipad-wifi was polled as a Bluetooth host and dropped.
+    #[test] fn a_placed_ipad_wifi_is_not_a_bluetooth_host() {
+        let s = placed(&[IPAD_HOST, "AA:BB"]);
+        assert_eq!(watch_list(&s), ["AA:BB"]);
+        let snap = Snapshot { ids: vec!["AA:BB".into(), IPAD_HOST.into()], ..Snapshot::default() };
+        assert_eq!(ble_ids(&snap, &s), ["AA:BB"], "listing it here also showed ipad-wifi twice");
+    }
+    #[test] fn a_retired_host_is_not_watched_or_counted() {
+        let s = Settings { retired_hosts: vec!["OLD".into()], ..placed(&["OLD", "AA:BB"]) };
+        assert_eq!(watch_list(&s), ["AA:BB"]);
+        let snap = Snapshot { ids: vec!["OLD".into(), "AA:BB".into()], up: ["OLD".to_string()].into(), ..Snapshot::default() };
+        assert_eq!(ble_ids(&snap, &s), ["AA:BB"], "it may still subscribe, but it is no host of ours");
     }
 
     #[test] fn status_line_never_shows_a_raw_id_or_a_blank_name() {
