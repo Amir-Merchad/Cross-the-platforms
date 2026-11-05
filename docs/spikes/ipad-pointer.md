@@ -248,3 +248,5 @@ Over Wi-Fi, once: `cargo run -p ipad-input -- rppair` over USB and tap Trust. Th
 2026-11-05, owner restarted the iPad, USB out. `wifimount`: the lockdown route failed at `copy devices` after about 1 s, and the **tunnel route mounted the disk image over Wi-Fi in about 2 s**. No USB is needed after a restart on this network. A no-stream `do` session then opened the tunnel and created the mouse.
 
 Proof 4, a call during a session, is still open. A 55 s run with the stream stayed healthy at about 8 ms, but no call was active in it.
+
+**No stream, from a fresh restart: confirmed.** After that restart and mount, with no display stream ever started, `NOSTREAM=1 do home goto:1000,1000` left the pointer on screen at the target (crop `C:\dev\_ref	mp\pointereboot-ns2-crop.png`). The stream is not needed for pointer input on this iPad.

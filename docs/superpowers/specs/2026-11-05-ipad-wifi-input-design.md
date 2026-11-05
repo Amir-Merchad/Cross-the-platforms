@@ -1,5 +1,7 @@
 # iPad keyboard and mouse over Wi-Fi
 
+> **Results from the proofs override this document.** See `docs/spikes/ipad-pointer.md`. In short: no display stream is needed, so remove stream handling and the stream lifetime rule. Disk image mounts over Wi-Fi through the tunnel, so "Plug in the iPad once" is only a fallback. Two tunnels work. Scroll is report 7: `07 00 00 x y` plus 8 zeros, signed 8-bit, about +-16 per notch. Right click is `buttons` bit 1. Keep the 500 ms keepalive. Function keys are unproven. The iPad layout is US until set to German on the iPad; if the Hardware Keyboard setting is not offered, add a translator.
+
 Step 1 of `docs/superpowers/specs/2026-11-05-v1.5-v2-roadmap.md`. Facts and measurements: `docs/spikes/ipad-pointer.md`. Working code to port: `spikes/ipad-input`.
 
 ## Why
