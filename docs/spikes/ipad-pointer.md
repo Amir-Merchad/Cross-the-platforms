@@ -241,3 +241,10 @@ Local only, not in the repo, because the full shots show personal notifications,
 With Apple Devices open and the iPad unlocked on USB: `cargo run -p ipad-input -- demo mytag --usb`. It opens Files, then presses Home.
 
 Over Wi-Fi, once: `cargo run -p ipad-input -- rppair` over USB and tap Trust. Then `IPAD_ADDR=<ip>:<port> cargo run -p ipad-input -- demo mytag`, with the port from the `_remotepairing._tcp` SRV record. Later runs do not need `IPAD_ADDR`. Without USB the demo still runs, but the log tap fails, so only screenshots are left as proof.
+
+
+## Disk image after an iPad restart
+
+2026-11-05, owner restarted the iPad, USB out. `wifimount`: the lockdown route failed at `copy devices` after about 1 s, and the **tunnel route mounted the disk image over Wi-Fi in about 2 s**. No USB is needed after a restart on this network. A no-stream `do` session then opened the tunnel and created the mouse.
+
+Proof 4, a call during a session, is still open. A 55 s run with the stream stayed healthy at about 8 ms, but no call was active in it.
