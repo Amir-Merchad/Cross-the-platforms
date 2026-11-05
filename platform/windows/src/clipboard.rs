@@ -6,8 +6,8 @@ use std::{borrow::Cow, cell::RefCell, sync::mpsc::Sender, thread, time::Duration
 use bridge_core::clipboard::{Content, Image};
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-        System::{DataExchange::{AddClipboardFormatListener, IsClipboardFormatAvailable, RegisterClipboardFormatW}, LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
+        Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, WPARAM},
+        System::{DataExchange::{AddClipboardFormatListener, CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW}, LibraryLoader::GetModuleHandleW, Memory::{GlobalLock, GlobalSize, GlobalUnlock}, Threading::GetCurrentThreadId},
         UI::WindowsAndMessaging::*,
     },
     core::w,
@@ -27,10 +27,48 @@ fn with_retry<T>(attempts: u32, delay: Duration, mut f: impl FnMut() -> Result<T
     }
 }
 
-/// Password managers (KeePass, 1Password, Bitwarden…) mark secrets with this format so clipboard
-/// tools and Windows' cloud clipboard leave them alone. So do we.
+const EXCLUDE_FORMAT: &str = "ExcludeClipboardContentFromMonitorProcessing";
+const HISTORY_FORMAT: &str = "CanIncludeInClipboardHistory";
+
+/// Pure rule: the monitor-exclusion format is present, or the history format holds 0.
+fn excluded_by(formats: &[&str], can_include_history: Option<u32>) -> bool {
+    formats.contains(&EXCLUDE_FORMAT) || can_include_history == Some(0)
+}
+
+/// Password managers (KeePass, 1Password, Bitwarden...) mark secrets with these formats so clipboard
+/// tools and Windows' own history leave them alone. So do we: never read, synced or remembered.
 fn excluded() -> bool {
-    unsafe { IsClipboardFormatAvailable(RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"))).is_ok() }
+    let id = |name: &str| unsafe { RegisterClipboardFormatW(&windows::core::HSTRING::from(name)) };
+    let (exclude, history) = (id(EXCLUDE_FORMAT), id(HISTORY_FORMAT));
+    let mut formats = Vec::new();
+    if unsafe { IsClipboardFormatAvailable(exclude).is_ok() } { formats.push(EXCLUDE_FORMAT); }
+    // Present and zero means "not in history". Can't open the clipboard to look: assume it is secret.
+    let flag = if unsafe { IsClipboardFormatAvailable(history).is_ok() } {
+        match history_flag(history) { Ok(v) => v, Err(()) => return true }
+    } else { None };
+    excluded_by(&formats, flag)
+}
+
+fn history_flag(format: u32) -> Result<Option<u32>, ()> {
+    for _ in 0..BUSY_ATTEMPTS {
+        if unsafe { OpenClipboard(None).is_ok() } {
+            let v = unsafe {
+                let r = GetClipboardData(format).ok().and_then(|h| {
+                    let g = HGLOBAL(h.0);
+                    let p = GlobalLock(g) as *const u32;
+                    if p.is_null() { return None }
+                    let v = (GlobalSize(g) >= 4).then(|| p.read_unaligned());
+                    let _ = GlobalUnlock(g);
+                    v
+                });
+                let _ = CloseClipboard();
+                r
+            };
+            return Ok(v);
+        }
+        thread::sleep(BUSY_DELAY);
+    }
+    Err(())
 }
 
 /// Text if there is any, else an image, else `None` (secrets, files, RTF-only, empty, or still busy).
@@ -99,6 +137,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test] fn clipboard_excluded() { // Review Focus 1
+        assert!(excluded_by(&[EXCLUDE_FORMAT], None));
+        assert!(excluded_by(&[], Some(0)));
+        assert!(excluded_by(&["CF_TEXT", EXCLUDE_FORMAT], Some(1)));
+        assert!(!excluded_by(&["CF_TEXT"], None));
+        assert!(!excluded_by(&[], Some(1)));
+    }
 
     #[test] fn retry_gives_up_after_attempts() { // Review Focus 2
         let mut n = 0;
