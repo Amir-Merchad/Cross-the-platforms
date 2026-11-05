@@ -6,6 +6,7 @@ pub mod clipsync;
 pub mod diag;
 pub mod engine;
 pub mod ipad;
+pub mod ipadinput;
 pub mod keys;
 pub mod monitors;
 pub mod peripheral;
