@@ -31,26 +31,53 @@ export function ipadLine(state: IpadInputState | null | undefined): string {
   }
 }
 
+type SeenHost = { id: string; name: string | null; connected: boolean };
+
 /**
- * Moves the iPad from its Bluetooth host to ipad-wifi, once: its place on the Desk (same list position, so the same
- * hotkey), its files link and its colour. The old host is retired so one iPad never shows twice. Calibration stays
- * behind on purpose: the Wi-Fi pointer behaves differently. Returns the same object when there is nothing to do.
+ * The Bluetooth hosts that are really the Wi-Fi iPad: linked to an iPad peer, or connected with no link and named like
+ * one (hosts report no kind). The name only counts once ipad-wifi exists, so a Bluetooth-only iPad keeps its one link.
  */
-export function migrateIpad(s: Settings, peers: Peer[]): Settings {
-  if (s.device_links[IPAD_HOST]) return s;
+export function ipadBluetoothHosts(s: Settings, peers: Peer[], hosts: SeenHost[]): string[] {
   const retired = s.retired_hosts ?? [];
-  const old = Object.keys(s.device_links).find((h) => h !== IPAD_HOST && !retired.includes(h) && peers.find((p) => p.id === s.device_links[h])?.kind === "Ipad");
+  const ipads = peers.filter((p) => p.kind === "Ipad");
+  const linked = Object.keys(s.device_links).filter((h) => h !== IPAD_HOST && !retired.includes(h) && ipads.some((p) => p.id === s.device_links[h]));
+  if (!hosts.some((h) => h.id === IPAD_HOST)) return linked;
+  // ponytail: any "iPad" name counts, so a second iPad on Bluetooth would retire too; Bridge has one Wi-Fi iPad.
+  const named = hosts.filter((h) => h.id !== IPAD_HOST && h.connected && !retired.includes(h.id) && !s.device_links[h.id]
+    && (h.name?.toLowerCase().includes("ipad") || ipads.some((p) => p.name === h.name)));
+  return [...linked, ...named.map((h) => h.id)];
+}
+
+/** Hosts that may link to a peer by name: never one that is, or is about to be, retired. */
+export function linkableHosts<H extends SeenHost>(s: Settings, peers: Peer[], hosts: H[]): H[] {
+  const skip = [...(s.retired_hosts ?? []), ...ipadBluetoothHosts(s, peers, hosts)];
+  return hosts.filter((h) => !skip.includes(h.id));
+}
+
+/**
+ * Moves the iPad from its Bluetooth host to ipad-wifi: its place on the Desk (same list position, so the same hotkey),
+ * its files link and its colour. What ipad-wifi already has stays, and the old place goes, so one iPad is never placed
+ * twice. The old host is retired. Calibration stays behind on purpose: the Wi-Fi pointer behaves differently.
+ * Returns the same object when there is nothing to do.
+ */
+export function migrateIpad(s: Settings, peers: Peer[], hosts: SeenHost[] = []): Settings {
+  const [old] = ipadBluetoothHosts(s, peers, hosts);
   if (!old) return s;
-  const { [old]: peerId, ...links } = s.device_links;
+  const wifiPlaced = [...s.attachments, ...(s.layout ?? [])].some((x) => x.device_id === IPAD_HOST);
+  const move = <T extends { device_id: string }>(xs: T[]): T[] =>
+    wifiPlaced ? xs.filter((x) => x.device_id !== old) : xs.map((x) => (x.device_id === old ? { ...x, device_id: IPAD_HOST } : x));
+  const { [old]: oldPeer, ...links } = s.device_links;
   const { [old]: colour, ...colours } = s.device_colors;
-  return {
+  const free = peers.filter((p) => p.kind === "Ipad" && !Object.values(links).includes(p.id));
+  const peerId = links[IPAD_HOST] ?? oldPeer ?? (free.length === 1 ? free[0].id : undefined);
+  return migrateIpad({
     ...s,
-    attachments: s.attachments.filter((a) => a.device_id !== IPAD_HOST).map((a) => (a.device_id === old ? { ...a, device_id: IPAD_HOST } : a)),
-    device_links: { ...links, [IPAD_HOST]: peerId },
-    device_colors: colour ? { ...colours, [IPAD_HOST]: colour } : colours,
-    layout: (s.layout ?? []).filter((p) => p.device_id !== IPAD_HOST).map((p) => (p.device_id === old ? { ...p, device_id: IPAD_HOST } : p)),
-    retired_hosts: [...retired, old],
-  };
+    attachments: move(s.attachments),
+    device_links: peerId ? { ...links, [IPAD_HOST]: peerId } : links,
+    device_colors: colour ? { [IPAD_HOST]: colour, ...colours } : colours,
+    layout: move(s.layout ?? []),
+    retired_hosts: [...(s.retired_hosts ?? []), old],
+  }, peers, hosts);
 }
 
 export const DEFAULT_COLOURS = ["#FF7A4D", "#23C48F", "#4DA9FF", "#F76CAE", "#FFC531"];

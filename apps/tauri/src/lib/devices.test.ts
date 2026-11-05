@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import type { Row } from "./activity";
 import type { ClipStatus, HostStatus, Monitor, Settings, Status } from "./api";
 import type { Peer } from "./transfer";
-import { IPAD_HOST, buildDevices, deskLine, deviceLook, displayName, forgetDevice, idleLine, ipadLine, linkByName, migrateIpad, panelLines, type Device } from "./devices";
+import { IPAD_HOST, buildDevices, ipadBluetoothHosts, linkableHosts, deskLine, deviceLook, displayName, forgetDevice, idleLine, ipadLine, linkByName, migrateIpad, panelLines, type Device } from "./devices";
 
 const host = (id: string, name: string | null, connected = true): HostStatus => ({ id, name, connected, interval_ms: 0, notify_avg_ms: 0, notify_max_ms: 0 });
 const status = (hosts: HostStatus[]): Status => ({ advertising: true, hosts, active: null, notice: null });
@@ -247,6 +247,59 @@ test("retired_hosts_are_not_listed", () => {
   const s = settings({ retired_hosts: ["BT:IPAD"], device_links: { "BT:IPAD": "x" } });
   const d = buildDevices(status([host("BT:IPAD", "iPad"), host(IPAD_HOST, "iPad")]), [], s, [], {}, mon);
   expect(d.map((x) => x.hostId)).toEqual([IPAD_HOST]);
+});
+
+const BT = "BT:IPAD", wifi = host(IPAD_HOST, "iPad");
+
+test("migrate_retires_a_bluetooth_host_with_no_link_by_its_name", () => {
+  // The owner's case: ipad-wifi already has the peer and a place, so the Bluetooth host could never get a link.
+  const before = settings({
+    attachments: [{ device_id: BT, monitor_id: "M1", edge: "Bottom" }, { device_id: IPAD_HOST, monitor_id: "M1", edge: "Right" }, { device_id: "PH:1", monitor_id: "M2", edge: "Right" }],
+    device_links: { [IPAD_HOST]: "p1" },
+  });
+  const hosts = [host(BT, "Amir's iPad"), host("PH:1", "Galaxy S24+"), wifi];
+  const after = migrateIpad(before, [peer("p1", "iPad")], hosts);
+  expect(after.retired_hosts).toEqual([BT]);
+  expect(after.attachments.map((a) => [a.device_id, a.edge])).toEqual([[IPAD_HOST, "Right"], ["PH:1", "Right"]]);
+  expect(after.device_links).toEqual({ [IPAD_HOST]: "p1" });
+  expect(migrateIpad(after, [peer("p1", "iPad")], hosts)).toBe(after);
+  const d = buildDevices(status(hosts), [peer("p1", "iPad")], after, [], {}, mon);
+  expect(d.filter((x) => x.kind === "Ipad" || x.name.includes("iPad")).map((x) => x.hostId)).toEqual([IPAD_HOST]);
+});
+
+test("migrate_matches_the_ipad_peers_name_and_links_ipad_wifi", () => {
+  const after = migrateIpad(settings(), [peer("p1", "Slate")], [host(BT, "Slate"), wifi]);
+  expect(after.retired_hosts).toEqual([BT]);
+  expect(after.device_links).toEqual({ [IPAD_HOST]: "p1" });
+});
+
+test("migrate_moves_the_place_when_ipad_wifi_has_none", () => {
+  const before = settings({ attachments: [{ device_id: BT, monitor_id: "M1", edge: "Bottom" }] });
+  const after = migrateIpad(before, [], [host(BT, "iPad"), wifi]);
+  expect(after.attachments).toEqual([{ device_id: IPAD_HOST, monitor_id: "M1", edge: "Bottom" }]);
+});
+
+test("a_linked_host_still_migrates_when_ipad_wifi_is_already_linked", () => {
+  const before = settings({ device_links: { [BT]: "p1", [IPAD_HOST]: "p1" } });
+  const after = migrateIpad(before, [peer("p1", "iPad")]);
+  expect(after.retired_hosts).toEqual([BT]);
+  expect(after.device_links).toEqual({ [IPAD_HOST]: "p1" });
+});
+
+test("name_match_leaves_other_hosts_alone", () => {
+  const s = settings({ device_links: { "BT:2": "p2" } });
+  const peers: Peer[] = [peer("p1", "iPad"), { id: "p2", name: "Pixel", kind: "Android" }];
+  expect(ipadBluetoothHosts(s, peers, [host("PH:1", "Galaxy"), host("BT:2", "iPad"), wifi]), "a host linked to another peer").toEqual([]);
+  expect(ipadBluetoothHosts(s, peers, [host(BT, "iPad", false), wifi]), "not connected").toEqual([]);
+  expect(ipadBluetoothHosts(s, peers, [host(BT, null), wifi]), "no name yet").toEqual([]);
+  expect(ipadBluetoothHosts(s, peers, [host(BT, "iPad")]), "no Wi-Fi iPad: Bluetooth is its only link").toEqual([]);
+  expect(ipadBluetoothHosts(settings({ retired_hosts: [BT] }), peers, [host(BT, "iPad"), wifi]), "already retired").toEqual([]);
+});
+
+test("a_retiring_or_retired_host_never_takes_a_name_link", () => {
+  const peers = [peer("p1", "iPad")];
+  expect(linkableHosts(settings(), peers, [host(BT, "iPad"), host("PH:1", "Galaxy"), wifi]).map((h) => h.id)).toEqual(["PH:1", IPAD_HOST]);
+  expect(linkableHosts(settings({ retired_hosts: [BT] }), peers, [host(BT, "iPad")])).toEqual([]);
 });
 
 test("ipad_states_read_plainly", () => {

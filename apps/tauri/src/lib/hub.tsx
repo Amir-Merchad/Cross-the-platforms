@@ -6,7 +6,7 @@ import {
 } from "./api";
 import { applyEvent, type Row } from "./activity";
 import { nameLinks, type AddKind } from "./addflow";
-import { buildDevices, deskLine, migrateIpad, type Device } from "./devices";
+import { buildDevices, deskLine, ipadBluetoothHosts, linkableHosts, migrateIpad, type Device } from "./devices";
 import { onTransfer, pairedPeers, queuedFiles, type Peer } from "./transfer";
 
 /** "add" is the Add a device page: reached from the top bar button and the device panel, not a tab. */
@@ -134,19 +134,21 @@ export function HubProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener("change", apply);
   }, [appearance]);
 
-  // The iPad moves from its Bluetooth host to ipad-wifi once; migrateIpad returns the same object when done.
-  const migrated = useRef(false); // once per run: a failed save reverts, and must not retry in a loop
+  // The iPad's Bluetooth host retires whenever one is found, which can be long after start: it may connect only later.
+  const hosts = status?.hosts;
+  const retiring = useRef(new Set<string>()); // a failed save reverts; do not retry the same host in a loop
   useEffect(() => {
-    if (!settings || !peersLoaded || migrated.current) return;
-    if (migrateIpad(settings, peers) !== settings) { migrated.current = true; update((s) => migrateIpad(s, peers)); }
-  }, [settings, peers, peersLoaded, update]);
+    if (!settings || !peersLoaded) return;
+    const found = ipadBluetoothHosts(settings, peers, hosts ?? []).filter((h) => !retiring.current.has(h));
+    found.forEach((h) => retiring.current.add(h));
+    if (found.length) update((s) => migrateIpad(s, peers, hosts ?? []));
+  }, [settings, hosts, peers, peersLoaded, update]);
 
   // Identical names link by themselves. Once written the link exists, so this finds nothing and does not loop.
-  const hosts = status?.hosts;
   const tried = useRef(new Set<string>()); // a failed save reverts settings; do not retry the same host forever
   useEffect(() => {
     if (!settings || !hosts || !peersLoaded) return;
-    const found = Object.fromEntries(Object.entries(nameLinks(hosts, peers, settings.device_links)).filter(([h]) => !tried.current.has(h)));
+    const found = Object.fromEntries(Object.entries(nameLinks(linkableHosts(settings, peers, hosts), peers, settings.device_links)).filter(([h]) => !tried.current.has(h)));
     Object.keys(found).forEach((h) => tried.current.add(h));
     if (Object.keys(found).length) update((s) => ({ ...s, device_links: { ...found, ...s.device_links } }));
   }, [settings, hosts, peers, peersLoaded, update]);
