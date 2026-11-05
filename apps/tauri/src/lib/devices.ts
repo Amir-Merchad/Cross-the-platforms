@@ -1,12 +1,50 @@
 // One list of devices from Bluetooth hosts and file peers, merged by the stored links. No React.
 import type { Row } from "./activity";
-import type { Attachment, ClipStatus, Monitor, Settings, Status } from "./api";
+import type { Attachment, ClipStatus, IpadInputState, Monitor, Settings, Status } from "./api";
 import { formatRate, type Peer, type PeerKind } from "./transfer";
 
 export type Device = {
   key: string; hostId: string | null; peerId: string | null; name: string; kind: PeerKind | null;
   connected: boolean; reachable: boolean; waiting: number; placement: Attachment | null; missingScreen: boolean; colour: string;
 };
+
+/** The one Wi-Fi iPad's host id (core ipadhid::IPAD_HOST). */
+export const IPAD_HOST = "ipad-wifi";
+const isWifi = (d: Device) => d.hostId === IPAD_HOST;
+
+/** The iPad link in plain words, never a raw error. */
+export function ipadLine(state: IpadInputState | null | undefined): string {
+  switch (state) {
+    case "Ready": return "Connected over Wi-Fi";
+    case "OnCall": return "iPad is on a call";
+    case "NeedsUsb": return "Plug in the iPad once";
+    case "NotFound": return "iPad not found on Wi-Fi";
+    case "NeedsDeveloperMode": return "Turn on Developer Mode";
+    case "NotSetUp": return "Plug in by USB and tap Trust";
+    default: return "Connecting…";
+  }
+}
+
+/**
+ * Moves the iPad from its Bluetooth host to ipad-wifi, once: its place on the Desk (same list position, so the same
+ * hotkey), its files link and its colour. The old host is retired so one iPad never shows twice. Calibration stays
+ * behind on purpose: the Wi-Fi pointer behaves differently. Returns the same object when there is nothing to do.
+ */
+export function migrateIpad(s: Settings, peers: Peer[]): Settings {
+  if (s.device_links[IPAD_HOST]) return s;
+  const retired = s.retired_hosts ?? [];
+  const old = Object.keys(s.device_links).find((h) => h !== IPAD_HOST && !retired.includes(h) && peers.find((p) => p.id === s.device_links[h])?.kind === "Ipad");
+  if (!old) return s;
+  const { [old]: peerId, ...links } = s.device_links;
+  const { [old]: colour, ...colours } = s.device_colors;
+  return {
+    ...s,
+    attachments: s.attachments.filter((a) => a.device_id !== IPAD_HOST).map((a) => (a.device_id === old ? { ...a, device_id: IPAD_HOST } : a)),
+    device_links: { ...links, [IPAD_HOST]: peerId },
+    device_colors: colour ? { ...colours, [IPAD_HOST]: colour } : colours,
+    retired_hosts: [...retired, old],
+  };
+}
 
 export const DEFAULT_COLOURS = ["#FF7A4D", "#23C48F", "#4DA9FF", "#F76CAE", "#FFC531"];
 
@@ -35,8 +73,9 @@ export function buildDevices(
     };
   };
   // The engine lists only what it sees: Bluetooth off lists nothing, and an unplaced offline host is dropped.
-  const listed = status?.hosts ?? [];
-  const known = [...settings.attachments.map((a) => a.device_id), ...Object.keys(settings.device_links)];
+  const retired = settings.retired_hosts ?? [];
+  const listed = (status?.hosts ?? []).filter((h) => !retired.includes(h.id));
+  const known = [...settings.attachments.map((a) => a.device_id), ...Object.keys(settings.device_links)].filter((id) => !retired.includes(id));
   const absent = [...new Set(known)].filter((id) => !listed.some((h) => h.id === id)).map((id) => ({ id, name: null, connected: false }));
   const linked = new Set<string>();
   const out: Device[] = [];
@@ -65,7 +104,7 @@ export function forgetDevice(settings: Settings, d: Device): Settings {
 export function deviceLook(d: Device, active: string | null, btOff: boolean): { sub: string; off: boolean } {
   if (d.hostId && d.hostId === active) return { sub: "In control", off: false };
   if (!d.hostId) return d.reachable ? { sub: "Files only", off: false } : { sub: "Bridge closed", off: true };
-  if (btOff) return { sub: "No Bluetooth", off: true };
+  if (btOff && !isWifi(d)) return { sub: "No Bluetooth", off: true };
   const closed = !!d.peerId && !d.reachable && d.waiting > 0;
   if (d.missingScreen) return { sub: "Screen not connected", off: !d.connected || closed };
   if (!d.connected) return { sub: "Offline", off: true };
@@ -91,13 +130,15 @@ function filesLine(d: Device): string {
 }
 
 /** The device panel's wording. `where` reads "right of Screen 1". */
-export function panelLines(d: Device, c: { active: string | null; btOff: boolean; clip: ClipStatus | null; where: string; hotkey: number | null }) {
+export function panelLines(d: Device, c: { active: string | null; btOff: boolean; clip: ClipStatus | null; where: string; hotkey: number | null; ipad?: IpadInputState | null }) {
+  if (isWifi(d)) c = { ...c, btOff: false };
   const inControl = !!d.hostId && d.hostId === c.active;
   const offline = !!d.hostId && !d.connected && !c.btOff;
   const why = inControl || offline ? "" : !d.hostId ? "It needs Bluetooth first." : c.btOff ? "Keyboard and mouse sharing is paused."
     : !d.placement ? "Put it next to a screen edge first." : "";
-  const hid = inControl ? "In control" : !d.hostId ? "Needs Bluetooth" : c.btOff ? "Bluetooth is off" : !d.connected ? "Not connected"
-    : d.missingScreen ? "Bluetooth, screen not connected" : d.placement ? `Bluetooth, ${c.where}` : "Bluetooth, not placed";
+  const link = isWifi(d) ? "Wi-Fi" : "Bluetooth";
+  const hid = inControl ? "In control" : !d.hostId ? "Needs Bluetooth" : c.btOff ? "Bluetooth is off" : !d.connected ? (isWifi(d) ? ipadLine(c.ipad) : "Not connected")
+    : d.missingScreen ? `${link}, screen not connected` : d.placement ? `${link}, ${c.where}` : `${link}, not placed`;
   return {
     key: d.missingScreen ? "Screen not connected" : d.placement ? `Ctrl+Alt+${c.hotkey}` : "Not placed",
     button: inControl ? "Back to Windows" : offline ? `${d.name} is offline` : `Switch to ${d.name}`,
@@ -108,7 +149,7 @@ export function panelLines(d: Device, c: { active: string | null; btOff: boolean
 /** Like tray.rs status_line in the canvas wording, but never the engine notice: those can carry raw errors and ids. */
 function restingLine(status: Status): string {
   if (status.active) return `Your keyboard and mouse are on ${displayName(status.hosts.find((h) => h.id === status.active)?.name)}.`;
-  return status.advertising ? "Your keyboard and mouse are on Windows." : "Starting Bluetooth…";
+  return status.advertising || status.bluetooth_off ? "Your keyboard and mouse are on Windows." : "Starting Bluetooth…";
 }
 
 /** The top bar's line when nothing has just been said. Input comes first: that is what must never surprise. */

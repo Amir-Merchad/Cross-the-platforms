@@ -6,7 +6,7 @@ import {
 } from "./api";
 import { applyEvent, type Row } from "./activity";
 import { nameLinks, type AddKind } from "./addflow";
-import { buildDevices, deskLine, type Device } from "./devices";
+import { buildDevices, deskLine, migrateIpad, type Device } from "./devices";
 import { onTransfer, pairedPeers, queuedFiles, type Peer } from "./transfer";
 
 /** "add" is the Add a device page: reached from the top bar button and the device panel, not a tab. */
@@ -121,7 +121,8 @@ export function HubProvider({ children }: { children: ReactNode }) {
     const t = setTimeout(() => setGraceOver(true), BLUETOOTH_GRACE_MS);
     return () => { clearTimeout(t); setGraceOver(false); };
   }, [advertising]);
-  const btOff = advertising === false && graceOver;
+  // Bluetooth switched off in Settings is a choice, not a fault: no banner, and the Wi-Fi iPad still works.
+  const btOff = advertising === false && graceOver && settings?.bluetooth_enabled !== false;
 
   const appearance = settings?.appearance;
   useEffect(() => {
@@ -132,6 +133,13 @@ export function HubProvider({ children }: { children: ReactNode }) {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [appearance]);
+
+  // The iPad moves from its Bluetooth host to ipad-wifi once; migrateIpad returns the same object when done.
+  const migrated = useRef(false); // once per run: a failed save reverts, and must not retry in a loop
+  useEffect(() => {
+    if (!settings || !peersLoaded || migrated.current) return;
+    if (migrateIpad(settings, peers) !== settings) { migrated.current = true; update((s) => migrateIpad(s, peers)); }
+  }, [settings, peers, peersLoaded, update]);
 
   // Identical names link by themselves. Once written the link exists, so this finds nothing and does not loop.
   const hosts = status?.hosts;

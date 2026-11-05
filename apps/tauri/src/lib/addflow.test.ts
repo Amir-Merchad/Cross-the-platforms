@@ -11,9 +11,11 @@ describe("addStep", () => {
   it("starts at the Bluetooth step", () => expect(addStep("ipad", none, [])).toBe(0));
   it("moves past Bluetooth when a host appears", () => expect(addStep("ipad", { ...none, host: true }, [])).toBe(1));
   it("a skip moves on without the app seeing anything", () => expect(addStep("ipad", none, [0])).toBe(1));
-  it("walks the iPad through three steps", () => {
+  it("ipad_add_flow_has_two_steps: USB, then Files", () => {
+    expect(stepCount("ipad")).toBe(2);
+    expect(addStep("ipad", { host: false, peer: false, clip: true }, [])).toBe(1);
+    expect(addStep("ipad", { host: true, peer: false, clip: false }, [])).toBe(1);
     expect(addStep("ipad", { host: true, peer: true, clip: false }, [])).toBe(2);
-    expect(addStep("ipad", { host: true, peer: true, clip: true }, [])).toBe(3);
   });
   it("the phone has two steps and finishes after files", () => {
     expect(addStep("phone", { host: true, peer: false, clip: false }, [])).toBe(1);
@@ -21,7 +23,7 @@ describe("addStep", () => {
     expect(stepCount("phone")).toBe(2);
   });
   it("a later step seen does not finish an earlier one", () => expect(addStep("ipad", { ...none, peer: true }, [])).toBe(0));
-  it("all skipped is finished", () => expect(addStep("ipad", none, [0, 1, 2])).toBe(3));
+  it("all skipped is finished", () => expect(addStep("ipad", none, [0, 1])).toBe(2));
 });
 
 describe("newLink", () => {
@@ -71,10 +73,12 @@ describe("finishLine", () => {
     expect(l.body).toContain("Put it next to a screen edge");
     expect(l.body).toContain("files");
   });
-  it("clipboard only says just that, and only for the iPad", () => {
-    expect(finishLine("ipad", "Your iPad", { host: false, peer: false, clip: true }, false).title).toBe("Clipboard is connected");
+  it("the iPad's USB step alone covers keyboard, mouse and clipboard", () => {
+    expect(finishLine("ipad", "Your iPad", { host: false, peer: false, clip: true }, false).title).toBe("Your iPad is set up for keyboard, mouse and clipboard");
     expect(finishLine("phone", "Your phone", { host: false, peer: false, clip: true }, false).title).toBe("Nothing was added");
   });
+  it("an iPad with files only points at the USB step, not Bluetooth", () =>
+    expect(finishLine("ipad", "iPad Air", { host: false, peer: true, clip: false }, false).body).toContain("USB"));
 });
 
 describe("nameLinks", () => {

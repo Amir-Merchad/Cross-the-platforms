@@ -51,7 +51,7 @@ function Panel({ d }: { d: Device }) {
   const { settings, update, status, clip, monitors, btOff, say, select, refreshPeers, devices, openAdd } = useHub();
   const active = status?.active ?? null;
   const lines = panelLines(d, {
-    active, btOff, clip,
+    active, btOff, clip, ipad: status?.ipad,
     where: d.placement ? whereLine(d.placement.edge, screenName(monitors, d.placement.monitor_id)) : "",
     hotkey: d.hostId ? hotkeyNumber(settings.attachments, d.hostId) : null,
   });
@@ -100,7 +100,7 @@ function Panel({ d }: { d: Device }) {
       {d.peerId && <Button variant="secondary" className="h-11 w-full flex-none rounded-xl font-semibold" onClick={send}>Send files</Button>}
       {lines.why && <p className="-mt-1.5 text-[13px] text-muted-foreground">{lines.why}</p>}
       <div className="flex flex-col gap-2">
-        <Row name="Keyboard and mouse" value={lines.hid} action={!d.hostId && d.kind !== "Windows" ? { label: "Add Bluetooth", run: () => openAdd({ kind: addKind(d), peerId: d.peerId! }) } : undefined} />
+        <Row name="Keyboard and mouse" value={lines.hid} action={!d.hostId && d.kind !== "Windows" ? { label: d.kind === "Ipad" ? "Set up" : "Add Bluetooth", run: () => openAdd({ kind: addKind(d), peerId: d.peerId! }) } : undefined} />
         <Row name="Files" value={lines.files} action={!d.peerId ? { label: "Add files", run: () => openAdd({ kind: addKind(d), hostId: d.hostId! }) } : undefined} />
         <Row name="Clipboard" value={lines.clip} />
       </div>

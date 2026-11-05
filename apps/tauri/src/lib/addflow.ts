@@ -5,12 +5,15 @@ import type { PeerKind, Peer } from "./transfer";
 export type AddKind = "ipad" | "phone";
 export type Seen = { host: boolean; peer: boolean; clip: boolean };
 
-/** Steps are Bluetooth, Files, then Clipboard for the iPad only. */
-export const stepCount = (kind: AddKind): number => (kind === "ipad" ? 3 : 2);
+/**
+ * Phone: Bluetooth, then Files. iPad: one USB pairing that covers keyboard, mouse and clipboard over Wi-Fi, then Files.
+ * For the iPad, `host` means its Wi-Fi input is set up and `clip` that its clipboard connected: either proves the pairing.
+ */
+export const stepCount = (_kind: AddKind): number => 2;
 
 /** The first step not seen and not skipped. Equals the step count when finished. */
 export function addStep(kind: AddKind, seen: Seen, skipped: number[]): number {
-  const done = [seen.host, seen.peer, seen.clip];
+  const done = kind === "ipad" ? [seen.host || seen.clip, seen.peer] : [seen.host, seen.peer];
   for (let i = 0; i < stepCount(kind); i++) if (!done[i] && !skipped.includes(i)) return i;
   return stepCount(kind);
 }
@@ -47,9 +50,15 @@ export function newLink(
 export function finishLine(kind: AddKind, name: string, seen: Seen, placed: boolean): { title: string; body: string } {
   const place = placed ? "It already has its place on the Desk." : "Put it next to a screen edge on the Desk.";
   if (seen.host && seen.peer) return { title: `${name} is ready`, body: place };
-  if (seen.host) return { title: `${name} is set up for keyboard and mouse`, body: `${place} Add files from its panel when you want them.` };
-  if (seen.peer) return { title: `${name} is ready for ${kind === "ipad" ? "files" : "files and clipboard"}`, body: "Keyboard and mouse need Bluetooth first. Add it from its panel on the Desk." };
-  if (seen.clip && kind === "ipad") return { title: "Clipboard is connected", body: "You skipped the other steps. Add a device again to set them up." };
+  if (seen.host || (kind === "ipad" && seen.clip)) {
+    const what = kind === "ipad" ? "keyboard, mouse and clipboard" : "keyboard and mouse";
+    return { title: `${name} is set up for ${what}`, body: `${place} Add files from its panel when you want them.` };
+  }
+  if (seen.peer) {
+    return kind === "ipad"
+      ? { title: `${name} is ready for files`, body: "Keyboard, mouse and clipboard need the USB step. Add a device again to do it." }
+      : { title: `${name} is ready for files and clipboard`, body: "Keyboard and mouse need Bluetooth first. Add it from its panel on the Desk." };
+  }
   return { title: "Nothing was added", body: "You skipped every step. Add a device whenever you want." };
 }
 

@@ -40,6 +40,13 @@ export default function Settings() {
             ))}
           </RadioGroup>
         </div>
+        <label className={LINE}>
+          <span className="flex flex-col">
+            Bluetooth
+            <span className="text-[13px] text-muted-foreground">For phones. The iPad works over Wi-Fi without it.</span>
+          </span>
+          <Switch size="lg" checked={settings.bluetooth_enabled} onCheckedChange={(on) => update((s) => ({ ...s, bluetooth_enabled: on }))} />
+        </label>
         <div className="border-t border-border py-3.5">
           <Tune
             label="Hold at the edge before crossing" value={settings.entry_hold_ms} show={(v) => `${v} ms`} min={100} max={800} step={50}

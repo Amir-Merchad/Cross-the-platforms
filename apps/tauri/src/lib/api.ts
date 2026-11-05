@@ -23,7 +23,13 @@ export interface Settings {
 export interface Rect { left: number; top: number; right: number; bottom: number }
 export interface Monitor { id: string; rect: Rect }
 export interface HostStatus { id: string; name: string | null; connected: boolean; interval_ms: number; notify_avg_ms: number; notify_max_ms: number }
-export interface Status { advertising: boolean; hosts: HostStatus[]; active: string | null; notice: string | null }
+export type IpadInputState = "NotSetUp" | "Connecting" | "Ready" | "OnCall" | "NeedsUsb" | "NotFound" | "NeedsDeveloperMode";
+export interface Status {
+  advertising: boolean; hosts: HostStatus[]; active: string | null; notice: string | null;
+  /** The Wi-Fi iPad's input link; absent from older engines. */
+  ipad?: IpadInputState | null;
+  bluetooth_off?: boolean;
+}
 
 export const DEFAULT_CALIBRATION: Calibration = { gain: 1.0, min_push: 96, dwell_ms: 300 };
 export const DEFAULT_WIDTH = 1366;

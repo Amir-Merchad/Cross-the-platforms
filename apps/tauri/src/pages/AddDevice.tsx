@@ -4,12 +4,13 @@ import { Button } from "@/components/ui/button";
 import { pairIpad } from "@/lib/api";
 import { addStep, finishLine, newHost, newLink, newPeer, stepCount, type AddKind } from "@/lib/addflow";
 import { clipNotice } from "@/lib/clip";
+import { IPAD_HOST } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 import { onTransfer, pairInvite } from "@/lib/transfer";
 import { RAISED, cn } from "@/lib/utils";
 
 const TITLES: Record<AddKind, string[]> = {
-  ipad: ["1. Keyboard and mouse", "2. Files", "3. Clipboard"],
+  ipad: ["1. Keyboard, mouse and clipboard", "2. Files"],
   phone: ["1. Keyboard and mouse", "2. Files and clipboard"],
 };
 const BT_TEXT: Record<AddKind, string> = {
@@ -40,15 +41,18 @@ function Guide() {
   const [triedCode, setTriedCode] = useState(false);
 
   const hosts = status?.hosts ?? [];
-  const link = newLink(before, hosts, peers, settings.device_links, addOpts, kind);
-  const hostId = addOpts.hostId ?? newHost(before, hosts, settings.device_links);
+  // The iPad's host is always ipad-wifi: set up once its input service has a pairing.
+  const ipadReady = !!status?.ipad && status.ipad !== "NotSetUp";
+  const anchor = kind === "ipad" ? { ...addOpts, hostId: ipadReady ? IPAD_HOST : undefined } : addOpts;
+  const link = kind === "ipad" && !ipadReady ? null : newLink(before, hosts, peers, settings.device_links, anchor, kind);
+  const hostId = kind === "ipad" ? anchor.hostId : addOpts.hostId ?? newHost(before, hosts, settings.device_links);
   const peerId = addOpts.peerId ?? newPeer(before, peers, kind);
   const seen = {
     host: !!hostId,
     peer: !!peerId,
     clip: !!clip?.ipad && typeof clip.ipad === "object" && "Connected" in clip.ipad,
   };
-  const seenAt = [seen.host, seen.peer, seen.clip];
+  const seenAt = kind === "ipad" ? [seen.host || seen.clip, seen.peer] : [seen.host, seen.peer];
   const step = addStep(kind, seen, skipped);
   const count = stepCount(kind);
 
@@ -97,7 +101,13 @@ function Guide() {
           <strong className="font-semibold">{TITLES[kind][i]}</strong>
           <span className={cn("font-medium", tag === "Done" ? "text-success" : tag === "Expired" ? "text-destructive" : "text-muted-foreground")}>{tag}</span>
         </div>
-        {current && i === 0 && <p className="mt-1.5 text-muted-foreground">{BT_TEXT[kind]}</p>}
+        {current && i === 0 && kind === "phone" && <p className="mt-1.5 text-muted-foreground">{BT_TEXT[kind]}</p>}
+        {current && i === 0 && kind === "ipad" && (
+          <p className="mt-1.5 text-muted-foreground">
+            Plug the iPad in by USB once and tap Trust. After that keyboard, mouse and clipboard work over Wi-Fi, with no Bluetooth.
+            The iPad needs Developer Mode on: Settings, then Privacy and Security, then Developer Mode.
+          </p>
+        )}
         {current && i === 1 && (expired ? <p className="mt-1.5 text-muted-foreground">This code expired after 5 minutes.</p> : qr && (
           <div className="mt-3 flex gap-5">
             <img src={qr.img} alt="Pairing code" className="size-52 flex-none rounded-xl bg-white [image-rendering:pixelated]" />
@@ -108,11 +118,11 @@ function Guide() {
             </div>
           </div>
         ))}
-        {current && i === 2 && <p className="mt-1.5 text-muted-foreground">Plug the iPad in by USB once and tap Trust. After that it works over Wi-Fi.</p>}
+
         {current && (
           <div className="mt-2.5 flex gap-2">
             {i === 1 && (expired || !qr) && <Button className="h-11 rounded-xl px-4 font-semibold" onClick={showQr}>{expired ? "Show a new code" : "Show pairing code"}</Button>}
-            {i === 2 && <Button className="h-11 rounded-xl px-4 font-semibold" onClick={() => pairIpad().catch(() => say("Could not pair over USB. Plug the iPad in and try again."))}>Pair over USB</Button>}
+            {i === 0 && kind === "ipad" && <Button className="h-11 rounded-xl px-4 font-semibold" onClick={() => pairIpad().catch(() => say("Could not pair over USB. Plug the iPad in and try again."))}>Pair over USB</Button>}
             <Button variant="secondary" className="h-11 rounded-xl px-4 font-semibold" onClick={skip}>Skip</Button>
           </div>
         )}

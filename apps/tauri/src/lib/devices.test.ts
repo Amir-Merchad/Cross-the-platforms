@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import type { Row } from "./activity";
 import type { ClipStatus, HostStatus, Monitor, Settings, Status } from "./api";
 import type { Peer } from "./transfer";
-import { buildDevices, deskLine, deviceLook, displayName, forgetDevice, idleLine, linkByName, panelLines, type Device } from "./devices";
+import { IPAD_HOST, buildDevices, deskLine, deviceLook, displayName, forgetDevice, idleLine, ipadLine, linkByName, migrateIpad, panelLines, type Device } from "./devices";
 
 const host = (id: string, name: string | null, connected = true): HostStatus => ({ id, name, connected, interval_ms: 0, notify_avg_ms: 0, notify_max_ms: 0 });
 const status = (hosts: HostStatus[]): Status => ({ advertising: true, hosts, active: null, notice: null });
@@ -217,4 +217,51 @@ test("deskLine never passes an engine notice through", () => {
   expect(line({ status: stat({ notice: raw }) })).toBe("Your keyboard and mouse are on Windows.");
   expect(line({ status: stat({ notice: raw, advertising: false }) })).toBe("Starting Bluetooth…");
   expect(line({ status: stat({ advertising: false }) })).toBe("Starting Bluetooth…");
+});
+
+test("migrate_moves_the_ipad_once", () => {
+  const before = settings({
+    attachments: [{ device_id: "PH:1", monitor_id: "M1", edge: "Left" }, { device_id: "BT:IPAD", monitor_id: "M1", edge: "Right" }],
+    device_links: { "BT:IPAD": "p1", "PH:1": "p2" }, device_colors: { "BT:IPAD": "#123456" },
+    calibration: { "BT:IPAD": { gain: 1.5, min_push: 96, dwell_ms: 300 } },
+  });
+  const peers: Peer[] = [peer("p1", "iPad"), { id: "p2", name: "Pixel", kind: "Android" }];
+  const after = migrateIpad(before, peers);
+  expect(after.attachments.map((a) => a.device_id)).toEqual(["PH:1", IPAD_HOST]);
+  expect(after.attachments[1].edge).toBe("Right");
+  expect(after.device_links).toEqual({ "PH:1": "p2", [IPAD_HOST]: "p1" });
+  expect(after.device_colors).toEqual({ [IPAD_HOST]: "#123456" });
+  expect(after.retired_hosts).toEqual(["BT:IPAD"]);
+  expect(after.calibration[IPAD_HOST]).toBeUndefined();
+  expect(migrateIpad(after, peers)).toBe(after);
+});
+
+test("migrate_without_a_link_does_nothing", () => {
+  const s = settings({ attachments: [{ device_id: "BT:IPAD", monitor_id: "M1", edge: "Right" }] });
+  expect(migrateIpad(s, [peer("p1", "iPad")])).toBe(s);
+});
+
+test("retired_hosts_are_not_listed", () => {
+  const s = settings({ retired_hosts: ["BT:IPAD"], device_links: { "BT:IPAD": "x" } });
+  const d = buildDevices(status([host("BT:IPAD", "iPad"), host(IPAD_HOST, "iPad")]), [], s, [], {}, mon);
+  expect(d.map((x) => x.hostId)).toEqual([IPAD_HOST]);
+});
+
+test("ipad_states_read_plainly", () => {
+  expect(ipadLine("OnCall")).toBe("iPad is on a call");
+  expect(ipadLine("NeedsUsb")).toBe("Plug in the iPad once");
+  expect(ipadLine("NotFound")).toBe("iPad not found on Wi-Fi");
+  expect(ipadLine("NeedsDeveloperMode")).toBe("Turn on Developer Mode");
+  expect(ipadLine("Ready")).toBe("Connected over Wi-Fi");
+  expect(ipadLine(null)).toBe("Connecting…");
+});
+
+test("the Wi-Fi iPad ignores Bluetooth being off", () => {
+  const [d] = buildDevices(status([host(IPAD_HOST, "iPad")]), [], settings({ attachments: [{ device_id: IPAD_HOST, monitor_id: "M1", edge: "Right" }] }), [], {}, mon);
+  expect(deviceLook(d, null, true)).toEqual({ sub: "Connected", off: false });
+  const l = panelLines(d, { active: null, btOff: true, clip: null, where: "right of Screen 1", hotkey: 1 });
+  expect(l.hid).toBe("Wi-Fi, right of Screen 1");
+  expect(l.canSwitch).toBe(true);
+  const [off] = buildDevices(status([host(IPAD_HOST, "iPad", false)]), [], settings(), [], {}, mon);
+  expect(panelLines(off, { active: null, btOff: false, clip: null, where: "", hotkey: null, ipad: "NotFound" }).hid).toBe("iPad not found on Wi-Fi");
 });
