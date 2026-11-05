@@ -40,6 +40,7 @@ pub const TOO_LARGE: &str = "That copy is too large, so nothing was sent.";
 pub const NO_ANSWER: &str = "The device did not answer, so nothing was pasted.";
 pub const SHOT_COPIED: &str = "iPad screenshot copied to the clipboard.";
 pub const SHOT_NOT_COPIED: &str = "The Windows clipboard is busy, so the screenshot was not copied.";
+pub const SHOT_NO_SERVICE: &str = "The clipboard service is not running, so the screenshot was not copied.";
 
 /// What the hotkey may send: `read` is `None` for a secret, so a secret stops here. Devices take plain
 /// text only (`Hub::observe` does the same), and the iPad's echo must match what it was given.
@@ -73,7 +74,12 @@ pub struct ClipHandle { tx: UnboundedSender<ClipCommand>, thread: Option<thread:
 static RUNNING: Mutex<Option<UnboundedSender<ClipCommand>>> = Mutex::new(None);
 
 /// `ClipHandle::send` from the engine. False when the service is not running.
-pub fn request(c: ClipCommand) -> bool { RUNNING.lock().unwrap().as_ref().is_some_and(|tx| tx.send(c).is_ok()) }
+pub fn request(c: ClipCommand) -> bool { try_request(c).is_ok() }
+
+/// `request` that hands the command back when the service is not running.
+pub fn try_request(c: ClipCommand) -> Result<(), ClipCommand> {
+    match RUNNING.lock().unwrap().as_ref() { Some(tx) => tx.send(c).map_err(|e| e.0), None => Err(c) }
+}
 
 impl ClipHandle {
     pub fn send(&self, c: ClipCommand) { let _ = self.tx.send(c); }
@@ -359,6 +365,9 @@ mod tests {
         assert!(route(&mut hub, &history, &tx, Endpoint::Windows, image()).is_empty(), "the watcher's echo goes nowhere");
         let h = history.lock().unwrap();
         assert_eq!(h.entries().iter().map(|e| e.from.as_str()).collect::<Vec<_>>(), ["iPad"], "one entry, not a second from This PC");
+    }
+    #[test] fn a_command_comes_back_when_the_service_is_not_running() {
+        assert!(matches!(try_request(ClipCommand::Phones(vec![])), Err(ClipCommand::Phones(_))));
     }
     #[test] fn write_timeout_grows_with_size() { // Final review I5
         assert_eq!(write_timeout(10), Duration::from_secs(5));

@@ -14,7 +14,7 @@ use windows::{
         System::{LibraryLoader::GetModuleHandleW, Threading::GetCurrentThreadId},
         UI::{
             Input::{
-                GetRawInputData, HRAWINPUT, KeyboardAndMouse::VK_ESCAPE, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
+                GetRawInputData, HRAWINPUT, KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LMENU}, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER,
                 RID_INPUT, RIDEV_INPUTSINK, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE, RegisterRawInputDevices,
             },
             WindowsAndMessaging::*,
@@ -226,7 +226,14 @@ fn sided_vk(vk: u16, make: u16, flags: u16) -> u16 {
 #[allow(static_mut_refs)]
 fn route_key(vk: u16, down: bool) -> bool {
     let suppress = SUPPRESS.load(Ordering::SeqCst);
-    let verdict = KB_GATE.lock().unwrap().on_key(vk, down, suppress);
+    let verdict = {
+        let mut gate = KB_GATE.lock().unwrap();
+        if down && gate.combo_held() {
+            let held = |k: VIRTUAL_KEY| unsafe { GetAsyncKeyState(k.0 as i32) } < 0;
+            gate.confirm_modifiers(held(VK_CONTROL), held(VK_LMENU));
+        }
+        gate.on_key(vk, down, suppress)
+    };
     match verdict {
         Verdict::PassToWindows => false,
         Verdict::Hotkey(0) => { back_to_windows(Input::Hotkey(0)); true }

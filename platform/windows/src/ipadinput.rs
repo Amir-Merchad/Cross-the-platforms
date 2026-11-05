@@ -5,7 +5,7 @@
 //! No display stream: the proofs found input lands without one (docs/spikes/ipad-pointer.md).
 //! Never logs keys. Errors carry no key or clipboard content.
 
-use std::{path::PathBuf, thread, time::Duration};
+use std::{cell::Cell, path::PathBuf, rc::Rc, thread, time::Duration};
 
 use bridge_core::{
     clipboard::Content,
@@ -118,6 +118,9 @@ impl Keepalive {
         self.misses = if ok { 0 } else { self.misses.saturating_add(1) };
         self.misses >= 2
     }
+
+    /// No probe this time: a miss before it says nothing about the link after it.
+    pub fn skip(&mut self) { self.misses = 0; }
 }
 
 /// One thing to send, after summing.
@@ -262,9 +265,25 @@ async fn capture(mut adapter: AdapterHandle, port: u16) -> Result<Content, Strin
     Ok(Content::Image(ipad::decode_off_thread(png).await?))
 }
 
-async fn shoot(adapter: AdapterHandle, port: u16, answer: Answer) {
-    match within(SHOT_LIMIT, capture(adapter, port)).await {
-        Ok(image) => { clipsync::request(ClipCommand::Screenshot { image, answer }); }
+/// Set for the life of a capture and cleared on every way out, a cancelled task included.
+struct Capturing(Rc<Cell<bool>>);
+
+impl Capturing {
+    fn new(flag: &Rc<Cell<bool>>) -> Self { flag.set(true); Self(flag.clone()) }
+}
+
+impl Drop for Capturing {
+    fn drop(&mut self) { self.0.set(false); }
+}
+
+async fn shoot_with(guard: Capturing, answer: Answer, capture: impl Future<Output = Result<Content, String>>) {
+    let result = within(SHOT_LIMIT, capture).await;
+    drop(guard);
+    match result {
+        Ok(image) => if let Err(ClipCommand::Screenshot { answer, .. }) = clipsync::try_request(ClipCommand::Screenshot { image, answer }) {
+            diag::log("iPad screenshot not copied: clipboard service not running");
+            answer.say(clipsync::SHOT_NO_SERVICE);
+        },
         Err(line) => answer.say(line),
     }
 }
@@ -284,6 +303,8 @@ struct Session {
     buttons: u8,
     /// The screen capture service, when the iPad lists it.
     shot_port: Option<u16>,
+    /// A capture is running, so the keepalive stands aside.
+    capturing: Rc<Cell<bool>>,
 }
 
 impl Session {
@@ -301,7 +322,7 @@ impl Session {
         };
         let shot_port = handshake.services.get(ShotClient::rsd_service_name().as_ref()).map(|s| s.port);
         let mut s = match open_raw(&mut adapter, &handshake).await {
-            Ok(raw) => Session { adapter, hid, raw, keyboard: None, mouse: None, keys: KeyTranslator::default(), buttons: 0, shot_port },
+            Ok(raw) => Session { adapter, hid, raw, keyboard: None, mouse: None, keys: KeyTranslator::default(), buttons: 0, shot_port, capturing: Rc::default() },
             Err(e) => { let _ = timeout(CLEANUP_LIMIT, adapter.close()).await; return Err(e) }
         };
         if let Err(e) = s.create_devices().await { s.close().await; return Err(e) }
@@ -348,6 +369,9 @@ impl Session {
                     }
                 }
                 _ = tick.tick() => {
+                    // Capture traffic shares the tunnel with the reply: a probe would miss falsely and hold up input.
+                    // A real drop still ends the capture by error or `SHOT_LIMIT`, and probes resume after it.
+                    if self.capturing.get() { alive.skip(); continue }
                     let ok = matches!(timeout(KEEPALIVE_LIMIT, self.hid.list_connected_services()).await, Ok(Ok(_)));
                     if alive.tick(ok) { return End::Down("keepalive missed twice".into()) }
                 }
@@ -355,9 +379,10 @@ impl Session {
         }
     }
 
-    /// On its own task over the same tunnel: a capture takes seconds, and input and the keepalive go on.
+    /// On its own task over the same tunnel: a capture takes seconds, and input goes on.
     fn shoot(&self, answer: Answer) {
-        if let Some(port) = self.shot_port { tokio::task::spawn_local(shoot(self.adapter.clone(), port, answer)); }
+        let Some(port) = self.shot_port else { diag::log("iPad screen capture service not listed"); return };
+        tokio::task::spawn_local(shoot_with(Capturing::new(&self.capturing), answer, capture(self.adapter.clone(), port)));
     }
 
     async fn send(&mut self, out: &Out) -> Result<(), String> {
@@ -557,7 +582,34 @@ mod tests {
         let r = within(Duration::from_millis(1), std::future::pending()).await;
         assert_eq!(r, Err(SHOT_TOO_SLOW));
     }
-    #[test] fn a_capture_gets_about_ten_seconds() { assert_eq!(SHOT_LIMIT, Duration::from_secs(10)); }
+    #[test] fn a_capture_holds_the_flag_until_it_ends() {
+        let flag = Rc::new(Cell::new(false));
+        let guard = Capturing::new(&flag);
+        assert!(flag.get());
+        drop(guard);
+        assert!(!flag.get());
+    }
+    #[tokio::test] async fn a_capture_cut_short_still_clears_the_flag() { // a session ending mid-capture
+        let flag = Rc::new(Cell::new(false));
+        let guard = Capturing::new(&flag);
+        let (a, _rx) = listening();
+        let task = async move { shoot_with(guard, a, std::future::pending()).await };
+        let _ = timeout(Duration::from_millis(1), task).await;
+        assert!(!flag.get());
+    }
+    #[tokio::test] async fn a_failed_capture_clears_the_flag_and_answers() {
+        let flag = Rc::new(Cell::new(false));
+        let (a, rx) = listening();
+        shoot_with(Capturing::new(&flag), a, async { Err("no".to_string()) }).await;
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [NO_SHOT]);
+        assert!(!flag.get());
+    }
+    #[test] fn a_skipped_probe_forgets_earlier_misses() {
+        let mut k = Keepalive::default();
+        assert!(!k.tick(false));
+        k.skip();
+        assert!(!k.tick(false), "one miss after a capture is not two in a row");
+    }
     #[test] fn press_and_release_are_never_merged_away() {
         let mut p = Pending::default();
         let m = |buttons| IpadCommand::Mouse(MouseReport { buttons, ..Default::default() });

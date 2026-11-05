@@ -39,6 +39,19 @@ impl KeyGate {
     /// Only Ctrl+Alt+1…`n` are hotkeys (one per placed device); higher digits reach Windows.
     pub fn set_hotkey_count(&mut self, n: u8) { self.hotkeys = n.min(9); }
 
+    /// Ctrl and left Alt both look held, so the next press could be a hotkey: worth asking Windows first.
+    pub fn combo_held(&self) -> bool { self.ctrl && self.lalt }
+
+    /// `ctrl` and `lalt` are what Windows says is down. The hook never sees the releases behind
+    /// Ctrl+Alt+Del, which would leave a plain key firing a hotkey. A key the hook swallowed never reached
+    /// Windows, so Windows reports it up: only our own record counts for those, stale or not.
+    pub fn confirm_modifiers(&mut self, ctrl: bool, lalt: bool) {
+        let swallowed = |vks: &[usize]| vks.iter().any(|&v| self.swallowed[v]);
+        let (ctrl, lalt) = (ctrl || swallowed(&[0x11, 0xA2, 0xA3]), lalt || swallowed(&[0x12, 0xA4]));
+        self.ctrl &= ctrl;
+        self.lalt &= lalt;
+    }
+
     /// `vk` is a virtual-key code; mouse buttons use VK_LBUTTON=1, VK_RBUTTON=2, VK_MBUTTON=4.
     pub fn on_key(&mut self, vk: u16, down: bool, suppress: bool) -> Verdict {
         // Track modifiers ourselves: GetAsyncKeyState isn't updated for swallowed keys.
@@ -128,6 +141,47 @@ mod tests {
             assert_eq!(g.on_key(0x53, true, suppress), Verdict::Drop, "auto-repeat takes one");
             assert_eq!(g.on_key(0x53, false, suppress), Verdict::Drop);
         }
+    }
+    #[test] fn stale_modifiers_are_cleared_after_a_missed_release() { // Ctrl+Alt+Del: the hook never sees them go up
+        let mut g = KeyGate::default();
+        g.on_key(LCTRL, true, false); g.on_key(LALT, true, false);
+        g.confirm_modifiers(false, false);
+        assert_eq!(g.on_key(0x53, true, false), Verdict::PassToWindows);
+    }
+    #[test] fn only_the_stale_modifier_is_cleared() {
+        let mut g = KeyGate::default();
+        g.on_key(LCTRL, true, false); g.on_key(LALT, true, false);
+        g.confirm_modifiers(true, false);
+        assert_eq!(g.on_key(0x53, true, false), Verdict::PassToWindows);
+        g.on_key(0x53, false, false);
+        g.on_key(LALT, true, false);
+        assert_eq!(g.on_key(0x53, true, false), Verdict::Screenshot, "Ctrl was really down");
+    }
+    #[test] fn modifiers_windows_confirms_keep_the_hotkey() {
+        let mut g = KeyGate::default();
+        g.on_key(LCTRL, true, false); g.on_key(LALT, true, false);
+        g.confirm_modifiers(true, true);
+        assert_eq!(g.on_key(0x53, true, false), Verdict::Screenshot);
+    }
+    #[test] fn swallowed_modifiers_need_no_confirming() { // Windows never saw them, so it reports them up
+        let mut g = KeyGate::default();
+        g.on_key(LCTRL, true, true); g.on_key(LALT, true, true);
+        g.confirm_modifiers(false, false);
+        assert_eq!(g.on_key(0x53, true, true), Verdict::Screenshot);
+        g.on_key(0x53, false, true);
+        g.confirm_modifiers(false, false);
+        assert_eq!(g.on_key(Q, true, true), Verdict::Hotkey(0));
+        g.on_key(Q, false, true);
+        g.confirm_modifiers(false, false);
+        assert_eq!(g.on_key(0x31, true, false), Verdict::Hotkey(1), "still held after coming back to Windows");
+    }
+    #[test] fn only_a_held_pair_asks_windows() {
+        let mut g = KeyGate::default();
+        assert!(!g.combo_held());
+        g.on_key(LCTRL, true, false);
+        assert!(!g.combo_held());
+        g.on_key(LALT, true, false);
+        assert!(g.combo_held());
     }
     #[test] fn plain_s_and_altgr_s_are_not_the_hotkey() {
         let mut g = KeyGate::default();

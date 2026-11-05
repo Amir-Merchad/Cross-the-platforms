@@ -233,6 +233,7 @@ test("deskLine shows every screenshot answer", () => {
     "The iPad did not answer, so no screenshot was taken.",
     "The iPad took too long, so no screenshot was taken.",
     "The Windows clipboard is busy, so the screenshot was not copied.",
+    "The clipboard service is not running, so the screenshot was not copied.",
   ]) {
     expect(line({ status: stat({ notice: said }) })).toBe(said);
   }

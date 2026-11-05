@@ -92,6 +92,8 @@ impl Hub {
         let q = self.pending.entry(to).or_default();
         if q.len() == PENDING_ECHOES { q.pop_front(); }
         q.push_back(content.hash());
+        // `to` no longer holds the last copy, so that copy made again is news.
+        self.last = None;
     }
 
     /// True when `observe` would swallow this as the echo of something we wrote to `from`.
@@ -172,6 +174,16 @@ mod tests {
         h.written_directly(Endpoint::Ipad, &c);
         assert!(h.is_pending_echo(&Endpoint::Ipad, &c));
         assert!(!h.is_pending_echo(&Endpoint::Windows, &c));
+    }
+    #[test] fn a_copy_comes_back_after_a_direct_write() {
+        let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
+        let (x, shot) = (Content::Text("x".into()), Content::Text("screenshot".into()));
+        assert_eq!(h.observe(Endpoint::Ipad, x.clone()).len(), 1);
+        h.observe(Endpoint::Windows, x.clone());
+        h.written_directly(Endpoint::Windows, &shot);
+        assert!(h.observe(Endpoint::Windows, shot).is_empty(), "the echo is still swallowed");
+        let out = h.observe(Endpoint::Ipad, x.clone());
+        assert_eq!(out.iter().map(|(to, i)| (to.clone(), i.content.clone())).collect::<Vec<_>>(), [(Endpoint::Windows, x)], "Windows holds the screenshot now");
     }
     #[test] fn a_direct_write_does_not_spread() {
         let mut h = Hub::new(vec![Endpoint::Windows, Endpoint::Ipad]);
