@@ -215,6 +215,7 @@ async fn run(enabled: bool, history: Arc<Mutex<History>>, mut commands: Unbounde
 }
 
 fn route(hub: &mut Hub, history: &Arc<Mutex<History>>, ev: &UnboundedSender<Event>, from: Endpoint, c: Content) -> Vec<(Endpoint, Content)> {
+    let c = c.fit();
     // Our own pairing code coming back is not a copy: it stays out of history.
     if !hub.is_pending_echo(&from, &c) && c.size() <= MAX_ITEM_BYTES { record(history, ev, &from, c.clone()); }
     hub.observe(from, c).into_iter().map(|(to, item)| (to, item.content)).collect()
