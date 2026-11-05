@@ -2,13 +2,13 @@ import { expect, test } from "vitest";
 import type { Row } from "./activity";
 import type { ClipStatus, HostStatus, Monitor, Settings, Status } from "./api";
 import type { Peer } from "./transfer";
-import { IPAD_HOST, buildDevices, ipadBluetoothHosts, linkableHosts, deskLine, deviceLook, displayName, forgetDevice, idleLine, ipadLine, linkByName, migrateIpad, panelLines, type Device } from "./devices";
+import { IPAD_HOST, buildDevices, hiddenDevices, ipadBluetoothHosts, linkableHosts, showHost, deskLine, deviceLook, displayName, forgetDevice, idleLine, ipadLine, linkByName, migrateIpad, panelLines, type Device } from "./devices";
 
 const host = (id: string, name: string | null, connected = true): HostStatus => ({ id, name, connected, interval_ms: 0, notify_avg_ms: 0, notify_max_ms: 0 });
 const status = (hosts: HostStatus[]): Status => ({ advertising: true, hosts, active: null, notice: null });
 const settings = (o: Partial<Settings> = {}): Settings => ({
   version: 1, attachments: [], calibration: {}, entry_hold_ms: 0, start_with_windows: false, remote_width: {},
-  clipboard_sync: true, receive_dir: null, device_links: {}, device_colors: {}, appearance: "system", bluetooth_enabled: true, retired_hosts: [], layout: [], ...o,
+  clipboard_sync: true, receive_dir: null, device_links: {}, device_colors: {}, appearance: "system", bluetooth_enabled: true, retired_hosts: [], kept_hosts: [], retired_names: {}, layout: [], ...o,
 });
 const peer = (id: string, name: string): Peer => ({ id, name, kind: "Ipad" });
 const mon: Monitor[] = [{ id: "M1", rect: { left: 0, top: 0, right: 100, bottom: 100 } }];
@@ -300,6 +300,50 @@ test("a_retiring_or_retired_host_never_takes_a_name_link", () => {
   const peers = [peer("p1", "iPad")];
   expect(linkableHosts(settings(), peers, [host(BT, "iPad"), host("PH:1", "Galaxy"), wifi]).map((h) => h.id)).toEqual(["PH:1", IPAD_HOST]);
   expect(linkableHosts(settings({ retired_hosts: [BT] }), peers, [host(BT, "iPad")])).toEqual([]);
+});
+
+test("the_name_rule_waits_for_ipad_wifi_to_be_connected", () => {
+  const down = host(IPAD_HOST, "iPad", false);
+  const s = settings({ attachments: [{ device_id: BT, monitor_id: "M1", edge: "Right" }] });
+  expect(ipadBluetoothHosts(s, [], [host(BT, "iPad"), down])).toEqual([]);
+  expect(migrateIpad(s, [], [host(BT, "iPad"), down])).toBe(s);
+});
+
+test("a_kept_host_is_never_retired", () => {
+  const peers = [peer("p1", "iPad")];
+  expect(ipadBluetoothHosts(settings({ kept_hosts: [BT] }), peers, [host(BT, "iPad"), wifi]), "by name").toEqual([]);
+  expect(ipadBluetoothHosts(settings({ kept_hosts: [BT], device_links: { [BT]: "p1" } }), peers, [wifi]), "by link").toEqual([]);
+});
+
+test("a_kept_ipad_mini_remote_stays_listed", () => {
+  const s = settings({ kept_hosts: ["BT:MINI"] });
+  const hosts = [host("BT:MINI", "iPad mini remote"), wifi];
+  expect(migrateIpad(s, [], hosts)).toBe(s);
+  expect(buildDevices(status(hosts), [], s, [], {}, mon).map((d) => [d.hostId, d.name])).toEqual([["BT:MINI", "iPad mini remote"], [IPAD_HOST, "iPad"]]);
+});
+
+test("hidden_devices_show_their_name_and_show_brings_one_back", () => {
+  const hosts = [host(BT, "Amir's iPad"), wifi];
+  const after = migrateIpad(settings(), [], hosts);
+  const hidden = settings({ ...after, retired_hosts: [...after.retired_hosts, "BT:OLD"] });
+  expect(hiddenDevices(hidden)).toEqual([{ id: BT, name: "Amir's iPad" }, { id: "BT:OLD", name: "Unnamed device" }]);
+  const shown = showHost(hidden, BT);
+  expect(shown.retired_hosts).toEqual(["BT:OLD"]);
+  expect(shown.kept_hosts).toEqual([BT]);
+  expect(shown.retired_names).toEqual({});
+  expect(migrateIpad(shown, [], hosts), "it does not retire again").toBe(shown);
+  expect(buildDevices(status(hosts), [], shown, [], {}, mon).map((d) => d.hostId)).toContain(BT);
+});
+
+test("each_list_decides_alone_whether_the_old_place_moves", () => {
+  const rect = { left: 0, top: 0, right: 1, bottom: 1 };
+  const before = settings({
+    attachments: [{ device_id: IPAD_HOST, monitor_id: "M1", edge: "Right" }, { device_id: BT, monitor_id: "M1", edge: "Bottom" }],
+    layout: [{ device_id: BT, rect }],
+  });
+  const after = migrateIpad(before, [], [host(BT, "iPad"), wifi]);
+  expect(after.layout, "ipad-wifi had no layout entry, so the old one moves").toEqual([{ device_id: IPAD_HOST, rect }]);
+  expect(after.attachments.map((a) => a.edge), "ipad-wifi had an attachment, so the old one goes").toEqual(["Right"]);
 });
 
 test("ipad_states_read_plainly", () => {

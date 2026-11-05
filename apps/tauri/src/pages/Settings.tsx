@@ -3,9 +3,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Radio } from "@base-ui/react/radio";
 import { RadioGroup } from "@base-ui/react/radio-group";
 import { Tune } from "@/components/DevicePanel";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import type { Settings as Prefs } from "@/lib/api";
-import { displayName } from "@/lib/devices";
+import { displayName, hiddenDevices, showHost } from "@/lib/devices";
 import { useHub } from "@/lib/hub";
 
 const CARD = "flex-none rounded-[20px] bg-card px-5";
@@ -60,6 +61,18 @@ export default function Settings() {
           <div key={what} className="flex min-h-11 items-center justify-between gap-3 border-t border-border"><span>{what}</span><span className="text-muted-foreground">{keys}</span></div>
         ))}
       </section>
+      {hiddenDevices(settings).length > 0 && (
+        <section className={`${CARD} col-span-full py-3.5`}>
+          <div className="font-semibold">Hidden devices</div>
+          <div className="mb-1.5 text-[13px] text-muted-foreground">Bridge hid these because they looked like the iPad on Wi-Fi.</div>
+          {hiddenDevices(settings).map((d) => (
+            <div key={d.id} className="flex min-h-11 items-center justify-between gap-3 border-t border-border">
+              <span className="truncate">{d.name}</span>
+              <Button variant="secondary" aria-label={`Show ${d.name}`} onClick={() => update((s) => showHost(s, d.id))}>Show</Button>
+            </div>
+          ))}
+        </section>
+      )}
       <section className={`${CARD} col-span-full py-3.5`}>
         <div className="font-semibold">Diagnostics</div>
         <div className="mb-1.5 text-[13px] text-muted-foreground">Timings only, never keystrokes or contents.</div>

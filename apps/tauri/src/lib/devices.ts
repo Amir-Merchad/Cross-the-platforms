@@ -35,15 +35,16 @@ type SeenHost = { id: string; name: string | null; connected: boolean };
 
 /**
  * The Bluetooth hosts that are really the Wi-Fi iPad: linked to an iPad peer, or connected with no link and named like
- * one (hosts report no kind). The name only counts once ipad-wifi exists, so a Bluetooth-only iPad keeps its one link.
+ * one (hosts report no kind). The name only counts while ipad-wifi is connected, so a Bluetooth-only iPad keeps its link.
+ * A host the owner brought back from Hidden devices (kept_hosts) is never retired again.
  */
 export function ipadBluetoothHosts(s: Settings, peers: Peer[], hosts: SeenHost[]): string[] {
-  const retired = s.retired_hosts ?? [];
+  const skip = [...(s.retired_hosts ?? []), ...(s.kept_hosts ?? [])];
   const ipads = peers.filter((p) => p.kind === "Ipad");
-  const linked = Object.keys(s.device_links).filter((h) => h !== IPAD_HOST && !retired.includes(h) && ipads.some((p) => p.id === s.device_links[h]));
-  if (!hosts.some((h) => h.id === IPAD_HOST)) return linked;
-  // ponytail: any "iPad" name counts, so a second iPad on Bluetooth would retire too; Bridge has one Wi-Fi iPad.
-  const named = hosts.filter((h) => h.id !== IPAD_HOST && h.connected && !retired.includes(h.id) && !s.device_links[h.id]
+  const linked = Object.keys(s.device_links).filter((h) => h !== IPAD_HOST && !skip.includes(h) && ipads.some((p) => p.id === s.device_links[h]));
+  if (!hosts.some((h) => h.id === IPAD_HOST && h.connected)) return linked;
+  // ponytail: any "iPad" name counts, so a second iPad retires too until the owner shows it again in Settings.
+  const named = hosts.filter((h) => h.id !== IPAD_HOST && h.connected && !skip.includes(h.id) && !s.device_links[h.id]
     && (h.name?.toLowerCase().includes("ipad") || ipads.some((p) => p.name === h.name)));
   return [...linked, ...named.map((h) => h.id)];
 }
@@ -63,11 +64,11 @@ export function linkableHosts<H extends SeenHost>(s: Settings, peers: Peer[], ho
 export function migrateIpad(s: Settings, peers: Peer[], hosts: SeenHost[] = []): Settings {
   const [old] = ipadBluetoothHosts(s, peers, hosts);
   if (!old) return s;
-  const wifiPlaced = [...s.attachments, ...(s.layout ?? [])].some((x) => x.device_id === IPAD_HOST);
   const move = <T extends { device_id: string }>(xs: T[]): T[] =>
-    wifiPlaced ? xs.filter((x) => x.device_id !== old) : xs.map((x) => (x.device_id === old ? { ...x, device_id: IPAD_HOST } : x));
+    xs.some((x) => x.device_id === IPAD_HOST) ? xs.filter((x) => x.device_id !== old) : xs.map((x) => (x.device_id === old ? { ...x, device_id: IPAD_HOST } : x));
   const { [old]: oldPeer, ...links } = s.device_links;
   const { [old]: colour, ...colours } = s.device_colors;
+  const name = hosts.find((h) => h.id === old)?.name ?? peers.find((p) => p.id === oldPeer)?.name;
   const free = peers.filter((p) => p.kind === "Ipad" && !Object.values(links).includes(p.id));
   const peerId = links[IPAD_HOST] ?? oldPeer ?? (free.length === 1 ? free[0].id : undefined);
   return migrateIpad({
@@ -77,12 +78,23 @@ export function migrateIpad(s: Settings, peers: Peer[], hosts: SeenHost[] = []):
     device_colors: colour ? { [IPAD_HOST]: colour, ...colours } : colours,
     layout: move(s.layout ?? []),
     retired_hosts: [...(s.retired_hosts ?? []), old],
+    retired_names: name ? { ...s.retired_names, [old]: name } : s.retired_names,
   }, peers, hosts);
 }
 
 export const DEFAULT_COLOURS = ["#FF7A4D", "#23C48F", "#4DA9FF", "#F76CAE", "#FFC531"];
 
 export const displayName = (name: string | null | undefined): string => name?.trim() || "Unnamed device";
+
+/** Retired hosts for Settings. The engine no longer lists them, so the name is the one saved when they retired. */
+export const hiddenDevices = (s: Settings): { id: string; name: string }[] =>
+  (s.retired_hosts ?? []).map((id) => ({ id, name: displayName(s.retired_names?.[id]) }));
+
+/** Brings a retired host back and keeps it from retiring again. It returns unplaced, like any new device. */
+export function showHost(s: Settings, id: string): Settings {
+  const { [id]: _name, ...retired_names } = s.retired_names ?? {};
+  return { ...s, retired_hosts: (s.retired_hosts ?? []).filter((h) => h !== id), kept_hosts: [...(s.kept_hosts ?? []), id], retired_names };
+}
 
 /** The one peer whose name is identical to the host's, if there is exactly one. */
 export function linkByName(hostName: string | null, peers: Peer[]): string | null {

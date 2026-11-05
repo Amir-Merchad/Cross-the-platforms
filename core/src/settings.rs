@@ -39,13 +39,17 @@ pub struct Settings {
     /// Old Bluetooth host ids of a device that moved to another host (the iPad to `ipad-wifi`): hidden
     /// from the device list so one device never shows twice.
     pub retired_hosts: Vec<String>,
+    /// Hosts the owner brought back from Hidden devices: never retired again.
+    pub kept_hosts: Vec<String>,
+    /// Retired host id → its name when it retired. The engine no longer lists it, so Settings shows this.
+    pub retired_names: BTreeMap<String, String>,
     /// Free layout: device rectangles in the desktop space. Empty means "made from `attachments`".
     pub layout: Vec<Placement>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new(), layout: Vec::new() }
+        Self { version: 1, attachments: Vec::new(), calibration: BTreeMap::new(), entry_hold_ms: 300, start_with_windows: true, remote_width: BTreeMap::new(), clipboard_sync: true, receive_dir: None, device_links: BTreeMap::new(), device_colors: BTreeMap::new(), appearance: "system".into(), bluetooth_enabled: true, retired_hosts: Vec::new(), kept_hosts: Vec::new(), retired_names: BTreeMap::new(), layout: Vec::new() }
     }
 }
 
@@ -158,10 +162,11 @@ mod tests {
         let s = Settings::load(&p);
         assert!(s.bluetooth_enabled);
         assert!(s.retired_hosts.is_empty());
+        assert!(s.kept_hosts.is_empty() && s.retired_names.is_empty());
     }
     #[test] fn bluetooth_switch_and_retired_hosts_round_trip() {
         let d = tempdir().unwrap(); let p = d.path().join("s.json");
-        let s = Settings { bluetooth_enabled: false, retired_hosts: vec!["AA:BB".into()], ..Settings::default() };
+        let s = Settings { bluetooth_enabled: false, retired_hosts: vec!["AA:BB".into()], kept_hosts: vec!["CC:DD".into()], retired_names: [("AA:BB".to_string(), "iPad".to_string())].into(), ..Settings::default() };
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
     }

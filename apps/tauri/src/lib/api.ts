@@ -19,6 +19,10 @@ export interface Settings {
   appearance: "system" | "light" | "dark";
   bluetooth_enabled: boolean;
   retired_hosts: string[];
+  /** Hosts the owner brought back from Hidden devices: never retired again. */
+  kept_hosts: string[];
+  /** Retired host id → its name when it retired, for Hidden devices. */
+  retired_names: Record<string, string>;
   /** Free layout: device rectangles in desktop pixels. Empty means "made from attachments". */
   layout: Placement[];
 }

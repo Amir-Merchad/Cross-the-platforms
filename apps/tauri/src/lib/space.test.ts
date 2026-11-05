@@ -5,7 +5,7 @@ import { besideMap, effectiveLayout, layoutValid, placeBeside, placedIds, slotRe
 const M1: Monitor = { id: "M1", rect: { left: 0, top: 0, right: 1920, bottom: 1080 } };
 const settings = (o: Partial<Settings> = {}): Settings => ({
   version: 1, attachments: [], calibration: {}, entry_hold_ms: 0, start_with_windows: false, remote_width: {},
-  clipboard_sync: true, receive_dir: null, device_links: {}, device_colors: {}, appearance: "system", bluetooth_enabled: true, retired_hosts: [], layout: [], ...o,
+  clipboard_sync: true, receive_dir: null, device_links: {}, device_colors: {}, appearance: "system", bluetooth_enabled: true, retired_hosts: [], kept_hosts: [], retired_names: {}, layout: [], ...o,
 });
 const ipadRight = settings({ attachments: [{ device_id: "ipad", monitor_id: "M1", edge: "Right" }], remote_width: { phone: 400 } });
 
